@@ -236,9 +236,16 @@ export default function App() {
     l.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap";
     document.head.appendChild(l); return () => { try { document.head.removeChild(l); } catch (e) {} };
   }, []);
-  const go = (s) => { setScreen(s); setNavOpen(false); };
+  const [filter, setFilter] = useState(null);
+  const go = (s, f = null) => { setScreen(s); setFilter(f); setNavOpen(false); };
+  // role guard — agents may only open their own surfaces
+  useEffect(() => {
+    if (user && user.role === "agent" && !["agent", "live", "open", "lead"].includes(screen)) {
+      setScreen("agent");
+    }
+  }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} />, lead: <LeadDetail />, open: <OpenLeads />,
+    live: <LiveLeads user={user} filter={filter} go={go} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} />, lead: <LeadDetail />, open: <OpenLeads />,
     assign: <Assignment />, pipeline: <Pipeline go={go} />, performance: <Performance />,
     security: <SecurityLog />, matching: <Matching go={go} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -258,7 +265,11 @@ export default function App() {
             <div style={{ fontFamily: DISPLAY, fontSize: 10.5, letterSpacing: ".42em", color: T.goldBright, marginTop: 3, fontWeight: 400 }}>LEAD DESK</div>
           </div>
           <nav style={{ flex: 1, overflowY: "auto", padding: "12px 10px" }}>
-            {NAV.map(([k, label, Ic]) => {
+            {NAV.filter(([k]) => {
+              const agentAllowed = ["agent", "live", "open", "lead"];
+              const isAgent = user && user.role === "agent";
+              return isAgent ? agentAllowed.includes(k) : true;
+            }).map(([k, label, Ic]) => {
               const on = screen === k;
               return (
                 <button key={k} onClick={() => go(k)} style={{ display: "flex", alignItems: "center", gap: 11,
@@ -381,22 +392,71 @@ function GoldBtn({ children, ghost }) {
 
 /* ============================ 1 ADMIN DASHBOARD ========================== */
 function AdminDash({ go }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase.from("leads")
+        .select("temperature,status,is_open,assigned_agent,assigned_agent_name,source").limit(5000);
+      if (error) { setErr(error.message); setRows([]); return; }
+      setRows(data || []);
+    })();
+  }, []);
+
+  if (err) return <div style={{ ...card, padding: 22, borderColor: T.badSoft }}>
+    <div style={{ fontWeight: 700, color: T.bad }}>Unable to load dashboard data</div>
+    <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>{err}</div></div>;
+  if (rows === null) return <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading live data…</div>;
+
+  const n = rows.length;
+  const cnt = (f) => rows.filter(f).length;
+  const cards = [
+    { label: "Total Leads", value: n, sub: "in database", f: { type: "all", label: "All leads" } },
+    { label: "Unassigned", value: cnt((r) => !r.assigned_agent), sub: "no account linked", f: { type: "unassigned", label: "Unassigned leads" } },
+    { label: "Hot", value: cnt((r) => r.temperature === "Hot"), sub: "temperature", f: { type: "temp", value: "Hot", label: "Hot leads" } },
+    { label: "Very Hot", value: cnt((r) => r.temperature === "Very Hot"), sub: "temperature", f: { type: "temp", value: "Very Hot", label: "Very Hot leads" } },
+    { label: "Open Pool", value: cnt((r) => r.is_open), sub: "released leads", f: { type: "open", label: "Open pool" } },
+    { label: "Closed Won", value: cnt((r) => r.status === "Closed Won"), sub: "won deals", f: { type: "status", value: "Closed Won", label: "Closed Won" } },
+  ];
+
+  // real leads-by-source
+  const bySource = Object.entries(rows.reduce((m, r) => { const k = r.source || "Unknown"; m[k] = (m[k] || 0) + 1; return m; }, {}))
+    .sort((a, b) => b[1] - a[1]);
+  // real leads-by-agent (name text, since accounts not yet linked)
+  const byAgent = Object.entries(rows.reduce((m, r) => { const k = r.assigned_agent_name || "Unassigned"; m[k] = (m[k] || 0) + 1; return m; }, {}))
+    .sort((a, b) => b[1] - a[1]);
+  const maxSrc = Math.max(1, ...bySource.map((s) => s[1]));
+  const maxAg = Math.max(1, ...byAgent.map((a) => a[1]));
+
+  const ClickCard = ({ c }) => (
+    <button onClick={() => go("live", c.f)} style={{ ...card, padding: "16px 18px", textAlign: "left", cursor: "pointer",
+      border: `1px solid ${T.hair}`, background: T.paper, fontFamily: UI }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>{c.label}</div>
+      <div style={{ fontFamily: DISPLAY, fontSize: 28, marginTop: 6, color: T.ink }}>{c.value}</div>
+      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
+        {c.sub} <ChevronRight size={12} color={T.gold} /></div>
+    </button>
+  );
+
   return <div>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
-      <Kpi label="Total Leads" value="247" sub="+38 this month" trend="up" />
-      <Kpi label="Pipeline Value" value="AED 101M" sub="weighted by stage" gold />
-      <Kpi label="Unassigned Pool" value="4" sub="oldest 32 min" trend="down" />
-      <Kpi label="Hot / Very Hot" value="19" sub="6 inactive 3+ days" />
-      <Kpi label="Closed Won (Q)" value="18" sub="AED 33.9M value" trend="up" />
+    <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 14 }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok,
+        borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}>
+        <span style={{ width: 7, height: 7, borderRadius: 7, background: T.ok }} /> LIVE DATA</span>
+      <span style={{ fontSize: 12.5, color: T.muted }}>{n} leads · tap any card to drill in</span>
+    </div>
+
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+      {cards.map((c) => <ClickCard key={c.label} c={c} />)}
     </div>
 
     <SectionTitle right={<button onClick={() => go("security")} style={{ background: "none", border: "none", color: T.bad,
       fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontFamily: UI }}>
-      View all <ChevronRight size={13} /></button>}>Security watch</SectionTitle>
+      Open security <ChevronRight size={13} /></button>}>Security watch <span style={{ fontSize: 10.5, color: T.faint, fontWeight: 600 }}>· sample until events table is live</span></SectionTitle>
     <div style={{ ...card, borderColor: T.badSoft, overflow: "hidden" }}>
       {SUS.slice(0, 2).map((s, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 16px",
-          borderTop: i ? `1px solid ${T.hairSoft}` : "none" }}>
+        <div key={i} onClick={() => go("security")} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 16px",
+          borderTop: i ? `1px solid ${T.hairSoft}` : "none", cursor: "pointer" }}>
           <AlertTriangle size={17} color={s.sev === "high" ? T.bad : T.warn} style={{ flexShrink: 0 }} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.what}</div>
@@ -407,33 +467,32 @@ function AdminDash({ go }) {
       ))}
     </div>
 
-    <SectionTitle>Leads by source</SectionTitle>
+    <SectionTitle>Leads by source <span style={{ fontSize: 10.5, color: T.ok, fontWeight: 600 }}>· live</span></SectionTitle>
     <div style={{ ...card, padding: 18 }}>
-      {[["Property Finder", 34], ["Meta Ads", 26], ["Referral", 16], ["Bayut", 12], ["WhatsApp Campaign", 8], ["Roadshow", 4]].map(([s, p]) => (
-        <div key={s} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
-          <span style={{ width: 140, fontSize: 12.5, color: T.inkSoft }}>{s}</span>
-          <div style={{ flex: 1 }}><Bar pct={p * 2.4} /></div>
-          <span style={{ width: 36, textAlign: "right", fontSize: 12.5, fontWeight: 700 }}>{p}%</span>
-        </div>
+      {bySource.length === 0 ? <div style={{ color: T.muted, fontSize: 12.5 }}>No leads yet.</div> :
+        bySource.map(([s, c]) => (
+        <button key={s} onClick={() => go("live", { type: "source", value: s, label: "Source: " + s })}
+          style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, width: "100%", background: "none",
+            border: "none", cursor: "pointer", fontFamily: UI, padding: 0 }}>
+          <span style={{ width: 140, fontSize: 12.5, color: T.inkSoft, textAlign: "left" }}>{s}</span>
+          <div style={{ flex: 1 }}><Bar pct={(c / maxSrc) * 100} /></div>
+          <span style={{ width: 36, textAlign: "right", fontSize: 12.5, fontWeight: 700 }}>{c}</span>
+        </button>
       ))}
     </div>
 
-    <SectionTitle right={<button onClick={() => go("performance")} style={{ background: "none", border: "none", color: T.muted,
-      fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontFamily: UI }}>
-      Full report <ChevronRight size={13} /></button>}>Agent performance</SectionTitle>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
-      {AGENTS.map((a) => (
-        <div key={a.id} style={{ ...card, padding: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Av name={a.name} dark />
-            <div><div style={{ fontWeight: 600, fontSize: 13.5 }}>{a.name}</div>
-              <div style={{ fontSize: 11, color: T.muted }}>{a.leads} leads · {a.deals} closed</div></div>
-          </div>
-          <div style={{ marginTop: 12 }}><Bar pct={a.score} color={a.score > 70 ? T.gold : T.bad} /></div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, fontSize: 11.5, color: T.muted }}>
-            <span>AED {a.pipeline}M pipeline</span><span style={{ fontWeight: 700, color: a.score > 70 ? T.ink : T.bad }}>{a.score}</span>
-          </div>
-        </div>
+    <SectionTitle>Leads by agent <span style={{ fontSize: 10.5, color: T.ok, fontWeight: 600 }}>· live</span></SectionTitle>
+    <div style={{ ...card, padding: 18 }}>
+      {byAgent.map(([a, c]) => (
+        <button key={a} onClick={() => go("live", { type: "agent", value: a, label: "Agent: " + a })}
+          style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 9, width: "100%", background: "none",
+            border: "none", cursor: "pointer", fontFamily: UI, padding: 0 }}>
+          <Av name={a === "Unassigned" ? "U N" : a} size={26} dark />
+          <span style={{ width: 130, fontSize: 12.5, color: T.inkSoft, textAlign: "left" }}>{a}</span>
+          <div style={{ flex: 1 }}><Bar pct={(c / maxAg) * 100} color={T.gold} /></div>
+          <span style={{ width: 30, textAlign: "right", fontSize: 12.5, fontWeight: 700 }}>{c}</span>
+          <ChevronRight size={13} color={T.faint} />
+        </button>
       ))}
     </div>
   </div>;
@@ -665,6 +724,14 @@ function Assignment() {
 /* ============================ 5 PIPELINE BOARD =========================== */
 function Pipeline({ go }) {
   return <div>
+    {filter && go && (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        <button onClick={() => go("admin")} style={{ ...miniBtn() }}>← Dashboard</button>
+        <span style={{ fontSize: 12.5, color: T.muted }}>Dashboard <span style={{ color: T.faint }}>›</span> Leads <span style={{ color: T.faint }}>›</span> <b style={{ color: T.ink }}>{filter.label}</b></span>
+        <span style={{ background: T.goldSoft, color: T.gold, borderRadius: 8, padding: "3px 10px", fontSize: 11.5, fontWeight: 700 }}>
+          {filtered.length} {filtered.length === 1 ? "lead" : "leads"}</span>
+      </div>
+    )}
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
       <div style={{ fontSize: 12.5, color: T.muted }}>64 active leads · AED 101M weighted</div>
       <div style={{ display: "flex", gap: 8 }}>
@@ -1326,7 +1393,7 @@ function LoginFlow({ onLogin, dark, setDark }) {
 }
 
 /* ===================== LIVE LEADS (real Supabase data) ==================== */
-function LiveLeads({ user }) {
+function LiveLeads({ user, filter, go }) {
   const [leads, setLeads] = useState(null);   // null = loading
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
@@ -1355,7 +1422,19 @@ function LiveLeads({ user }) {
       detail: { lead_code: l.lead_code } }).then(() => {});
   };
 
-  const filtered = (leads || []).filter((l) => {
+  const matchFilter = (l) => {
+    if (!filter) return true;
+    switch (filter.type) {
+      case "unassigned": return !l.assigned_agent_name;
+      case "temp":       return l.temperature === filter.value;
+      case "status":     return l.status === filter.value;
+      case "open":       return l.is_open === true;
+      case "source":     return (l.source || "Unknown") === filter.value;
+      case "agent":      return (l.assigned_agent_name || "Unassigned") === filter.value;
+      default:           return true;
+    }
+  };
+  const filtered = (leads || []).filter(matchFilter).filter((l) => {
     if (!q.trim()) return true;
     const s = q.toLowerCase();
     return [l.client_name, l.project, l.area, l.assigned_agent_name, l.lead_code, l.status]
@@ -1363,6 +1442,14 @@ function LiveLeads({ user }) {
   });
 
   return <div>
+    {filter && go && (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        <button onClick={() => go("admin")} style={{ ...miniBtn() }}>← Dashboard</button>
+        <span style={{ fontSize: 12.5, color: T.muted }}>Dashboard <span style={{ color: T.faint }}>›</span> Leads <span style={{ color: T.faint }}>›</span> <b style={{ color: T.ink }}>{filter.label}</b></span>
+        <span style={{ background: T.goldSoft, color: T.gold, borderRadius: 8, padding: "3px 10px", fontSize: 11.5, fontWeight: 700 }}>
+          {filtered.length} {filtered.length === 1 ? "lead" : "leads"}</span>
+      </div>
+    )}
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok,
