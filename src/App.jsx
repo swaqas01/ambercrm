@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall } from "./supabase.js";
+import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, logAi } from "./mentors.js";
 import {
   LayoutDashboard, UserCircle, FileText, UserPlus, Kanban, BarChart3,
   ShieldAlert, Building2, Gauge, Briefcase, Coins, Settings, Menu, X,
@@ -7,7 +8,7 @@ import {
   Flame, Clock, MapPin, Eye, EyeOff, Lock, AlertTriangle, CheckCircle2,
   TrendingUp, Users, Wallet, Star, Calendar, Filter, Plus, ArrowUpRight,
   ArrowDownRight, CircleDot, Ban, Download, Globe, Smartphone, Sun, Moon, Unlock, Send, Bot, Fingerprint, KeyRound, LogOut,
-  Database, RefreshCw, Upload
+  Database, RefreshCw, Upload, Sparkle
 } from "lucide-react";
 
 /* ================================ TOKENS ================================= */
@@ -359,7 +360,7 @@ export default function App() {
         <div style={{ padding: narrow ? "16px 14px 70px" : "24px 26px 80px", maxWidth: 1200 }}>
           {SCREENS[screen]}
         </div>
-        <AiChat narrow={narrow} />
+        <AskAmber narrow={narrow} user={user} />
       </main>}
     </div>
   );
@@ -1504,107 +1505,146 @@ function OpenLeads() {
 }
 
 /* ========================= AI CHAT (ALL USERS) =========================== */
-function AiChat({ narrow }) {
+function AskAmber({ narrow, user }) {
   const [open, setOpen] = useState(false);
-  const [msgs, setMsgs] = useState([{ role: "assistant",
-    text: "Ask me anything about the desk — \u201cshow me Derya's performance\u201d, \u201chow many off-plan leads per agent?\u201d, or \u201cfind me open leads for Palm Jebel Ali\u201d." }]);
+  const [mentor, setMentor] = useState(null);     // chosen mentor object
+  const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [ctx, setCtx] = useState(null);
   const boxRef = useRef(null);
   useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight; }, [msgs, busy]);
 
-  const DATA_CTX = JSON.stringify({
-    agents: AGENTS.map((a) => ({ name: a.name, activeLeads: a.leads, closedDeals: a.deals, pipelineAEDm: a.pipeline,
-      conversionPct: a.conv, avgResponse: a.resp, performanceScore: a.score,
-      offPlanAssigned: { "Derya Altun": 5, "Omar Farouk": 2, "Lara Petrova": 3, "Bilal Hussain": 4 }[a.name] })),
-    assignedLeads: LEADS.map((l) => ({ name: l.name, agent: l.agent, status: l.status, temp: l.temp, area: l.area,
-      type: l.ptype, budget: l.budget })),
-    openLeads: OPEN_LEADS.map((l) => ({ name: l.name, project: l.project, type: l.ptype, budget: l.budget,
-      daysOld: l.days, previousAgent: l.lastAgent })),
-    commissionsQ: COMMISSIONS.map((c) => ({ deal: c.deal, project: c.project, valueAEDm: c.value, agent: c.agent, status: c.status })),
-    rules: "Leads unclosed for 60 days auto-release to the Open Leads pool, visible to all agents; contact reveals are logged.",
-  });
+  const pick = async (m) => {
+    setMentor(m);
+    setMsgs([{ role: "assistant", text: m.greeting }]);
+    setCtx(await buildCrmContext(user)); // fetch permitted CRM context once per session
+  };
+  const reset = () => { setMentor(null); setMsgs([]); setInput(""); };
 
   const send = async (q) => {
     const text = (q != null ? q : input).trim();
-    if (!text || busy) return;
+    if (!text || busy || !mentor) return;
+    setInput("");
+    // client-side guard: refuse obvious non-work content without calling the model
+    const cat = classifyInappropriate(text);
+    if (cat) {
+      const refusal = { ambreen_ai: "Nice try, but Ask Amber is for work — not gossip or time-pass. Ask me about your leads, follow-ups or deals.",
+        saad_ai: "This is not work-related. Ask me about your leads, clients, deals, CRM or Dubai real estate.",
+        ibrahim_ai: "Let's keep it work-related. I can help you with clients, WhatsApp replies, leads, follow-ups or CRM questions." }[mentor.id];
+      setMsgs((m) => [...m, { role: "user", text }, { role: "assistant", text: refusal }]);
+      logAi({ user, mentor, question: text, responseSum: "[refused: " + cat + "]", status: "refused", flagCategory: cat });
+      return;
+    }
     const next = [...msgs, { role: "user", text }];
-    setMsgs(next); setInput(""); setBusy(true);
+    setMsgs(next); setBusy(true);
     try {
-      const res = await fetch("/api/ai", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system: "You are the AI assistant inside Amber Lead Desk, a Dubai real-estate CRM. Answer from this live desk data only: " + DATA_CTX +
-            " Be concise and concrete: give numbers, short lines, name names. For performance questions summarise the agent's stats. " +
-            "For distribution questions give per-agent counts. For find-me-leads questions list matching leads (name, project, budget, age) and remind that reveals are logged. " +
-            "Plain text only, no markdown symbols. If asked something outside the data, say what the desk doesn't track.",
-          messages: next.slice(-12).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })) }),
-      });
+      const res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mentor: mentor.id, crmContext: ctx,
+          messages: next.slice(-12).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })) }) });
       const data = await res.json();
-      const reply = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
-      setMsgs((m) => [...m, { role: "assistant", text: reply || "Hmm, I didn't get a response — try again." }]);
+      if (data.error) {
+        setMsgs((m) => [...m, { role: "assistant", text: "Ask Amber is temporarily unavailable. Please try again." }]);
+        logAi({ user, mentor, question: text, status: "error" });
+      } else {
+        const reply = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
+        setMsgs((m) => [...m, { role: "assistant", text: reply || "Please try again." }]);
+        logAi({ user, mentor, question: text, responseSum: reply, model: data.model, status: "success" });
+      }
     } catch (e) {
-      setMsgs((m) => [...m, { role: "assistant", text: "I couldn't reach the AI just now — check the connection and that ANTHROPIC_API_KEY is set in Vercel." }]);
+      setMsgs((m) => [...m, { role: "assistant", text: "Ask Amber is temporarily unavailable. Please try again." }]);
+      logAi({ user, mentor, question: text, status: "error" });
     } finally { setBusy(false); }
   };
 
+  // floating launcher
   if (!open) return (
-    <button onClick={() => setOpen(true)} title="Ask the desk" style={{ position: "fixed", right: 20, bottom: 20, zIndex: 60,
-      width: 54, height: 54, borderRadius: 16, border: `1px solid ${T.goldEdge}`, cursor: "pointer",
-      background: T.hero, color: T.goldBright, display: "grid", placeItems: "center", boxShadow: T.shadowLg }}>
-      <Bot size={24} /></button>
+    <button onClick={() => setOpen(true)} title="Ask Amber — your AI sales mentor" style={{ position: "fixed", right: 20, bottom: 20, zIndex: 60,
+      display: "flex", alignItems: "center", gap: 9, padding: "12px 16px", borderRadius: 999, border: `1px solid ${T.goldEdge}`,
+      cursor: "pointer", background: T.hero, color: "#fff", boxShadow: T.shadowLg, fontFamily: UI }}>
+      <span style={{ width: 26, height: 26, borderRadius: 8, background: "rgba(212,175,92,.18)", display: "grid", placeItems: "center" }}>
+        <Sparkle size={15} color={T.goldBright} /></span>
+      <span style={{ fontWeight: 700, fontSize: 13.5 }}>Ask Amber</span></button>
   );
 
   const panel = narrow ? { position: "fixed", inset: 0, borderRadius: 0 }
-    : { position: "fixed", right: 20, bottom: 20, width: 390, height: "min(600px, 82vh)", borderRadius: 18 };
-  const sugg = ["Show me Derya's performance", "Off-plan leads per agent?", "Open leads for Palm Jebel Ali"];
+    : { position: "fixed", right: 20, bottom: 20, width: 400, height: "min(640px, 86vh)", borderRadius: 18 };
+
   return (
     <div style={{ ...panel, zIndex: 65, background: T.paper, border: `1px solid ${T.hair}`, boxShadow: T.shadowLg,
       display: "flex", flexDirection: "column", overflow: "hidden", fontFamily: UI }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 16px",
-        background: T.hero }}>
+      {/* header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 16px", background: T.hero }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 32, height: 32, borderRadius: 10, background: "rgba(212,175,92,.15)", display: "grid",
-            placeItems: "center" }}><Bot size={17} color={T.goldBright} /></div>
+          {mentor ? <img src={mentor.avatar} alt="" style={{ width: 34, height: 34, borderRadius: 10, objectFit: "cover" }} />
+            : <span style={{ width: 32, height: 32, borderRadius: 10, background: "rgba(212,175,92,.15)", display: "grid", placeItems: "center" }}><Sparkle size={17} color={T.goldBright} /></span>}
           <div>
-            <div style={{ color: "#fff", fontFamily: DISPLAY, fontSize: 14 }}>Desk AI</div>
-            <div style={{ color: "rgba(255,255,255,.55)", fontSize: 10.5 }}>Answers scoped to your role</div>
+            <div style={{ color: "#fff", fontFamily: DISPLAY, fontSize: 14.5 }}>{mentor ? mentor.name : "Ask Amber"}</div>
+            <div style={{ color: "rgba(255,255,255,.55)", fontSize: 10.5 }}>{mentor ? "Your AI sales mentor" : "Choose your mentor"}</div>
           </div>
         </div>
-        <button onClick={() => setOpen(false)} style={{ border: "none", background: "rgba(255,255,255,.14)", borderRadius: 9,
-          width: 30, height: 30, display: "grid", placeItems: "center", cursor: "pointer" }}><X size={15} color="#fff" /></button>
-      </div>
-      <div ref={boxRef} style={{ flex: 1, overflowY: "auto", padding: 14, background: T.bone }}>
-        {msgs.map((m, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", marginBottom: 9 }}>
-            <div style={{ maxWidth: "88%", background: m.role === "user" ? T.btnBg : T.paper,
-              color: m.role === "user" ? T.btnFg : T.ink, border: m.role === "user" ? "none" : `1px solid ${T.hair}`,
-              borderRadius: 13, padding: "9px 12px", fontSize: 12.8, lineHeight: 1.55, whiteSpace: "pre-wrap",
-              boxShadow: m.role === "user" ? "none" : T.shadow }}>{m.text}</div>
-          </div>
-        ))}
-        {busy && <div style={{ fontSize: 12, color: T.muted, padding: "4px 2px" }}>Thinking…</div>}
-      </div>
-      {msgs.filter((m) => m.role === "user").length === 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 14px 10px", background: T.bone }}>
-          {sugg.map((s) => <button key={s} onClick={() => send(s)} style={{ border: `1px solid ${T.goldEdge}`,
-            background: T.goldSoft, color: T.gold, borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600,
-            cursor: "pointer", fontFamily: UI }}>{s}</button>)}
+        <div style={{ display: "flex", gap: 6 }}>
+          {mentor && <button onClick={reset} title="Switch mentor" style={hdrBtn()}><Users size={14} color="#fff" /></button>}
+          <button onClick={() => { setOpen(false); }} title="Close" style={hdrBtn()}><X size={15} color="#fff" /></button>
         </div>
-      )}
-      <div style={{ display: "flex", gap: 8, padding: 11, borderTop: `1px solid ${T.hair}`, background: T.paper }}>
-        <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }}
-          placeholder="Ask the desk…" style={{ flex: 1, border: `1px solid ${T.hair}`, borderRadius: 11, padding: "10px 12px",
-            fontSize: 12.8, fontFamily: UI, outline: "none", color: T.ink, background: T.bone }} />
-        <button onClick={() => send()} disabled={!input.trim() || busy} style={{ border: "none", borderRadius: 11,
-          width: 40, height: 40, display: "grid", placeItems: "center", cursor: "pointer",
-          background: input.trim() && !busy ? T.gold : T.faint }}><Send size={16} color="#fff" /></button>
       </div>
+
+      {!mentor ? (
+        /* mentor selection */
+        <div style={{ flex: 1, overflowY: "auto", padding: 18, background: T.bone }}>
+          <div style={{ fontFamily: DISPLAY, fontSize: 17, color: T.ink }}>Choose your Amber AI Mentor</div>
+          <div style={{ fontSize: 12.5, color: T.muted, margintop: 2, marginBottom: 16 }}>Select who you want guidance from today.</div>
+          <div style={{ display: "grid", gap: 12 }}>
+            {MENTORS.map((m) => (
+              <div key={m.id} style={{ ...card, padding: 14, display: "flex", alignItems: "center", gap: 13 }}>
+                <img src={m.avatar} alt={m.name} style={{ width: 52, height: 52, borderRadius: 13, objectFit: "cover", flexShrink: 0, border: `2px solid ${m.accent}` }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{m.name}</div>
+                  <div style={{ fontSize: 11.5, color: T.muted, marginTop: 2, lineHeight: 1.4 }}>{m.desc}</div>
+                </div>
+                <button onClick={() => pick(m)} style={{ flexShrink: 0, background: T.btnBg, color: T.btnFg, border: "none",
+                  borderRadius: 9, padding: "8px 13px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Choose</button>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 10.5, color: T.faint, marginTop: 14, lineHeight: 1.5, textAlign: "center" }}>
+            Ask Amber is a work-only assistant for CRM, leads, clients and Dubai real estate.</div>
+        </div>
+      ) : (<>
+        <div ref={boxRef} style={{ flex: 1, overflowY: "auto", padding: 14, background: T.bone }}>
+          {msgs.map((m, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", marginBottom: 9 }}>
+              <div style={{ maxWidth: "88%", background: m.role === "user" ? T.btnBg : T.paper,
+                color: m.role === "user" ? T.btnFg : T.ink, border: m.role === "user" ? "none" : `1px solid ${T.hair}`,
+                borderRadius: 13, padding: "9px 12px", fontSize: 12.8, lineHeight: 1.55, whiteSpace: "pre-wrap",
+                boxShadow: m.role === "user" ? "none" : T.shadow }}>{m.text}</div>
+            </div>
+          ))}
+          {busy && <div style={{ fontSize: 12, color: T.muted, padding: "4px 2px" }}>{mentor.name} is thinking…</div>}
+        </div>
+        {msgs.filter((m) => m.role === "user").length === 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 14px 10px", background: T.bone }}>
+            {["What should I focus on today?", "Show me my hot leads", "Draft a WhatsApp follow-up"].map((s) => (
+              <button key={s} onClick={() => send(s)} style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold,
+                borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>{s}</button>))}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, padding: 11, borderTop: `1px solid ${T.hair}`, background: T.paper }}>
+          <button onClick={reset} title="New chat" style={{ ...miniBtn(), padding: "0 11px" }}>New</button>
+          <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }}
+            placeholder={"Ask " + mentor.name.replace(" AI", "") + "…"} style={{ flex: 1, border: `1px solid ${T.hair}`, borderRadius: 11, padding: "10px 12px",
+              fontSize: 12.8, fontFamily: UI, outline: "none", color: T.ink, background: T.bone }} />
+          <button onClick={() => send()} disabled={!input.trim() || busy} style={{ border: "none", borderRadius: 11, width: 40, height: 40,
+            display: "grid", placeItems: "center", cursor: "pointer", background: T.btnBg, color: T.btnFg, opacity: (!input.trim() || busy) ? .5 : 1 }}>
+            <Send size={16} /></button>
+        </div>
+      </>)}
     </div>
   );
 }
+function hdrBtn() { return { border: "none", background: "rgba(255,255,255,.14)", borderRadius: 9, width: 30, height: 30,
+  display: "grid", placeItems: "center", cursor: "pointer" }; }
 
-/* ============================== LOGIN FLOW =============================== */
 function LoginFlow({ onLogin, dark, setDark }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
