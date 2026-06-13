@@ -1365,6 +1365,7 @@ function LoginFlow({ onLogin, dark, setDark }) {
             ))}
           </div>
           <div style={{ fontSize: 10.5, color: T.faint, marginTop: 10 }}>In the demo, any 4 digits work as the code.</div>
+          <div style={{ fontSize: 9.5, color: T.faint, marginTop: 6, opacity: .7 }}>Live · auto-deploy connected ✓ · build 2026-06-13</div>
         </div>
       </div>
     </div>
