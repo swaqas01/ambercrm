@@ -294,7 +294,7 @@ export default function App() {
     <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: T.bone, minHeight: 600, display: "flex", color: T.ink,
       transition: "background .25s ease" }}>
       <style>{THEME_CSS}</style>
-      {recovery && <ResetPassword onDone={() => { setRecovery(false); try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {} }} />}
+      {recovery && <ResetPassword onDone={() => { setRecovery(false); setUser(null); try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {} }} />}
       {!recovery && !user && <LoginFlow onLogin={(u) => { setUser(u); setScreen(u.home === "agent" ? "agent" : "admin"); }} dark={dark} setDark={setDark} />}
       {!recovery && user && user.mustChangePw && <ForcedPasswordChange onDone={() => setUser({ ...user, mustChangePw: false })} signOut={signOut} />}
       {/* sidebar */}
