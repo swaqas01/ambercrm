@@ -56,7 +56,8 @@ export default async function handler(req, res) {
       const id = created.user.id;
       await svc.from("profiles").update({ full_name, role, phone: phone || null, department: department || null,
         job_title: job_title || null, lead_scope: lead_scope || "own", notes: notes || null, created_by: callerId,
-        force_password_change: true, twofa_required: !!twofa, active: status !== "inactive" }).eq("id", id);
+        force_password_change: true, first_login: true, twofa_required: role === "agent" ? true : !!twofa,
+        password_last_changed_at: null, password_expires_at: null, active: status !== "inactive" }).eq("id", id);
       await audit("user_created", id, null, { email, role }, full_name);
       await notify("New user created", `${full_name} (${role}) was added.`, "users");
       return res.status(200).json({ ok: true, id });
@@ -69,7 +70,29 @@ export default async function handler(req, res) {
       if (error) return res.status(400).json({ error: error.message });
       if (force) await svc.from("profiles").update({ force_password_change: true }).eq("id", id);
       await audit("password_reset", id, null, null, null);
+      try { await svc.from("auth_logs").insert({ user_id: id, event: "admin_reset", status: "ok" }); } catch (e) {}
       return res.status(200).json({ ok: true });
+    }
+
+    if (action === "repair_account") {
+      // Bring a stuck account back to a clean, known state. Optionally set a temp password.
+      const { id, email, password, makeAgent, forceChange } = payload;
+      let uid = id;
+      if (!uid && email) {
+        const { data: list } = await svc.auth.admin.listUsers({ page: 1, perPage: 200 });
+        const found = (list?.users || []).find((u) => (u.email || "").toLowerCase() === String(email).trim().toLowerCase());
+        uid = found?.id;
+      }
+      if (!uid) return res.status(400).json({ error: "Could not find that user." });
+      await svc.auth.admin.updateUserById(uid, { email_confirm: true, ban_duration: "none" });
+      if (password) { const { error: pErr } = await svc.auth.admin.updateUserById(uid, { password }); if (pErr) return res.status(400).json({ error: pErr.message }); }
+      const patch = { active: true, deactivated_at: null, deactivated_by: null, deactivation_reason: null,
+        force_password_change: forceChange !== false, first_login: false, password_last_changed_at: null, password_expires_at: null };
+      if (makeAgent) { patch.role = "agent"; patch.twofa_required = true; }
+      await svc.from("profiles").update(patch).eq("id", uid);
+      try { await svc.from("auth_logs").insert({ user_id: uid, email: email || null, event: "admin_reset", status: "ok", reason: "repair_account" }); } catch (e) {}
+      await audit("account_repaired", uid, null, { email: email || null, makeAgent: !!makeAgent });
+      return res.status(200).json({ ok: true, id: uid });
     }
 
     if (action === "set_role") {

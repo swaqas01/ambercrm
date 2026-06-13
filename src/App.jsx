@@ -232,18 +232,26 @@ export default function App() {
   const [dark, setDark] = useState(false);
   const [user, setUser] = useState(null); // {name, role, email, roleLabel}
   const [authChecked, setAuthChecked] = useState(false);
+  const [recovery, setRecovery] = useState(typeof window !== "undefined" && /type=recovery/.test(window.location.hash || ""));
+  useEffect(() => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => { if (event === "PASSWORD_RECOVERY") setRecovery(true); });
+    return () => { try { sub.subscription.unsubscribe(); } catch (e) {} };
+  }, []);
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user && mounted) {
-        const { data: prof } = await supabase.from("profiles").select("full_name, role, active").eq("id", session.user.id).single();
-        if (prof && prof.active !== false) {
-          const ri = roleInfo(prof.role);
-          setUser({ name: prof.full_name || session.user.email, email: session.user.email, role: prof.role,
-            roleLabel: ri.label, id: session.user.id, mustChangePw: !!prof.force_password_change });
-          setScreen(ri.home === "agent" ? "agent" : "admin");
-          stampLogin(session.user.id);
+      if (!/type=recovery/.test(typeof window !== "undefined" ? (window.location.hash || "") : "")) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user && mounted) {
+          const { data: prof } = await supabase.from("profiles").select("full_name, role, active, force_password_change, first_login, password_expires_at").eq("id", session.user.id).single();
+          if (prof && prof.active !== false) {
+            const ri = roleInfo(prof.role);
+            const expired = !!(prof.password_expires_at && new Date(prof.password_expires_at).getTime() < Date.now());
+            setUser({ name: prof.full_name || session.user.email, email: session.user.email, role: prof.role,
+              roleLabel: ri.label, id: session.user.id, mustChangePw: !!prof.force_password_change || !!prof.first_login || expired });
+            setScreen(ri.home === "agent" ? "agent" : "admin");
+            stampLogin(session.user.id);
+          } else if (prof && prof.active === false) { await supabase.auth.signOut(); }
         }
       }
       if (mounted) setAuthChecked(true);
@@ -286,11 +294,9 @@ export default function App() {
     <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: T.bone, minHeight: 600, display: "flex", color: T.ink,
       transition: "background .25s ease" }}>
       <style>{THEME_CSS}</style>
-      {!user && <LoginFlow onLogin={(u) => { setUser(u); setScreen(u.home === "agent" ? "agent" : "admin"); }} dark={dark} setDark={setDark} />}
-      {user && user.mustChangePw && <ForcedPasswordChange onDone={async () => {
-        await supabase.from("profiles").update({ force_password_change: false }).eq("id", user.id);
-        setUser({ ...user, mustChangePw: false });
-      }} signOut={signOut} />}
+      {recovery && <ResetPassword onDone={() => { setRecovery(false); try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {} }} />}
+      {!recovery && !user && <LoginFlow onLogin={(u) => { setUser(u); setScreen(u.home === "agent" ? "agent" : "admin"); }} dark={dark} setDark={setDark} />}
+      {!recovery && user && user.mustChangePw && <ForcedPasswordChange onDone={() => setUser({ ...user, mustChangePw: false })} signOut={signOut} />}
       {/* sidebar */}
       {user && (!narrow || navOpen) && (
         <aside style={{ width: 232, background: T.side, color: "var(--sideText, #fff)", flexShrink: 0, display: "flex",
@@ -1393,6 +1399,13 @@ function Performance() {
 /* ========================= 7 SUSPICIOUS ACTIVITY ========================= */
 function SecurityLog({ go }) {
   const [ai, setAi] = useState(null);
+  const [authRows, setAuthRows] = useState(null);
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("auth_logs").select("email, event, status, reason, ip, device, created_at").order("created_at", { ascending: false }).limit(100);
+      setAuthRows(data || []);
+    })();
+  }, []);
   useEffect(() => {
     (async () => {
       const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
@@ -1426,6 +1439,38 @@ function SecurityLog({ go }) {
           <AlertTriangle size={13} style={{ verticalAlign: "-2px", marginRight: 5 }} /> Flagged for repeated misuse (3+ in 24h): {ai.repeatUsers.join(", ")}</div>}
       </>}
     </div>
+    {authRows !== null && <div style={{ ...card, padding: 16, marginBottom: 14 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}><ShieldAlert size={16} color={T.gold} /> Authentication events</div>
+      {(() => {
+        const since = Date.now() - 24 * 3600 * 1000;
+        const last24 = authRows.filter((r) => new Date(r.created_at).getTime() > since);
+        const c = (f) => last24.filter(f).length;
+        const lbl = { login_attempt: "Login attempt", login_success: "Login success", login_failed: "Login failed", account_inactive: "Inactive account", "2fa_sent": "2FA code sent", "2fa_success": "2FA verified", "2fa_failed": "2FA failed", "2fa_expired": "2FA expired", password_changed: "Password changed", forgot_requested: "Forgot password", reset_success: "Reset success", admin_reset: "Admin reset", account_locked: "Account locked" };
+        return <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10, marginBottom: 14 }}>
+            <Kpi label="Failed logins (24h)" value={c((r) => r.event === "login_failed")} tone={c((r) => r.event === "login_failed") ? "warn" : null} />
+            <Kpi label="2FA failures (24h)" value={c((r) => r.event === "2fa_failed")} tone={c((r) => r.event === "2fa_failed") ? "warn" : null} />
+            <Kpi label="Codes sent (24h)" value={c((r) => r.event === "2fa_sent")} />
+            <Kpi label="Password changes (24h)" value={c((r) => r.event === "password_changed")} />
+          </div>
+          {authRows.length === 0 ? <div style={{ color: T.muted, fontSize: 12.5 }}>No authentication events recorded yet.</div> :
+          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr style={{ textAlign: "left", color: T.muted }}>
+              <th style={{ padding: "6px 8px", fontWeight: 700 }}>When</th><th style={{ padding: "6px 8px", fontWeight: 700 }}>Email</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Event</th><th style={{ padding: "6px 8px", fontWeight: 700 }}>Status</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700 }}>IP / device</th></tr></thead>
+            <tbody>{authRows.slice(0, 40).map((r, i) => (
+              <tr key={i} style={{ borderTop: `1px solid ${T.hair}` }}>
+                <td style={{ padding: "6px 8px", color: T.muted, whiteSpace: "nowrap" }}>{new Date(r.created_at).toLocaleString()}</td>
+                <td style={{ padding: "6px 8px" }}>{r.email || "—"}</td>
+                <td style={{ padding: "6px 8px" }}>{lbl[r.event] || r.event}{r.reason ? <span style={{ color: T.faint }}> · {r.reason}</span> : null}</td>
+                <td style={{ padding: "6px 8px" }}><span style={{ color: r.status === "ok" ? T.ok : r.status === "fail" ? T.bad : T.muted, fontWeight: 700 }}>{r.status || "—"}</span></td>
+                <td style={{ padding: "6px 8px", color: T.faint, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.ip || "—"}{r.device ? " · " + r.device.slice(0, 40) : ""}</td>
+              </tr>))}</tbody>
+          </table></div>}
+        </>;
+      })()}
+    </div>}
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
       <Kpi label="Open alerts" value="3" sub="1 high severity" trend="down" />
       <Kpi label="Honeypot triggers" value="1" sub="this month" />
@@ -3131,52 +3176,102 @@ function hdrBtn() { return { border: "none", background: "rgba(255,255,255,.14)"
   display: "grid", placeItems: "center", cursor: "pointer" }; }
 
 function LoginFlow({ onLogin, dark, setDark }) {
+  const [stage, setStage] = useState("creds");   // creds | twofa | setpw
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
-  const [err, setErr] = useState("");
+  const [code, setCode] = useState("");
+  const [npw, setNpw] = useState(""); const [npw2, setNpw2] = useState("");
+  const [err, setErr] = useState(""); const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resendIn, setResendIn] = useState(0);
+  useEffect(() => { if (resendIn <= 0) return; const t = setTimeout(() => setResendIn((s) => s - 1), 1000); return () => clearTimeout(t); }, [resendIn]);
+
+  const friendly = (reason) => ({
+    bad_credentials: "Incorrect email or password.",
+    email_unconfirmed: "Your account isn't activated yet. Please contact your administrator.",
+    inactive: "Your account is inactive. Please contact admin.",
+    no_profile: "No profile found for this account. Contact your admin.",
+    email_send_failed: "We couldn't send your verification code. Please try again in a moment.",
+    too_soon: "Please wait a few seconds before requesting another code.",
+    expired: "Your verification code has expired. Please request a new code.",
+    invalid: "Invalid verification code.",
+    locked: "Too many incorrect codes. Please sign in again to get a new code.",
+    missing: "Please fill in all fields.",
+    server: "Something went wrong. Please try again.",
+    server_unconfigured: "Sign-in is temporarily unavailable. Please contact your administrator.",
+  }[reason] || "Something went wrong. Please try again.");
+
+  const api = async (action, body) => {
+    const r = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...body }) });
+    return r.json();
+  };
+  const fetchProfileAndFinish = async (uid) => {
+    const { data: prof } = await supabase.from("profiles").select("full_name, role, active").eq("id", uid).single();
+    if (!prof) { setErr("No profile found for this account. Contact your admin."); setBusy(false); return; }
+    if (prof.active === false) { await supabase.auth.signOut(); setErr("Your account is inactive. Please contact admin."); setBusy(false); return; }
+    const ri = roleInfo(prof.role); stampLogin(uid);
+    onLogin({ name: prof.full_name || email, email, role: prof.role, roleLabel: ri.label, home: ri.home, id: uid, mustChangePw: false });
+  };
+  const establish = async (token_hash, mustChange) => {
+    const { data, error } = await supabase.auth.verifyOtp({ token_hash, type: "magiclink" });
+    if (error || !data?.user) { setErr("Could not complete sign-in. Please try again."); setBusy(false); return; }
+    if (mustChange) { setStage("setpw"); setBusy(false); setNote("For your security, please set a new password to continue."); return; }
+    await fetchProfileAndFinish(data.user.id);
+  };
 
   const submitCreds = async () => {
-    setErr("");
-    const mail = email.trim().toLowerCase();
+    setErr(""); setNote(""); const mail = email.trim().toLowerCase();
     if (!mail.includes("@")) { setErr("Enter your work email."); return; }
-    if (pw.length < 4) { setErr("Enter your password."); return; }
+    if (!pw) { setErr("Enter your password."); return; }
+    setBusy(true); setEmail(mail);
+    try {
+      const res = await api("start", { email: mail, password: pw });
+      if (!res.ok) { setErr(friendly(res.reason)); setBusy(false); return; }
+      if (res.needs2fa) { setStage("twofa"); setBusy(false); setResendIn(30); setCode(""); setNote("Enter the 4-digit code we emailed to " + mail + "."); return; }
+      await establish(res.token_hash, res.mustChange);
+    } catch (e) { setErr("Could not reach the server. Check your connection."); setBusy(false); }
+  };
+  const submitCode = async () => {
+    setErr(""); if (!/^\d{4}$/.test(code.trim())) { setErr("Enter the 4-digit code from your email."); return; }
     setBusy(true);
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email: mail, password: pw });
-      if (error) { setBusy(false); setErr("Email or password is incorrect."); return; }
-      const { data: prof } = await supabase.from("profiles")
-        .select("full_name, role, active, force_password_change").eq("id", data.user.id).single();
-      if (!prof) { setBusy(false); setErr("No profile found for this account. Contact your admin."); return; }
-      if (prof.active === false) { setBusy(false); setErr("This account has been deactivated. Contact your administrator."); return; }
-      const ri = roleInfo(prof.role);
-      setBusy(false);
-      stampLogin(data.user.id);
-      onLogin({ name: prof.full_name || data.user.email, email: data.user.email, role: prof.role, roleLabel: ri.label,
-        home: ri.home, id: data.user.id, mustChangePw: !!prof.force_password_change });
-    } catch (e) { setBusy(false); setErr("Could not reach the server. Check your connection."); }
+      const res = await api("verify_2fa", { email, code: code.trim() });
+      if (!res.ok) { setErr(friendly(res.reason)); setBusy(false); if (res.reason === "locked" || res.reason === "expired") { setStage("creds"); setCode(""); setPw(""); } return; }
+      await establish(res.token_hash, res.mustChange);
+    } catch (e) { setErr("Could not reach the server. Check your connection."); setBusy(false); }
+  };
+  const resend = async () => {
+    if (resendIn > 0) return; setErr("");
+    try { const res = await api("resend", { email }); if (res.ok) { setResendIn(30); setNote("A new code is on its way to " + email + "."); } else setErr(friendly(res.reason)); }
+    catch (e) { setErr("Could not reach the server."); }
+  };
+  const submitNewPw = async () => {
+    setErr(""); if (npw.length < 8) { setErr("Use at least 8 characters."); return; }
+    if (npw !== npw2) { setErr("Passwords don't match."); return; }
+    setBusy(true);
+    const { error } = await supabase.auth.updateUser({ password: npw });
+    if (error) { setErr("Could not update your password. Please try again."); setBusy(false); return; }
+    try { const { data: { session } } = await supabase.auth.getSession();
+      await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + (session?.access_token || "") }, body: JSON.stringify({ action: "after_password_change" }) }); } catch (e) {}
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) await fetchProfileAndFinish(user.id); else { setErr("Please sign in again."); setBusy(false); setStage("creds"); }
   };
 
   const inputS = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 11, padding: "12px 14px",
     fontSize: 14, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box" };
+  const lab = { fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted };
+  const primaryBtn = { width: "100%", background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 11, padding: "13px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 };
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "grid", placeItems: "center", padding: 18,
       fontFamily: UI, overflowY: "auto",
       background: "radial-gradient(1100px 600px at 78% -8%, rgba(196,154,74,.22), transparent 60%), linear-gradient(160deg, #0b1320 0%, #0e1828 42%, #111d2f 100%)" }}>
-
-      {/* premium architectural backdrop — CSS/SVG only, no logo, no external imagery */}
       <div style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
         <svg viewBox="0 0 1440 900" preserveAspectRatio="xMidYMax slice" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0.5 }}>
           <defs>
-            <linearGradient id="tower" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#1b2a40" /><stop offset="100%" stopColor="#0b1320" />
-            </linearGradient>
-            <linearGradient id="towerLit" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#243755" /><stop offset="100%" stopColor="#0d1626" />
-            </linearGradient>
+            <linearGradient id="tower" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#1b2a40" /><stop offset="100%" stopColor="#0b1320" /></linearGradient>
+            <linearGradient id="towerLit" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#243755" /><stop offset="100%" stopColor="#0d1626" /></linearGradient>
           </defs>
-          {/* skyline silhouette */}
           <g>
             <rect x="120" y="520" width="70" height="380" fill="url(#tower)" />
             <rect x="210" y="430" width="60" height="470" fill="url(#towerLit)" />
@@ -3192,10 +3287,6 @@ function LoginFlow({ onLogin, dark, setDark }) {
             <rect x="40" y="600" width="64" height="300" fill="url(#tower)" />
           </g>
         </svg>
-        {/* subtle window lights */}
-        <div style={{ position: "absolute", inset: 0, background:
-          "radial-gradient(2px 2px at 715px 320px, rgba(212,175,92,.5), transparent), radial-gradient(2px 2px at 705px 420px, rgba(212,175,92,.35), transparent), radial-gradient(2px 2px at 885px 460px, rgba(212,175,92,.4), transparent), radial-gradient(2px 2px at 1050px 520px, rgba(212,175,92,.3), transparent)" }} />
-        {/* darkening vignette so the card pops */}
         <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(8,14,24,.2) 0%, rgba(8,14,24,.55) 100%)" }} />
       </div>
 
@@ -3205,45 +3296,56 @@ function LoginFlow({ onLogin, dark, setDark }) {
         {dark ? <Sun size={16} color="#E6C46B" /> : <Moon size={16} color="#cdd6e4" />}</button>
 
       <div style={{ width: "100%", maxWidth: 410, position: "relative", zIndex: 2 }}>
-        {/* brand — text only, no logo */}
         <div style={{ textAlign: "center", marginBottom: 22 }}>
-          <div style={{ fontFamily: DISPLAY, fontSize: 27, letterSpacing: ".04em", color: "#fff", fontWeight: 500, lineHeight: 1.15 }}>
-            Amber Homes Real Estate</div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 27, letterSpacing: ".04em", color: "#fff", fontWeight: 500, lineHeight: 1.15 }}>Amber Homes Real Estate</div>
           <div style={{ width: 38, height: 2, background: "linear-gradient(90deg, transparent, #C49A4A, transparent)", margin: "12px auto 0" }} />
         </div>
 
         <div style={{ background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 18, boxShadow: "0 30px 80px rgba(0,0,0,.5)", padding: "28px 26px" }}>
-          <div style={{ fontSize: 18, fontWeight: 700, color: T.ink }}>Sign in to access your CRM dashboard.</div>
-          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, marginBottom: 20 }}>
-            Use your Amber Homes work email and password.</div>
-          <label style={{ display: "block", marginBottom: 12 }}>
-            <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>Work email</span>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@amberhomes.ae"
-              autoComplete="username" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }} style={{ ...inputS, marginTop: 6 }} />
-          </label>
-          <label style={{ display: "block", marginBottom: 6 }}>
-            <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>Password</span>
-            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••"
-              autoComplete="current-password" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }}
-              style={{ ...inputS, marginTop: 6 }} />
-          </label>
-          <div style={{ textAlign: "right", marginBottom: 14 }}>
-            <button onClick={async () => { if (!email.includes("@")) { setErr("Enter your email first, then tap reset."); return; }
-              const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase());
-              setErr(error ? "Could not send reset email." : "Password reset link sent to your email."); }}
-              style={{ background: "none", border: "none", color: T.gold, fontSize: 11.5, fontWeight: 600,
-              cursor: "pointer", fontFamily: UI }}>Forgot password?</button></div>
-          {err && <div style={{ color: err.includes("sent") ? T.ok : T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
-          <button onClick={submitCreds} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg,
-            border: "none", borderRadius: 11, padding: "13px", fontSize: 14, fontWeight: 700, cursor: "pointer",
-            fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "Signing in…" : "Sign in"}</button>
+          {stage === "creds" && <>
+            <div style={{ fontSize: 18, fontWeight: 700, color: T.ink }}>Sign in to access your CRM dashboard.</div>
+            <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, marginBottom: 20 }}>Use your Amber Homes work email and password.</div>
+            <label style={{ display: "block", marginBottom: 12 }}><span style={lab}>Work email</span>
+              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@amberhomes.ae" autoComplete="username" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }} style={{ ...inputS, marginTop: 6 }} /></label>
+            <label style={{ display: "block", marginBottom: 6 }}><span style={lab}>Password</span>
+              <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" autoComplete="current-password" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }} style={{ ...inputS, marginTop: 6 }} /></label>
+            <div style={{ textAlign: "right", marginBottom: 14 }}>
+              <button onClick={async () => { setErr(""); setNote(""); const mail = email.trim().toLowerCase(); if (!mail.includes("@")) { setErr("Enter your email first, then tap reset."); return; }
+                const { error } = await supabase.auth.resetPasswordForEmail(mail, { redirectTo: window.location.origin });
+                try { await supabase.from("auth_logs").insert({ email: mail, event: "forgot_requested", status: error ? "fail" : "ok" }); } catch (e) {}
+                if (error) setErr("Could not send the reset email. Please try again."); else setNote("If that email exists, a reset link has been sent. Check your inbox."); }}
+                style={{ background: "none", border: "none", color: T.gold, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>Forgot password?</button></div>
+            {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
+            {note && <div style={{ color: T.ok, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{note}</div>}
+            <button onClick={submitCreds} disabled={busy} style={primaryBtn}>{busy ? "Signing in…" : "Sign in"}</button>
+          </>}
+
+          {stage === "twofa" && <>
+            <div style={{ fontSize: 18, fontWeight: 700, color: T.ink }}>Enter your verification code</div>
+            <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, marginBottom: 18 }}>{note || ("We emailed a 4-digit code to " + email + ".")}</div>
+            <input value={code} onChange={(e) => setCode(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))} placeholder="• • • •" inputMode="numeric" autoComplete="one-time-code" onKeyDown={(e) => { if (e.key === "Enter") submitCode(); }}
+              style={{ ...inputS, textAlign: "center", fontSize: 26, letterSpacing: 14, fontWeight: 700 }} />
+            {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, margin: "10px 0" }}>{err}</div>}
+            <button onClick={submitCode} disabled={busy} style={{ ...primaryBtn, marginTop: 14 }}>{busy ? "Verifying…" : "Verify & continue"}</button>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12 }}>
+              <button onClick={() => { setStage("creds"); setErr(""); setCode(""); }} style={{ background: "none", border: "none", color: T.muted, fontSize: 11.5, cursor: "pointer", fontFamily: UI }}>← Back</button>
+              <button onClick={resend} disabled={resendIn > 0} style={{ background: "none", border: "none", color: resendIn > 0 ? T.faint : T.gold, fontSize: 11.5, fontWeight: 600, cursor: resendIn > 0 ? "default" : "pointer", fontFamily: UI }}>{resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}</button>
+            </div>
+          </>}
+
+          {stage === "setpw" && <>
+            <div style={{ fontSize: 18, fontWeight: 700, color: T.ink }}>Set your password</div>
+            <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, marginBottom: 18 }}>{note || "Please choose a new password to continue."}</div>
+            <input type="password" placeholder="New password (min 8 characters)" value={npw} onChange={(e) => setNpw(e.target.value)} style={{ ...inputS, marginBottom: 10 }} />
+            <input type="password" placeholder="Confirm new password" value={npw2} onChange={(e) => setNpw2(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitNewPw(); }} style={{ ...inputS, marginBottom: 10 }} />
+            {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
+            <button onClick={submitNewPw} disabled={busy} style={primaryBtn}>{busy ? "Saving…" : "Save & continue"}</button>
+          </>}
         </div>
 
         <div style={{ marginTop: 16, textAlign: "center" }}>
-          <div style={{ fontSize: 11.5, color: "rgba(255,255,255,.62)", lineHeight: 1.5 }}>
-            Your dashboard access is based on your assigned role.</div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,.4)", marginTop: 6 }}>
-            Accounts are created by your Master Admin. Trouble signing in? Contact your administrator.</div>
+          <div style={{ fontSize: 11.5, color: "rgba(255,255,255,.62)", lineHeight: 1.5 }}>Your dashboard access is based on your assigned role.</div>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,.4)", marginTop: 6 }}>Accounts are created by your Master Admin. Trouble signing in? Contact your administrator.</div>
         </div>
       </div>
     </div>
@@ -3926,32 +4028,62 @@ function ForcedPasswordChange({ onDone, signOut }) {
     if (pw !== pw2) { setMsg("Passwords don't match."); return; }
     setBusy(true); setMsg("");
     const { error } = await supabase.auth.updateUser({ password: pw });
-    setBusy(false);
-    if (error) { setMsg("Error: " + error.message); return; }
-    onDone();
+    if (error) { setBusy(false); setMsg("Could not update your password. Please try again."); return; }
+    try { const { data: { session } } = await supabase.auth.getSession();
+      await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + (session?.access_token || "") }, body: JSON.stringify({ action: "after_password_change" }) }); } catch (e) {}
+    setBusy(false); onDone();
   };
   const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "11px 13px", fontSize: 14,
     fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginBottom: 10 };
   return <div style={{ position: "fixed", inset: 0, zIndex: 110, background: T.bone, display: "grid", placeItems: "center", padding: 18, fontFamily: UI }}>
     <div style={{ width: "100%", maxWidth: 380, background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 18, boxShadow: T.shadowLg, padding: 26 }}>
       <div style={{ fontWeight: 800, fontSize: 18 }}>Set your password</div>
-      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, marginBottom: 18 }}>
-        For security, please choose your own password before continuing.</div>
-      <input type="password" placeholder="New password" value={pw} onChange={(e) => setPw(e.target.value)} style={inp} />
-      <input type="password" placeholder="Confirm password" value={pw2} onChange={(e) => setPw2(e.target.value)} style={inp} />
+      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, marginBottom: 18 }}>For security, please choose a new password before continuing.</div>
+      <input type="password" placeholder="New password (min 8 characters)" value={pw} onChange={(e) => setPw(e.target.value)} style={inp} />
+      <input type="password" placeholder="Confirm password" value={pw2} onChange={(e) => setPw2(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={inp} />
       {msg && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{msg}</div>}
       <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
-        borderRadius: 11, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>
-        {busy ? "Saving…" : "Save & continue"}</button>
-      <button onClick={signOut} style={{ width: "100%", marginTop: 8, background: "none", border: "none", color: T.muted,
-        fontSize: 12, cursor: "pointer", fontFamily: UI }}>Sign out instead</button>
+        borderRadius: 11, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "Saving…" : "Save & continue"}</button>
+      <button onClick={signOut} style={{ width: "100%", marginTop: 8, background: "none", border: "none", color: T.muted, fontSize: 12, cursor: "pointer", fontFamily: UI }}>Sign out instead</button>
     </div>
   </div>;
 }
 
-/* ========================= USERS & AGENTS (Master Admin) ================= */
-const ROLE_OPTIONS = [["agent","Agent"],["sales_manager","Sales Manager"],["admin","Admin"],["marketing","Marketing"],["accounts","Accounts"],["master_admin","Master Admin"]];
-const roleLabel = (r) => (ROLE_OPTIONS.find(([k]) => k === r) || [r, r])[1];
+function ResetPassword({ onDone }) {
+  const [pw, setPw] = useState(""); const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(""); const [done, setDone] = useState(false);
+  const save = async () => {
+    if (pw.length < 8) { setMsg("Use at least 8 characters."); return; }
+    if (pw !== pw2) { setMsg("Passwords don't match."); return; }
+    setBusy(true); setMsg("");
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    if (error) { setBusy(false); setMsg("Reset link expired or invalid. Please request a new password reset."); return; }
+    try { const { data: { session } } = await supabase.auth.getSession();
+      await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + (session?.access_token || "") }, body: JSON.stringify({ action: "after_password_change" }) });
+      await supabase.from("auth_logs").insert({ email: session?.user?.email || null, event: "reset_success", status: "ok" }); } catch (e) {}
+    await supabase.auth.signOut();
+    setBusy(false); setDone(true);
+  };
+  const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "11px 13px", fontSize: 14,
+    fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginBottom: 10 };
+  return <div style={{ position: "fixed", inset: 0, zIndex: 115, background: "linear-gradient(160deg,#0b1320,#111d2f)", display: "grid", placeItems: "center", padding: 18, fontFamily: UI }}>
+    <div style={{ width: "100%", maxWidth: 390, background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 18, boxShadow: T.shadowLg, padding: 28 }}>
+      {done ? <>
+        <div style={{ fontWeight: 800, fontSize: 18, color: T.ok }}>Password updated</div>
+        <div style={{ fontSize: 13, color: T.muted, marginTop: 6, marginBottom: 18 }}>Your password has been changed. You can now sign in with your new password.</div>
+        <button onClick={onDone} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 11, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Go to sign in</button>
+      </> : <>
+        <div style={{ fontWeight: 800, fontSize: 19 }}>Create a new password</div>
+        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, marginBottom: 18 }}>Choose a new password for your Amber Homes account.</div>
+        <input type="password" placeholder="New password (min 8 characters)" value={pw} onChange={(e) => setPw(e.target.value)} style={inp} />
+        <input type="password" placeholder="Confirm new password" value={pw2} onChange={(e) => setPw2(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={inp} />
+        {msg && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{msg}</div>}
+        <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 11, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "Saving…" : "Update password"}</button>
+        <button onClick={onDone} style={{ width: "100%", marginTop: 8, background: "none", border: "none", color: T.muted, fontSize: 12, cursor: "pointer", fontFamily: UI }}>Back to sign in</button>
+      </>}
+    </div>
+  </div>;
+}
 
 function UsersAdmin({ user }) {
   const [users, setUsers] = useState(null);
@@ -4126,6 +4258,9 @@ function ManageUserModal({ u, users, onClose, onChanged }) {
   const resetPw = async () => { if (pw.length < 8) { setMsg("Password must be 8+ characters."); return; }
     setBusy("pw"); setMsg(""); const r = await adminCall("reset_password", { id: u.id, password: pw, force: true });
     setBusy(""); setMsg(r.error || "Password reset. User must change it on next login."); };
+  const repairLogin = async () => { setBusy("rep"); setMsg("");
+    const r = await adminCall("repair_account", { id: u.id, password: pw || undefined, forceChange: true });
+    setBusy(""); setMsg(r.error || "Login repaired: email confirmed, account unlocked, one-time password change required next login."); if (!r.error) setTimeout(onChanged, 1000); };
   const reactivate = async () => { setBusy("act"); const r = await adminCall("set_active", { id: u.id, active: true });
     setBusy(""); setMsg(r.error || "Reactivated."); if (!r.error) setTimeout(onChanged, 800); };
   const doDeactivate = async () => { setBusy("act"); setMsg("");
@@ -4154,6 +4289,8 @@ function ManageUserModal({ u, users, onClose, onChanged }) {
       <input value={pw} onChange={(e) => setPw(e.target.value)} placeholder="New temp password" style={{ ...inp, marginTop: 0 }} />
       <button onClick={resetPw} disabled={busy === "pw"} style={{ ...miniBtn() }}>{busy === "pw" ? "…" : "Reset"}</button>
     </div>
+    <button onClick={repairLogin} disabled={busy === "rep"} style={{ width: "100%", marginTop: 8, background: T.hairSoft, color: T.ink, border: `1px solid ${T.hair}`, borderRadius: 10, padding: "9px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>{busy === "rep" ? "Repairing…" : "Repair login access (confirm email · unlock · force one-time change)"}</button>
+    <div style={{ fontSize: 11, color: T.faint, marginTop: 5 }}>Use this if a user is stuck on “incorrect password” or locked out. Type a temp password above to set one, or leave it blank to keep their current password.</div>
 
     <div style={{ height: 1, background: T.hairSoft, margin: "18px 0 14px" }} />
     {u.active ? (!deact ?
