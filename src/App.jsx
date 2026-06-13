@@ -677,6 +677,7 @@ function AdminDash({ go }) {
 function AgentDash({ go, user, openLead }) {
   const [rows, setRows] = useState(null);
   const [acts, setActs] = useState([]);
+  const [fups, setFups] = useState([]);
   const [err, setErr] = useState("");
   const [modal, setModal] = useState(null); // 'target' | 'focus' | 'plan'
   const [planText, setPlanText] = useState("");
@@ -694,6 +695,22 @@ function AgentDash({ go, user, openLead }) {
       if (lr.error) { setErr("Unable to load your dashboard. Please try again or contact admin."); setRows([]); return; }
       const mine = (lr.data || []).filter((l) => l.assigned_agent === uid || l.current_owner === uid || l.created_by === uid);
       setRows(mine); setActs(ar.data || []);
+      // follow-ups for me (RLS already scopes to leads I can see)
+      const { data: fu } = await supabase.from("follow_ups")
+        .select("id, lead_id, due_at, type, comment, priority, status, notified, lead:leads!follow_ups_lead_id_fkey(client_name, phone)")
+        .eq("status", "scheduled").order("due_at", { ascending: true });
+      const list = fu || [];
+      setFups(list);
+      // surface a notification once for each follow-up that has become due
+      const nowMs = Date.now();
+      const newlyDue = list.filter((f) => !f.notified && new Date(f.due_at).getTime() <= nowMs);
+      for (const f of newlyDue) {
+        try {
+          await supabase.from("notifications").insert({ user_id: uid, kind: "follow_up_due",
+            title: "Follow-up due now", body: (f.lead?.client_name || "A client") + " — " + f.type + " follow-up is due", link_screen: "agent" });
+          await supabase.from("follow_ups").update({ notified: true }).eq("id", f.id);
+        } catch (e) {}
+      }
     })();
   }, []);
 
@@ -707,6 +724,17 @@ function AgentDash({ go, user, openLead }) {
   const active = mine.filter((l) => l.status !== "Closed Won" && l.status !== "Closed Lost");
   const conv = mine.length ? Math.round(closedWon.length / mine.length * 100) : 0;
   const commission = closedWon.reduce((s, l) => s + (Number(l.commission_value) || 0), 0);
+
+  // ---- follow-up buckets (Asia/Dubai) ----
+  const nowMs = Date.now();
+  const fupDate = (iso) => { try { return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return ""; } };
+  const fmtFup = (iso) => { try { return new Date(iso).toLocaleString("en-GB", { timeZone: "Asia/Dubai", weekday: "short", hour: "2-digit", minute: "2-digit" }); } catch (e) { return iso; } };
+  const schedFups = (fups || []).filter((f) => f.status === "scheduled");
+  const fDueNow = schedFups.filter((f) => new Date(f.due_at).getTime() <= nowMs);
+  const fOverdue = schedFups.filter((f) => fupDate(f.due_at) < today);
+  const fToday = schedFups.filter((f) => fupDate(f.due_at) === today);
+  const fUpcoming = schedFups.filter((f) => fupDate(f.due_at) > today).slice(0, 8);
+  const digitsOf = (p) => String(p || "").replace(/\D/g, "");
 
   // real follow-up streak: consecutive days (ending today/yesterday) with >=1 logged action
   const days = new Set(acts.map((a) => { try { return new Date(a.created_at).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return ""; } }));
@@ -835,6 +863,39 @@ function AgentDash({ go, user, openLead }) {
         <Stat label="Conversion" value={conv + "%"} sub="won / total" onClick={() => setModal("target")} />
       </div>
 
+      {/* follow-up reminders (Asia/Dubai) */}
+      {schedFups.length > 0 && <div style={{ marginTop: 18 }}>
+        {fDueNow.length > 0 && <div onClick={() => fDueNow[0] && openLead && openLead(fDueNow[0].lead_id)} style={{ ...card, padding: "12px 15px", background: T.badSoft, borderColor: T.bad, marginBottom: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>
+          <Bell size={16} color={T.bad} />
+          <span style={{ fontSize: 13, fontWeight: 700, color: T.bad }}>{fDueNow.length} follow-up{fDueNow.length === 1 ? "" : "s"} due now</span>
+          <span style={{ fontSize: 12, color: T.bad, marginLeft: "auto" }}>Tap to open →</span>
+        </div>}
+        <SectionTitle>Follow-ups</SectionTitle>
+        {[["Overdue", fOverdue, "bad"], ["Due today", fToday, "gold"], ["Upcoming", fUpcoming, "muted"]].map(([title, list, tone]) => (
+          list.length > 0 ? <div key={title} style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: tone === "bad" ? T.bad : tone === "gold" ? T.gold : T.muted, marginBottom: 7 }}>{title} · {list.length}</div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {list.map((f) => (
+                <div key={f.id} style={{ ...card, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 160, cursor: "pointer" }} onClick={() => openLead && openLead(f.lead_id)}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>{f.lead?.client_name || "Client"}</div>
+                    <div style={{ fontSize: 12, color: tone === "bad" ? T.bad : T.muted, marginTop: 2, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <Clock size={11} /> {f.type} · {fmtFup(f.due_at)}
+                      {f.priority && f.priority !== "Normal" && <span style={{ fontWeight: 700, color: f.priority === "Urgent" ? T.bad : T.warn }}>· {f.priority}</span>}</div>
+                    {f.comment && <div style={{ fontSize: 12, color: T.inkSoft, marginTop: 3 }}>{f.comment}</div>}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button onClick={() => openLead && openLead(f.lead_id)} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11 }}>Open</button>
+                    {f.lead?.phone && <button title="WhatsApp" onClick={() => window.open("https://wa.me/" + digitsOf(f.lead.phone), "_blank")} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11, borderColor: T.ok, color: T.ok }}><MessageCircle size={12} /></button>}
+                    {f.lead?.phone && <button title="Call" onClick={() => { window.location.href = "tel:" + digitsOf(f.lead.phone); }} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11 }}><Phone size={12} /></button>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div> : null
+        ))}
+      </div>}
+
       {mine.length === 0 ? (
         <div style={{ ...card, padding: 44, marginTop: 18, textAlign: "center" }}>
           <UserCircle size={28} color={T.faint} style={{ marginBottom: 10 }} />
@@ -940,6 +1001,18 @@ function LeadDetail({ leadId, user, go }) {
   const [reOpen, setReOpen] = useState(false);
   const [reTo, setReTo] = useState("");
   const [reReason, setReReason] = useState("");
+  // follow-up scheduling + completion
+  const [schedTime, setSchedTime] = useState("");
+  const [schedType, setSchedType] = useState("Call");
+  const [schedComment, setSchedComment] = useState("");
+  const [schedPriority, setSchedPriority] = useState("Normal");
+  const [schedReminder, setSchedReminder] = useState("at_time");
+  const [schedErr, setSchedErr] = useState(""); const [schedBusy, setSchedBusy] = useState(false);
+  const [editFup, setEditFup] = useState(null);
+  const [fups, setFups] = useState([]);
+  const [doneFup, setDoneFup] = useState(null);
+  const [outcome, setOutcome] = useState(""); const [outcomeNote, setOutcomeNote] = useState("");
+  const [doneBusy, setDoneBusy] = useState(false); const [doneErr, setDoneErr] = useState("");
   const me = user;
   const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
   const canReassign = isAdmin;
@@ -953,13 +1026,15 @@ function LeadDetail({ leadId, user, go }) {
       ["property_type", "Property type", "select", ["Apartment", "Villa", "Townhouse", "Penthouse", "Plot", "Commercial", "Other"]],
       ["ready_offplan", "Ready / Off-plan", "select", ["Off-plan", "Ready", "Either"]],
       ["finance", "Finance", "select", ["Cash", "Mortgage", "Not decided"]], ["timeline", "Timeline", "text"]],
-    meta: [["status", "Status", "select", ["New", "Contacted", "Qualified", "Viewing scheduled", "Negotiation", "Offer made", "Closed Won", "Closed Lost", "On hold"]],
+    meta: [["status", "Status", "select", ["New", "Contacted", "Interested", "Not Interested", "Hot", "Very Hot", "Warm", "Cold", "No Answer", "Wrong Number", "Hung Up", "Call Back Later", "Follow-Up Scheduled", "Investment Options Sent", "Site Visit Scheduled", "Negotiation", "EOI Collected", "Booking Form Sent", "Closed Won Pending Approval", "Closed Lost", "Dead Lead"]],
       ["temperature", "Temperature", "select", ["Very Hot", "Hot", "Warm", "Cold"]],
       ["last_contacted", "Last contact", "date"], ["next_followup", "Next follow-up", "date"],
       ["source", "Source", "text"]],
   };
   const ALL_KEYS = [].concat(...Object.values(GROUPS)).map((d) => d[0]);
-  const AGENT_KEYS = ALL_KEYS.filter((k) => k !== "source");   // agents cannot change source (DB also blocks it)
+  // Agents may edit progress + profile + requirement — NOT identity/contact/source (also enforced by the DB guard trigger).
+  const AGENT_KEYS = ["nationality", "country_residence", "language", "budget", "purpose", "area", "project", "developer", "property_type", "ready_offplan", "finance", "timeline", "status", "temperature", "last_contacted", "next_followup"];
+  const LOCKED_FOR_AGENT = ["client_name", "phone", "whatsapp", "email", "source"];
   const LABELS = {}; [].concat(...Object.values(GROUPS)).forEach((d) => { LABELS[d[0]] = d[1]; });
   const isAssignedAgent = user && user.role === "agent" && lead && (lead.assigned_agent === user.id || lead.created_by === user.id);
   const canEditAll = isAdmin;
@@ -977,11 +1052,12 @@ function LeadDetail({ leadId, user, go }) {
       const { data: ag } = await supabase.from("profiles").select("id, full_name, role, active").eq("active", true).order("full_name");
       setAgents(ag || []);
     }
-    const [{ data: cs }, { data: ts }] = await Promise.all([
+    const [{ data: cs }, { data: ts }, { data: fs }] = await Promise.all([
       supabase.from("lead_comments").select("*, author:profiles!lead_comments_author_id_fkey(full_name, role)").eq("lead_id", leadId).eq("deleted", false).order("created_at", { ascending: false }),
       supabase.from("lead_activity").select("*, actor:profiles!lead_activity_actor_id_fkey(full_name, role)").eq("lead_id", leadId).order("created_at", { ascending: false }).limit(60),
+      supabase.from("follow_ups").select("*").eq("lead_id", leadId).order("due_at", { ascending: true }),
     ]);
-    setComments(cs || []); setTimeline(ts || []);
+    setComments(cs || []); setTimeline(ts || []); setFups(fs || []);
   };
   useEffect(() => { loadAll(); }, [leadId]);
 
@@ -1003,9 +1079,12 @@ function LeadDetail({ leadId, user, go }) {
 
   const leadIdFmt = lead.lead_no ? "L" + String(lead.lead_no).padStart(3, "0") : (lead.lead_code || "—");
   const digits = (p) => String(p || "").replace(/\D/g, "");
-  const reveal = () => { setRevealed(true); logAction("view_number", lead, me && me.id); };
+  const reveal = () => { setRevealed(true); logAction("view_number", lead, me && me.id); markContacted(); };
   const agentNameFor = (id) => { if (!id) return null; if (me && id === me.id) return me.name; const a = agents.find((x) => x.id === id); return a ? a.full_name : null; };
-  const agentDisplay = lead.assigned_agent ? (agentNameFor(lead.assigned_agent) || lead.assigned_agent_name || "Assigned agent") : (lead.assigned_agent_name || "Unassigned");
+  // Source of truth is the assigned_agent uuid. assigned_agent_name is only a synced fallback (migration 12 backfills it).
+  const agentDisplay = lead.is_open ? "Open Lead"
+    : lead.assigned_agent ? (agentNameFor(lead.assigned_agent) || lead.assigned_agent_name || "Assigned agent")
+    : "Unassigned";
   const statusText = lead.is_open ? "Open" : (lead.status || "New");
 
   const startEdit = () => { setForm({ ...lead }); setErr2(""); setEditing(true); };
@@ -1017,7 +1096,7 @@ function LeadDetail({ leadId, user, go }) {
       if (String(nv || "") !== String(ov || "")) changes[k] = nv === "" ? null : nv; });
     if (Object.keys(changes).length === 0) { setEditing(false); setSaving(false); return; }
     const { error } = await supabase.from("leads").update(changes).eq("id", lead.id);
-    if (error) { setErr2("Could not save: " + error.message); setSaving(false); return; }
+    if (error) { setErr2(/permission|protected/i.test(error.message || "") ? "You do not have permission to edit one of those fields." : "Could not save your changes. Please try again."); setSaving(false); return; }
     for (const k of Object.keys(changes)) {
       await supabase.from("lead_activity").insert({ lead_id: lead.id, actor_id: me.id, action: "field_change",
         detail: { field: k, label: LABELS[k] || k, from: lead[k] || null, to: changes[k] || null } });
@@ -1034,10 +1113,11 @@ function LeadDetail({ leadId, user, go }) {
     const makeOpen = reTo === "__open";
     const newId = (makeOpen || reTo === "__unassigned") ? null : reTo;
     const upd = { assigned_agent: newId, current_owner: newId, is_open: makeOpen,
+      assigned_agent_name: makeOpen ? null : (newId ? (agentNameFor(newId) || null) : null),
       original_agent: lead.original_agent || lead.assigned_agent || newId || null };
     const newName = makeOpen ? "Open Leads pool" : (newId ? (agentNameFor(newId) || "agent") : "Unassigned");
     const { error } = await supabase.from("leads").update(upd).eq("id", lead.id);
-    if (error) { setErr2("Reassign failed: " + error.message); return; }
+    if (error) { setErr2("Unable to reassign this lead. Please try again."); return; }
     await supabase.from("lead_ownership_history").insert({ lead_id: lead.id, from_agent: lead.assigned_agent || null, to_agent: newId, reason: reReason || null, changed_by: me.id });
     await supabase.from("lead_activity").insert({ lead_id: lead.id, actor_id: me.id, action: makeOpen ? "make_open" : "reassign", detail: { from: agentDisplay, to: newName, reason: reReason || null } });
     await supabase.from("admin_audit").insert({ action: "lead_reassigned", performed_by: me.id, affected_user: newId, old_value: { agent: agentDisplay }, new_value: { agent: newName }, detail: lead.client_name });
@@ -1059,18 +1139,91 @@ function LeadDetail({ leadId, user, go }) {
     await supabase.from("lead_comments").update({ deleted: true }).eq("id", c.id);
     setComments((cs) => cs.filter((x) => x.id !== c.id));
   };
+  const FUP_TYPES = ["Call", "WhatsApp", "Meeting", "Site Visit", "Zoom", "Email", "Other"];
+  const FUP_OUTCOMES = ["Contacted", "No Answer", "WhatsApp Sent", "Call Done", "Meeting Booked", "Not Interested", "Interested", "Needs Another Follow-Up", "Closed / Deal Submitted", "Other"];
+  const OUTCOME_STATUS = { "Not Interested": "Not Interested", Interested: "Interested", "Meeting Booked": "Site Visit Scheduled", "Closed / Deal Submitted": "Closed Won Pending Approval", "No Answer": "No Answer" };
+  const CONTACT_OUTCOMES = ["Contacted", "WhatsApp Sent", "Call Done", "Meeting Booked", "Interested"];
+
+  const markContacted = async () => {
+    if (!canEdit) return;
+    const nowIso = new Date().toISOString();
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+    try { await supabase.from("leads").update({ last_contacted: today, last_contacted_at: nowIso, last_contacted_by: me.id }).eq("id", lead.id);
+      setLead((l) => ({ ...l, last_contacted: today, last_contacted_at: nowIso, last_contacted_by: me.id })); } catch (e) {}
+  };
+
+  const openSchedule = (fup) => {
+    if (fup) { setEditFup(fup); const d = new Date(fup.due_at);
+      setSchedDate(d.toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }));
+      setSchedTime(d.toLocaleTimeString("en-GB", { timeZone: "Asia/Dubai", hour: "2-digit", minute: "2-digit" }));
+      setSchedType(fup.type || "Call"); setSchedComment(fup.comment || ""); setSchedPriority(fup.priority || "Normal"); setSchedReminder(fup.reminder || "at_time"); }
+    else { setEditFup(null); setSchedDate(""); setSchedTime(""); setSchedType("Call"); setSchedComment(""); setSchedPriority("Normal"); setSchedReminder("at_time"); }
+    setSchedErr(""); setSched(true);
+  };
+
   const saveSchedule = async () => {
-    if (!schedDate) return;
-    await supabase.from("leads").update({ next_followup: schedDate }).eq("id", lead.id);
-    setLead((l) => ({ ...l, next_followup: schedDate }));
-    logAction("schedule", lead, me && me.id, { next_followup: schedDate });
-    setSched(false); loadTimeline();
+    setSchedErr("");
+    if (!schedDate) { setSchedErr("Please choose a follow-up date."); return; }
+    if (!schedTime) { setSchedErr("Please choose a follow-up time."); return; }
+    if (!schedComment.trim()) { setSchedErr("Please add a short note for this follow-up."); return; }
+    const dueAt = new Date(schedDate + "T" + schedTime + ":00+04:00"); // interpret as Asia/Dubai
+    if (isNaN(dueAt.getTime())) { setSchedErr("That date/time doesn't look right."); return; }
+    if (!isAdmin && dueAt.getTime() < Date.now() - 60000) { setSchedErr("You can't schedule a follow-up in the past."); return; }
+    setSchedBusy(true);
+    const dueIso = dueAt.toISOString();
+    const agentId = lead.assigned_agent || lead.current_owner || me.id;
+    try {
+      if (editFup) {
+        const { error } = await supabase.from("follow_ups").update({ due_at: dueIso, type: schedType, comment: schedComment.trim(), priority: schedPriority, reminder: schedReminder, status: "scheduled", notified: false }).eq("id", editFup.id);
+        if (error) throw error;
+        await supabase.from("lead_activity").insert({ lead_id: lead.id, actor_id: me.id, action: "followup_rescheduled", detail: { due: dueIso, type: schedType } });
+      } else {
+        const { error } = await supabase.from("follow_ups").insert({ lead_id: lead.id, agent_id: agentId, created_by: me.id, due_at: dueIso, type: schedType, comment: schedComment.trim(), priority: schedPriority, reminder: schedReminder });
+        if (error) throw error;
+        await supabase.from("lead_activity").insert({ lead_id: lead.id, actor_id: me.id, action: "followup_scheduled", detail: { due: dueIso, type: schedType, priority: schedPriority } });
+      }
+      const upd = { next_followup_at: dueIso, next_followup: schedDate };
+      if (!["Closed Won Pending Approval", "Closed Lost", "Dead Lead"].includes(lead.status)) upd.status = "Follow-Up Scheduled";
+      await supabase.from("leads").update(upd).eq("id", lead.id);
+      setLead((l) => ({ ...l, ...upd }));
+      if (agentId && agentId !== me.id) await supabase.from("notifications").insert({ user_id: agentId, kind: "follow_up", title: "Follow-up scheduled", body: lead.client_name + " — " + schedType + " on " + schedDate, link_screen: "agent" });
+      if (canEditAll) await supabase.from("admin_audit").insert({ action: editFup ? "followup_rescheduled" : "followup_scheduled", performed_by: me.id, new_value: { due: dueIso, type: schedType }, detail: lead.client_name });
+      setSched(false); setSchedBusy(false); setEditFup(null);
+      const { data: fs } = await supabase.from("follow_ups").select("*").eq("lead_id", lead.id).order("due_at", { ascending: true });
+      setFups(fs || []); loadTimeline();
+    } catch (e) {
+      setSchedBusy(false);
+      setSchedErr(/permission|protected/i.test(e.message || "") ? "You do not have permission to do this." : "Unable to schedule follow-up. Please try again.");
+    }
+  };
+
+  const submitDone = async () => {
+    setDoneErr("");
+    if (!outcome) { setDoneErr("Please choose an outcome."); return; }
+    if (!outcomeNote.trim()) { setDoneErr("Please add an outcome note."); return; }
+    setDoneBusy(true);
+    const nowIso = new Date().toISOString();
+    try {
+      const { error } = await supabase.from("follow_ups").update({ status: "completed", outcome, outcome_comment: outcomeNote.trim(), completed_at: nowIso, completed_by: me.id }).eq("id", doneFup.id);
+      if (error) throw error;
+      await supabase.from("lead_activity").insert({ lead_id: lead.id, actor_id: me.id, action: "followup_completed", detail: { outcome, note: outcomeNote.trim().slice(0, 80) } });
+      const leadUpd = {};
+      if (CONTACT_OUTCOMES.includes(outcome)) { const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); leadUpd.last_contacted = today; leadUpd.last_contacted_at = nowIso; leadUpd.last_contacted_by = me.id; }
+      if (OUTCOME_STATUS[outcome] && !["Closed Won Pending Approval", "Closed Lost", "Dead Lead"].includes(lead.status)) leadUpd.status = OUTCOME_STATUS[outcome];
+      if (Object.keys(leadUpd).length) { await supabase.from("leads").update(leadUpd).eq("id", lead.id); setLead((l) => ({ ...l, ...leadUpd })); }
+      if (canEditAll) await supabase.from("admin_audit").insert({ action: "followup_completed", performed_by: me.id, new_value: { outcome }, detail: lead.client_name });
+      setDoneFup(null); setOutcome(""); setOutcomeNote(""); setDoneBusy(false);
+      const { data: fs } = await supabase.from("follow_ups").select("*").eq("lead_id", lead.id).order("due_at", { ascending: true });
+      setFups(fs || []); loadTimeline();
+    } catch (e) { setDoneBusy(false); setDoneErr("Unable to save. Please try again."); }
   };
 
   const ACT_LABEL = { view_number: "Viewed number", reveal_phone: "Viewed number", call: "Called", whatsapp: "WhatsApp", schedule: "Scheduled follow-up",
     comment: "Commented", lead_created: "Lead created", lead_created_ai: "Lead created (AI)", status_change: "Status changed", assign: "Assigned",
-    reassign: "Reassigned", make_open: "Moved to Open Leads", field_change: "Updated", lead_edited: "Edited details", make_open_bulk: "Moved to open", view: "Viewed" };
+    reassign: "Reassigned", make_open: "Moved to Open Leads", field_change: "Updated", lead_edited: "Edited details", make_open_bulk: "Moved to open", view: "Viewed",
+    followup_scheduled: "Scheduled follow-up", followup_rescheduled: "Rescheduled follow-up", followup_completed: "Completed follow-up" };
   const when = (t) => { const d = (Date.now() - new Date(t)) / 6e4; if (d < 1) return "just now"; if (d < 60) return Math.round(d) + "m ago"; if (d < 1440) return Math.round(d / 60) + "h ago"; return new Date(t).toLocaleDateString(); };
+  const fmtDue = (iso) => { try { return new Date(iso).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (e) { return iso; } };
   const actText = (t) => {
     if (t.action === "field_change" && t.detail) return "Updated " + (t.detail.label || t.detail.field) + (t.detail.to ? ' → "' + String(t.detail.to).slice(0, 40) + '"' : " (cleared)");
     if (t.action === "reassign" && t.detail) return "Reassigned: " + (t.detail.from || "—") + " → " + (t.detail.to || "—") + (t.detail.reason ? ' · "' + t.detail.reason + '"' : "");
@@ -1088,7 +1241,7 @@ function LeadDetail({ leadId, user, go }) {
     const canThis = editing && editableKeys.includes(key);
     const val = lead[key];
     return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13, gap: 12 }}>
-      <span style={{ color: T.muted, flexShrink: 0 }}>{label}</span>
+      <span style={{ color: T.muted, flexShrink: 0, display: "flex", alignItems: "center", gap: 5 }}>{label}{user && user.role === "agent" && LOCKED_FOR_AGENT.includes(key) && <Lock size={11} color={T.faint} />}</span>
       {canThis ? (
         type === "select" ? <select value={form[key] || ""} onChange={(e) => setF(key, e.target.value)} style={{ ...inp, maxWidth: 200 }}>
           <option value="">—</option>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>
@@ -1128,9 +1281,9 @@ function LeadDetail({ leadId, user, go }) {
     {/* action buttons */}
     <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
       {!revealed && <Btn icon={Eye} label="View Number" onClick={reveal} />}
-      {revealed && lead.phone && <Btn icon={Phone} label="Call" onClick={() => { logAction("call", lead, me && me.id); window.location.href = "tel:" + digits(lead.phone); }} />}
-      {lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="ok" onClick={() => { logAction("whatsapp", lead, me && me.id); window.open("https://wa.me/" + digits(lead.phone), "_blank"); }} />}
-      <Btn icon={Calendar} label="Schedule" onClick={() => { setSchedDate(lead.next_followup || ""); setSched(true); }} />
+      {revealed && lead.phone && <Btn icon={Phone} label="Call" onClick={() => { logAction("call", lead, me && me.id); markContacted(); window.location.href = "tel:" + digits(lead.phone); }} />}
+      {lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="ok" onClick={() => { logAction("whatsapp", lead, me && me.id); markContacted(); window.open("https://wa.me/" + digits(lead.phone), "_blank"); }} />}
+      <Btn icon={Calendar} label="Schedule Follow-Up" onClick={() => openSchedule(null)} />
       {canReassign && <Btn icon={UserPlus} label="Change Agent" tone="gold" onClick={() => { setReTo(lead.assigned_agent || ""); setReReason(""); setErr2(""); setReOpen(true); }} />}
       {canEdit && <Btn icon={editing ? X : Pencil} label={editing ? "Cancel" : "Edit details"} tone="gold" onClick={() => editing ? setEditing(false) : startEdit()} />}
       {canEdit && lead.status !== "Closed Won" && <Btn icon={Coins} label="Close deal" tone="ok" onClick={() => setShowDeal(true)} />}
@@ -1168,6 +1321,32 @@ function LeadDetail({ leadId, user, go }) {
         <SectionMini>Investment requirement</SectionMini>
         {GROUPS.invest.map((d) => <FieldRow key={d[0]} def={d} />)}
       </div>
+    </div>
+
+    {/* follow-ups */}
+    <SectionTitle right={<GoldBtn ghost onClick={() => openSchedule(null)}><Calendar size={13} /> New follow-up</GoldBtn>}>Follow-ups</SectionTitle>
+    <div style={{ ...card, padding: 16 }}>
+      {fups.length === 0 ? <div style={{ color: T.muted, fontSize: 12.5 }}>No follow-ups scheduled yet. Use “Schedule Follow-Up” to add one.</div> :
+        fups.map((f) => {
+          const overdue = f.status === "scheduled" && new Date(f.due_at).getTime() < Date.now();
+          return <div key={f.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "11px 0", borderBottom: `1px solid ${T.hairSoft}` }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <Clock size={13} color={overdue ? T.bad : f.status === "completed" ? T.ok : T.gold} />
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{f.type}</span>
+                <span style={{ fontSize: 12, color: overdue ? T.bad : T.muted, fontWeight: 600 }}>{fmtDue(f.due_at)}</span>
+                {f.priority && f.priority !== "Normal" && <span style={{ fontSize: 10, fontWeight: 700, color: f.priority === "Urgent" ? T.bad : T.warn, background: f.priority === "Urgent" ? T.badSoft : T.warnSoft, borderRadius: 6, padding: "1px 7px" }}>{f.priority}</span>}
+                <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "1px 7px", color: f.status === "completed" ? T.ok : overdue ? T.bad : T.muted, background: f.status === "completed" ? T.okSoft : overdue ? T.badSoft : T.hairSoft }}>{f.status === "completed" ? "Done" : overdue ? "Overdue" : "Scheduled"}</span>
+              </div>
+              {f.comment && <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 4 }}>{f.comment}</div>}
+              {f.status === "completed" && f.outcome && <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>Outcome: <b style={{ color: T.ink }}>{f.outcome}</b>{f.outcome_comment ? ' — "' + f.outcome_comment + '"' : ""}</div>}
+            </div>
+            {f.status === "scheduled" && canEdit && <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+              <button onClick={() => { setDoneFup(f); setOutcome(""); setOutcomeNote(""); setDoneErr(""); }} style={{ ...miniBtn(), padding: "5px 9px", fontSize: 11 }}><Check size={12} /> Done</button>
+              <button onClick={() => openSchedule(f)} style={{ ...miniBtn(), padding: "5px 9px", fontSize: 11 }}><RefreshCw size={12} /> Reschedule</button>
+            </div>}
+          </div>;
+        })}
     </div>
 
     {/* comments */}
@@ -1216,12 +1395,36 @@ function LeadDetail({ leadId, user, go }) {
       ))}
     </div>
 
-    {sched && <Modal title="Schedule follow-up" onClose={() => setSched(false)}>
-      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Next follow-up date</span>
-      <input type="date" value={schedDate} onChange={(e) => setSchedDate(e.target.value)}
-        style={{ width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginTop: 5, marginBottom: 12 }} />
-      <button onClick={saveSchedule} disabled={!schedDate} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
-        borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: schedDate ? 1 : .5 }}>Save follow-up</button>
+    {sched && <Modal title={editFup ? "Reschedule follow-up" : "Schedule follow-up"} onClose={() => { setSched(false); setEditFup(null); }}>
+      {(() => { const lbl = { fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted, display: "block", marginTop: 12, marginBottom: 5 };
+        const fld = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box" };
+        return <>
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1 }}><span style={{ ...lbl, marginTop: 0 }}>Date *</span><input type="date" value={schedDate} onChange={(e) => setSchedDate(e.target.value)} style={fld} /></div>
+            <div style={{ flex: 1 }}><span style={{ ...lbl, marginTop: 0 }}>Time *</span><input type="time" value={schedTime} onChange={(e) => setSchedTime(e.target.value)} style={fld} /></div>
+          </div>
+          <span style={lbl}>Type *</span>
+          <select value={schedType} onChange={(e) => setSchedType(e.target.value)} style={{ ...fld, background: T.paper }}>{FUP_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+          <span style={lbl}>Note *</span>
+          <textarea value={schedComment} onChange={(e) => setSchedComment(e.target.value)} rows={2} placeholder="e.g. Discuss 2BR options in Dubai Hills, send brochure" style={{ ...fld, resize: "vertical" }} />
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1 }}><span style={lbl}>Priority</span><select value={schedPriority} onChange={(e) => setSchedPriority(e.target.value)} style={{ ...fld, background: T.paper }}>{["Normal", "High", "Urgent"].map((p) => <option key={p} value={p}>{p}</option>)}</select></div>
+            <div style={{ flex: 1 }}><span style={lbl}>Reminder</span><select value={schedReminder} onChange={(e) => setSchedReminder(e.target.value)} style={{ ...fld, background: T.paper }}>
+              <option value="at_time">At time of follow-up</option><option value="15m">15 minutes before</option><option value="30m">30 minutes before</option><option value="1h">1 hour before</option><option value="1d">1 day before</option></select></div>
+          </div>
+          {schedErr && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginTop: 12 }}>{schedErr}</div>}
+          <button onClick={saveSchedule} disabled={schedBusy} style={{ width: "100%", marginTop: 16, background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: schedBusy ? .6 : 1 }}>{schedBusy ? "Saving…" : editFup ? "Update follow-up" : "Save follow-up"}</button>
+        </>; })()}
+    </Modal>}
+
+    {doneFup && <Modal title="Complete follow-up" onClose={() => { setDoneFup(null); setOutcome(""); setOutcomeNote(""); }}>
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted, display: "block", marginBottom: 5 }}>Outcome *</span>
+      <select value={outcome} onChange={(e) => setOutcome(e.target.value)} style={{ width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: UI, color: T.ink, background: T.paper, boxSizing: "border-box" }}>
+        <option value="">— Select outcome —</option>{FUP_OUTCOMES.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted, display: "block", marginTop: 12, marginBottom: 5 }}>Outcome note *</span>
+      <textarea value={outcomeNote} onChange={(e) => setOutcomeNote(e.target.value)} rows={3} placeholder="What happened on this follow-up?" style={{ width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", resize: "vertical" }} />
+      {doneErr && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginTop: 10 }}>{doneErr}</div>}
+      <button onClick={submitDone} disabled={doneBusy} style={{ width: "100%", marginTop: 14, background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: doneBusy ? .6 : 1 }}>{doneBusy ? "Saving…" : "Mark as done"}</button>
     </Modal>}
 
     {reOpen && <Modal title="Change assigned agent" onClose={() => setReOpen(false)}>
