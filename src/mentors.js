@@ -84,3 +84,69 @@ export async function logAi({ user, mentor, question, responseSum, model, status
     }
   } catch (e) {}
 }
+
+/* ============================ AI KNOWLEDGE BASE ============================ */
+// Mentor id -> the visibility values that mentor is allowed to read.
+const MENTOR_VIS = {
+  ambreen_ai: ["all", "agent_ok", "ambreen_ai"],
+  saad_ai:    ["all", "agent_ok", "saad_ai"],
+  ibrahim_ai: ["all", "agent_ok", "ibrahim_ai"],
+};
+
+// Load active knowledge items this user is permitted to read (RLS also enforces this
+// server-side). Called once per Ask Amber session and cached by the caller.
+export async function fetchKnowledge(user) {
+  try {
+    const isAdmin = user && (user.role === "master_admin" || user.role === "admin" || user.role === "sales_manager");
+    let q = supabase.from("ai_knowledge")
+      .select("id,title,category,content,visibility,priority,status,deleted")
+      .eq("status", "active").eq("deleted", false)
+      .order("priority", { ascending: true });
+    const { data, error } = await q;
+    if (error || !Array.isArray(data)) return [];
+    // Admin-only items are usable only by admin-level mentors/users.
+    return data.filter((k) => k.visibility !== "admin_only" || isAdmin);
+  } catch (e) { return []; }
+}
+
+const STOP = new Set("the a an and or of to for in on with your you our we is are be as at by it this that how do does what when which who whom about into from".split(" "));
+function tokens(s) {
+  return (s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w));
+}
+
+// Pick the most relevant knowledge items for a question using keyword/category
+// overlap (MVP retrieval — no embeddings yet). Compliance items are ALWAYS included
+// so the AI never loses the "Do Not Say" guardrails. Returns { text, used:[{id,title}] }.
+export function pickKnowledge(question, items, mentorId, max = 6) {
+  if (!Array.isArray(items) || !items.length) return { text: "", used: [] };
+  const vis = MENTOR_VIS[mentorId] || ["all", "agent_ok"];
+  const pool = items.filter((k) => vis.includes(k.visibility));
+  const qTok = new Set(tokens(question));
+  const scored = pool.map((k) => {
+    const hay = tokens(k.title + " " + k.category + " " + k.content);
+    let score = 0;
+    for (const w of hay) if (qTok.has(w)) score += 1;
+    // Title hits weigh more; high priority gets a small boost.
+    for (const w of tokens(k.title)) if (qTok.has(w)) score += 2;
+    score += (4 - (k.priority || 2)) * 0.5;
+    const compliance = /do not say|compliance/i.test(k.category);
+    return { k, score, compliance };
+  });
+  // Always-include compliance items, then top-scoring others.
+  const compliance = scored.filter((s) => s.compliance).map((s) => s.k);
+  const others = scored.filter((s) => s.compliance === false && s.score > 0)
+    .sort((a, b) => b.score - a.score).slice(0, max).map((s) => s.k);
+  // If nothing matched, fall back to the highest-priority general items so company
+  // questions ("introduce Amber Homes") still get the core profile.
+  let chosen = [...compliance, ...others];
+  if (others.length === 0) {
+    const core = pool.filter((k) => !/do not say|compliance/i.test(k.category))
+      .sort((a, b) => (a.priority || 2) - (b.priority || 2)).slice(0, 3);
+    chosen = [...compliance, ...core];
+  }
+  // De-dupe, cap total.
+  const seen = new Set(); const final = [];
+  for (const k of chosen) { if (!seen.has(k.id)) { seen.add(k.id); final.push(k); } if (final.length >= max + 2) break; }
+  const text = final.map((k) => `[${k.category}] ${k.title}\n${k.content}`).join("\n\n");
+  return { text, used: final.map((k) => ({ id: k.id, title: k.title })) };
+}

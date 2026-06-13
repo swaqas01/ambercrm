@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall } from "./supabase.js";
-import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, logAi } from "./mentors.js";
+import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, logAi, fetchKnowledge, pickKnowledge } from "./mentors.js";
 import {
+  BookOpen, Pencil, Trash2, Save, Check,
   LayoutDashboard, UserCircle, FileText, UserPlus, Kanban, BarChart3,
   ShieldAlert, Building2, Gauge, Briefcase, Coins, Settings, Menu, X,
   Phone, MessageCircle, Mail, Search, Bell, ChevronRight, ChevronDown,
@@ -208,6 +209,7 @@ const NAV = [
   ["score", "Investment Score", Gauge],
   ["careers", "Careers / Hiring", Briefcase],
   ["commission", "Commissions", Coins],
+  ["kb", "AI Knowledge Base", BookOpen],
   ["settings", "Settings & Permissions", Settings],
 ];
 
@@ -270,7 +272,7 @@ export default function App() {
     }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} />, lead: <LeadDetail leadId={detailId} user={user} go={go} />, open: <OpenLeads />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} />, lead: <LeadDetail leadId={detailId} user={user} go={go} />, open: <OpenLeads />, kb: <KnowledgeBase user={user} />,
     assign: <Assignment />, pipeline: <Pipeline go={go} />, performance: <Performance />,
     security: <SecurityLog />, matching: <Matching go={go} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -1563,6 +1565,209 @@ function OpenLeads() {
   </div>;
 }
 
+/* ===================== AI KNOWLEDGE BASE (MASTER ADMIN) =================== */
+const KB_CATEGORIES = ["Company Overview","Awards and Recognition","Developer Relationships","Services","Sales Scripts","WhatsApp Templates","Area Knowledge","Project Knowledge","Developer Knowledge","Investment Guidance","Golden Visa Guidance","Internal Policies","CRM Usage","Objection Handling","Compliance / Do Not Say","Market Updates","FAQs","Agent Training"];
+const KB_VIS = [["all","All mentors"],["agent_ok","Agent AI allowed"],["ambreen_ai","Ambreen AI only"],["saad_ai","Saad AI only"],["ibrahim_ai","Ibrahim AI only"],["admin_only","Master/Admin AI only"]];
+const visLabel = (v) => (KB_VIS.find((x) => x[0] === v) || ["", v])[1];
+const kbInp = { width: "100%", padding: "9px 11px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontSize: 13, fontFamily: UI, boxSizing: "border-box" };
+
+function KbEditor({ item, onSave, onCancel, saving, err }) {
+  const seed = item === "new"
+    ? { title: "", category: "Company Overview", content: "", visibility: "all", priority: 2, status: "active", source: "", tags: "", review_date: "" }
+    : { title: item.title || "", category: item.category || "Company Overview", content: item.content || "", visibility: item.visibility || "all", priority: item.priority || 2, status: item.status || "active", source: item.source || "", tags: item.tags || "", review_date: item.review_date || "" };
+  const [f, setF] = useState(seed);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const lbl = { fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 5, display: "block" };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,15,25,.55)", zIndex: 80, display: "grid", placeItems: "center", padding: 16 }} onClick={onCancel}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: "min(640px, 96vw)", maxHeight: "92vh", overflowY: "auto", padding: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 800, color: T.ink }}>{item === "new" ? "Add knowledge item" : "Edit knowledge item"}</div>
+          <button onClick={onCancel} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", padding: 4 }}><X size={18} /></button>
+        </div>
+        <div style={{ marginBottom: 12 }}><label style={lbl}>Title</label>
+          <input value={f.title} onChange={(e) => set("title", e.target.value)} style={kbInp} placeholder="e.g. Palm Jebel Ali Payment Plan 2026" /></div>
+        <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 200px" }}><label style={lbl}>Category</label>
+            <select value={f.category} onChange={(e) => set("category", e.target.value)} style={kbInp}>{KB_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
+          <div style={{ flex: "1 1 200px" }}><label style={lbl}>Visibility</label>
+            <select value={f.visibility} onChange={(e) => set("visibility", e.target.value)} style={kbInp}>{KB_VIS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+        </div>
+        <div style={{ marginBottom: 12 }}><label style={lbl}>Content (what the AI should know / say)</label>
+          <textarea value={f.content} onChange={(e) => set("content", e.target.value)} rows={6} style={{ ...kbInp, resize: "vertical", lineHeight: 1.5 }} placeholder="Write verified, careful wording. Avoid unverified awards, rankings, ROI guarantees." /></div>
+        <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 140px" }}><label style={lbl}>Priority</label>
+            <select value={f.priority} onChange={(e) => set("priority", e.target.value)} style={kbInp}><option value={1}>High</option><option value={2}>Normal</option><option value={3}>Low</option></select></div>
+          <div style={{ flex: "1 1 140px" }}><label style={lbl}>Status</label>
+            <select value={f.status} onChange={(e) => set("status", e.target.value)} style={kbInp}><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+          <div style={{ flex: "1 1 160px" }}><label style={lbl}>Review date (optional)</label>
+            <input type="date" value={f.review_date || ""} onChange={(e) => set("review_date", e.target.value)} style={kbInp} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 200px" }}><label style={lbl}>Source / reference (optional)</label>
+            <input value={f.source} onChange={(e) => set("source", e.target.value)} style={kbInp} placeholder="e.g. Developer email, Q1 market report" /></div>
+          <div style={{ flex: "1 1 200px" }}><label style={lbl}>Tags (comma separated, optional)</label>
+            <input value={f.tags} onChange={(e) => set("tags", e.target.value)} style={kbInp} placeholder="palm jebel ali, nakheel, payment plan" /></div>
+        </div>
+        {err && <div style={{ background: T.badSoft, color: T.bad, padding: "9px 12px", borderRadius: 9, fontSize: 12.5, marginBottom: 12 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={onCancel} style={{ padding: "10px 16px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, cursor: "pointer", fontWeight: 600, fontFamily: UI }}>Cancel</button>
+          <button onClick={() => onSave(f)} disabled={saving} style={{ padding: "10px 18px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, cursor: saving ? "default" : "pointer", fontWeight: 700, fontFamily: UI, opacity: saving ? .7 : 1, display: "flex", alignItems: "center", gap: 7 }}><Save size={15} /> {saving ? "Saving…" : "Save item"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeBase({ user }) {
+  const [items, setItems] = useState(null);
+  const [q, setQ] = useState("");
+  const [catF, setCatF] = useState("");
+  const [visF, setVisF] = useState("");
+  const [showInactive, setShowInactive] = useState(false);
+  const [editing, setEditing] = useState(null);   // item object | "new" | null
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const load = async () => {
+    setItems(null);
+    const { data, error } = await supabase.from("ai_knowledge").select("*")
+      .eq("deleted", false).order("priority", { ascending: true }).order("updated_at", { ascending: false });
+    setItems(error ? [] : (data || []));
+  };
+  useEffect(() => { load(); }, []);
+
+  const audit = async (action, item, oldVal) => {
+    try {
+      await supabase.from("admin_audit").insert({ action, performed_by: user.id,
+        old_value: oldVal || null,
+        new_value: item ? { title: item.title, category: item.category, status: item.status, visibility: item.visibility } : null,
+        detail: (item && item.title) || "" });
+    } catch (e) {}
+  };
+
+  const save = async (form) => {
+    setSaving(true); setErr("");
+    if (!form.title.trim() || !form.content.trim()) { setErr("Title and content are required."); setSaving(false); return; }
+    try {
+      const row = { title: form.title.trim(), category: form.category, content: form.content.trim(),
+        visibility: form.visibility, priority: Number(form.priority) || 2, status: form.status,
+        source: form.source || null, tags: form.tags || null, review_date: form.review_date || null,
+        updated_by: user.id, updated_at: new Date().toISOString() };
+      if (editing === "new") {
+        row.added_by = user.id;
+        const { error } = await supabase.from("ai_knowledge").insert(row);
+        if (error) throw error;
+        await audit("kb_created", row);
+      } else {
+        const { error } = await supabase.from("ai_knowledge").update(row).eq("id", editing.id);
+        if (error) throw error;
+        await audit("kb_edited", row, { title: editing.title, category: editing.category, status: editing.status, visibility: editing.visibility });
+      }
+      setEditing(null); await load();
+    } catch (e) { setErr("Save failed. The Knowledge Base is editable by Master Admin only."); }
+    finally { setSaving(false); }
+  };
+
+  const toggleStatus = async (it) => {
+    const ns = it.status === "active" ? "inactive" : "active";
+    await supabase.from("ai_knowledge").update({ status: ns, updated_by: user.id, updated_at: new Date().toISOString() }).eq("id", it.id);
+    await audit(ns === "active" ? "kb_activated" : "kb_deactivated", it);
+    load();
+  };
+  const softDelete = async (it) => {
+    if (!window.confirm(`Soft-delete "${it.title}"?\n\nIt will be hidden from Ask Amber and from this list, but the data is retained for audit.`)) return;
+    await supabase.from("ai_knowledge").update({ deleted: true, status: "inactive", updated_by: user.id, updated_at: new Date().toISOString() }).eq("id", it.id);
+    await audit("kb_deleted", it);
+    load();
+  };
+
+  const today = dubaiToday();
+  const all = items || [];
+  const activeCount = all.filter((i) => i.status === "active").length;
+  const dueCount = all.filter((i) => i.review_date && i.review_date <= today && i.status === "active").length;
+  const filtered = all.filter((it) =>
+    (showInactive || it.status === "active") &&
+    (!catF || it.category === catF) &&
+    (!visF || it.visibility === visF) &&
+    (!q || (it.title + " " + it.content + " " + (it.tags || "")).toLowerCase().includes(q.toLowerCase())));
+
+  const catColor = (c) => /do not say|compliance/i.test(c) ? T.bad : /award|recognition|developer relation/i.test(c) ? T.gold : T.info;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
+        <div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 10 }}><BookOpen size={22} color={T.gold} /> AI Knowledge Base</div>
+          <div style={{ color: T.muted, fontSize: 13, marginTop: 4 }}>Verified Amber Homes knowledge that powers Ask Amber. Master Admin only — agents cannot see or edit this.</div>
+        </div>
+        <button onClick={() => { setErr(""); setEditing("new"); }} style={{ padding: "11px 18px", borderRadius: 10, border: "none", background: T.btnBg, color: T.btnFg, cursor: "pointer", fontWeight: 700, fontFamily: UI, display: "flex", alignItems: "center", gap: 8, boxShadow: T.shadow }}><Plus size={16} /> Add knowledge</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+        {[["Total items", all.length, T.ink], ["Active", activeCount, T.ok], ["Due for review", dueCount, dueCount ? T.warn : T.muted]].map(([l, v, c]) => (
+          <div key={l} style={{ ...card, padding: "12px 16px", minWidth: 120 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: c, fontFamily: DISPLAY }}>{v}</div>
+            <div style={{ fontSize: 11.5, color: T.muted, fontWeight: 600 }}>{l}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ ...card, padding: 14, marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 220px" }}>
+          <Search size={15} color={T.faint} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)" }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search title, content, tags…" style={{ ...kbInp, paddingLeft: 33 }} />
+        </div>
+        <select value={catF} onChange={(e) => setCatF(e.target.value)} style={{ ...kbInp, width: "auto", flex: "0 1 200px" }}><option value="">All categories</option>{KB_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        <select value={visF} onChange={(e) => setVisF(e.target.value)} style={{ ...kbInp, width: "auto", flex: "0 1 180px" }}><option value="">All visibility</option>{KB_VIS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+        <button onClick={() => setShowInactive((s) => !s)} style={{ padding: "9px 13px", borderRadius: 9, border: `1px solid ${showInactive ? T.gold : T.hair}`, background: showInactive ? T.goldSoft : T.paper, color: showInactive ? T.gold : T.muted, cursor: "pointer", fontSize: 12.5, fontWeight: 600, fontFamily: UI, display: "flex", alignItems: "center", gap: 6 }}>{showInactive ? <Eye size={14} /> : <EyeOff size={14} />} Inactive</button>
+      </div>
+
+      {items === null ? (
+        <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading knowledge…</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>No knowledge items match. {all.length === 0 && "Run migration 07 in Supabase to seed the starter items, or add one above."}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {filtered.map((it) => {
+            const due = it.review_date && it.review_date <= today;
+            const inactive = it.status !== "active";
+            return (
+              <div key={it.id} style={{ ...card, padding: 16, opacity: inactive ? .62 : 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                      {it.priority === 1 && <Star size={14} color={T.gold} fill={T.gold} />}
+                      <span style={{ fontWeight: 700, fontSize: 14.5, color: T.ink }}>{it.title}</span>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: catColor(it.category) + "1A", color: catColor(it.category) }}>{it.category}</span>
+                      {inactive && <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: T.hairSoft, color: T.muted }}>Inactive</span>}
+                      {due && !inactive && <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: T.warnSoft, color: T.warn, display: "flex", alignItems: "center", gap: 3 }}><Clock size={11} /> Review due</span>}
+                    </div>
+                    <div style={{ fontSize: 13, color: T.inkSoft, lineHeight: 1.5, marginBottom: 8 }}>{it.content}</div>
+                    <div style={{ fontSize: 11, color: T.faint, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                      <span><Eye size={11} style={{ verticalAlign: "-1px" }} /> {visLabel(it.visibility)}</span>
+                      {it.tags && <span># {it.tags}</span>}
+                      {it.source && <span>Source: {it.source}</span>}
+                      <span>Updated {(it.updated_at || "").slice(0, 10)}</span>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    <button onClick={() => { setErr(""); setEditing(it); }} title="Edit" style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${T.hair}`, background: T.paper, color: T.inkSoft, cursor: "pointer", display: "grid", placeItems: "center" }}><Pencil size={15} /></button>
+                    <button onClick={() => toggleStatus(it)} title={inactive ? "Activate" : "Deactivate"} style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${T.hair}`, background: T.paper, color: inactive ? T.ok : T.warn, cursor: "pointer", display: "grid", placeItems: "center" }}>{inactive ? <Check size={15} /> : <EyeOff size={15} />}</button>
+                    <button onClick={() => softDelete(it)} title="Soft-delete" style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${T.hair}`, background: T.paper, color: T.bad, cursor: "pointer", display: "grid", placeItems: "center" }}><Trash2 size={15} /></button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {editing && <KbEditor item={editing} onSave={save} onCancel={() => setEditing(null)} saving={saving} err={err} />}
+    </div>
+  );
+}
+
 /* ========================= AI CHAT (ALL USERS) =========================== */
 function AskAmber({ narrow, user }) {
   const [open, setOpen] = useState(false);
@@ -1571,6 +1776,7 @@ function AskAmber({ narrow, user }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [ctx, setCtx] = useState(null);
+  const [kb, setKb] = useState([]);                // Amber Homes knowledge (loaded once per session)
   const boxRef = useRef(null);
   useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight; }, [msgs, busy]);
 
@@ -1578,6 +1784,7 @@ function AskAmber({ narrow, user }) {
     setMentor(m);
     setMsgs([{ role: "assistant", text: m.greeting }]);
     setCtx(await buildCrmContext(user)); // fetch permitted CRM context once per session
+    fetchKnowledge(user).then(setKb).catch(() => setKb([])); // verified company knowledge
   };
   const reset = () => { setMentor(null); setMsgs([]); setInput(""); };
 
@@ -1597,9 +1804,10 @@ function AskAmber({ narrow, user }) {
     }
     const next = [...msgs, { role: "user", text }];
     setMsgs(next); setBusy(true);
+    const picked = pickKnowledge(text, kb, mentor.id); // relevant verified knowledge for THIS question
     try {
       const res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mentor: mentor.id, crmContext: ctx,
+        body: JSON.stringify({ mentor: mentor.id, crmContext: ctx, knowledge: picked.text,
           messages: next.slice(-12).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })) }) });
       const data = await res.json();
       if (data.error) {
@@ -1607,7 +1815,10 @@ function AskAmber({ narrow, user }) {
         logAi({ user, mentor, question: text, status: "error" });
       } else {
         const reply = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
-        setMsgs((m) => [...m, { role: "assistant", text: reply || "Please try again." }]);
+        const sources = picked.used && picked.used.length
+          ? picked.used.filter((u) => !/do not say|compliance/i.test(u.title)).slice(0, 3).map((u) => u.title)
+          : [];
+        setMsgs((m) => [...m, { role: "assistant", text: reply || "Please try again.", sources }]);
         logAi({ user, mentor, question: text, responseSum: reply, model: data.model, status: "success" });
       }
     } catch (e) {
@@ -1672,11 +1883,16 @@ function AskAmber({ narrow, user }) {
       ) : (<>
         <div ref={boxRef} style={{ flex: 1, overflowY: "auto", padding: 14, background: T.bone }}>
           {msgs.map((m, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", marginBottom: 9 }}>
+            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: m.role === "user" ? "flex-end" : "flex-start", marginBottom: 9 }}>
               <div style={{ maxWidth: "88%", background: m.role === "user" ? T.btnBg : T.paper,
                 color: m.role === "user" ? T.btnFg : T.ink, border: m.role === "user" ? "none" : `1px solid ${T.hair}`,
                 borderRadius: 13, padding: "9px 12px", fontSize: 12.8, lineHeight: 1.55, whiteSpace: "pre-wrap",
                 boxShadow: m.role === "user" ? "none" : T.shadow }}>{m.text}</div>
+              {m.sources && m.sources.length > 0 && (
+                <div style={{ maxWidth: "88%", marginTop: 4, fontSize: 10.5, color: T.faint, display: "flex", alignItems: "center", gap: 4, paddingLeft: 2 }}>
+                  <BookOpen size={11} /> Based on: {m.sources.join(" · ")}
+                </div>
+              )}
             </div>
           ))}
           {busy && <div style={{ fontSize: 12, color: T.muted, padding: "4px 2px" }}>{mentor.name} is thinking…</div>}

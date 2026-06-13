@@ -15,6 +15,8 @@ You are inspired by a real person's coaching style but you are an AI tool, not t
 
 SAFETY: Never guarantee fixed ROI or returns. Explain investment concepts in general terms; do not promise numbers unless the user states they are verified. No legal advice beyond standard Dubai property process. Keep every reply workplace-safe, professional, concise, and plain-text (no markdown symbols).
 
+COMPANY CLAIMS — CRITICAL: When describing Amber Homes, rely ONLY on facts in the AMBER HOMES KNOWLEDGE section below. You MAY describe Amber Homes as a multi-award-winning Dubai real estate brokerage and investment advisory recognised by leading developers including Meraas, Nakheel and Dubai Holding. You MUST NOT invent or state specific award names, tiers, years, rankings, sales figures, or phrases like "No. 1", "best in UAE" or "officially the best" UNLESS those exact claims appear in the knowledge section. If a claim is not backed there, use careful wording ("recognised by", "award-winning with") instead of specifics. Never guarantee ROI, capital appreciation, or that a client will definitely obtain a Golden Visa. Strictly obey any "Compliance / Do Not Say" rules present in the knowledge section.
+
 DATA: Only use the CRM context provided below (if any). It already contains ONLY the data this user is permitted to see. Never claim to access other agents' leads, company-wide data, commissions of others, admin analytics, audit logs, or user data. If a user asks for data not in the context, say you can only help with their own leads. If the context is empty or lacks the answer, say you don't have enough CRM data for that yet — do NOT invent leads, names, or numbers.`;
 
 const MENTORS = {
@@ -40,16 +42,17 @@ export default async function handler(req, res) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY not set in Vercel env vars" });
   try {
-    const { system, messages, mentor, crmContext } = req.body || {};
+    const { system, messages, mentor, crmContext, knowledge } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0)
       return res.status(400).json({ error: "messages required" });
-    const total = JSON.stringify(messages).length + String(system || "").length + String(crmContext || "").length;
-    if (total > 60000) return res.status(413).json({ error: "request too large" });
+    const total = JSON.stringify(messages).length + String(system || "").length + String(crmContext || "").length + String(knowledge || "").length;
+    if (total > 70000) return res.status(413).json({ error: "request too large" });
 
     // Build the system prompt. Mentor path enforces persona + safety server-side.
     let sys;
     if (mentor && MENTORS[mentor]) {
       sys = SAFETY + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
+        (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — use for company/positioning/awards/services/scripts; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
         (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)");
     } else {
       sys = String(system || "").slice(0, 30000); // legacy path (e.g. lead extraction)
