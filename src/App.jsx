@@ -328,13 +328,8 @@ export default function App() {
               width: 36, height: 36, display: "grid", placeItems: "center", cursor: "pointer" }}>
               {dark ? <Sun size={16} color={T.goldBright} /> : <Moon size={16} color={T.inkSoft} />}
             </button>
-            <button style={{ position: "relative", border: `1px solid ${T.hair}`, background: T.paper, borderRadius: 9,
-              width: 36, height: 36, display: "grid", placeItems: "center", cursor: "pointer" }}>
-              <Bell size={16} color={T.inkSoft} />
-              <span style={{ position: "absolute", top: 7, right: 7, width: 7, height: 7, borderRadius: 7, background: T.bad }} />
-            </button>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: T.hero, color: T.goldBright,
-              display: "grid", placeItems: "center", fontFamily: DISPLAY, fontSize: 14 }}>S</div>
+            <NotifBell go={go} />
+            <ProfileMenu user={user} dark={dark} setDark={setDark} accent={accent} setAccent={setAccent} ACCENTS={ACCENTS} signOut={signOut} />
           </div>
         </header>
         <div style={{ padding: narrow ? "16px 14px 70px" : "24px 26px 80px", maxWidth: 1200 }}>
@@ -1521,7 +1516,7 @@ function LiveLeads({ user, filter, go }) {
       This screen reads your real Supabase database. Phone reveals are written to the activity log. What each person sees is enforced by row-level security.
     </div>
 
-    {showAdd && <AddLeadModal me={me} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />}
+    {showAdd && <AddLeadModal me={me} user={user} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />}
     {showImport && <ImportModal me={me} onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); load(); }} />}
   </div>;
 }
@@ -1529,38 +1524,140 @@ function miniBtn() { return { background: T.paper, color: T.ink, border: `1px so
   padding: "8px 13px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: UI,
   display: "inline-flex", alignItems: "center", gap: 6 }; }
 
-/* ---- Add Lead (writes to Supabase) ---- */
-function AddLeadModal({ onClose, onSaved, me }) {
-  const [f, setF] = useState({ client_name: "", phone: "", email: "", project: "", area: "", budget: "", assigned_agent_name: "" });
+/* ---- Add Lead: validation + duplicate check + autocomplete + AI extract ---- */
+const DUBAI_AREAS = ["Palm Jumeirah","Palm Jebel Ali","Dubai Hills Estate","Downtown Dubai","Business Bay","Dubai Marina","Jumeirah Village Circle","JVC","Jumeirah Village Triangle","JVT","Arabian Ranches","Arabian Ranches 2","Arabian Ranches 3","Dubai Creek Harbour","Emaar South","Dubai South","Dubai Islands","Damac Hills","Damac Hills 2","Tilal Al Ghaf","Mohammed Bin Rashid City","MBR City","District One","City Walk","Nad Al Sheba","Meydan","Jumeirah Golf Estates","Emirates Living","Springs","Meadows","The Lakes","Bluewaters","Madinat Jumeirah Living","Rashid Yachts and Marina"];
+const DUBAI_PROJECTS = ["Palm Jebel Ali","Dubai Hills Estate","Emaar South","The Valley","Rashid Yachts and Marina","Dubai Creek Harbour","City Walk","Madinat Jumeirah Living","Nad Al Sheba Gardens","District One","Damac Lagoons","Damac Hills","Sobha Hartland","Sobha One","Sobha Reserve","Tilal Al Ghaf","Arabian Ranches 3","Expo City","Dubai Islands","Bay Villas","Bluewaters Residences","Jumeirah Living"];
+const normPhone = (p) => { if (!p) return ""; let d = String(p).replace(/[^\d+]/g, ""); if (d.startsWith("00")) d = "+" + d.slice(2); else if (!d.startsWith("+")) d = "+" + d; return d; };
+
+function AddLeadModal({ onClose, onSaved, me, user }) {
+  const isAgent = user && user.role === "agent";
+  const [mode, setMode] = useState("manual"); // manual | ai
+  const [aiText, setAiText] = useState(""); const [aiBusy, setAiBusy] = useState(false); const [aiErr, setAiErr] = useState("");
+  const [f, setF] = useState({ client_name: "", phone: "", email: "", project: "", area: "", budget: "",
+    property_type: "", ready_offplan: "", purpose: "", nationality: "", followup_note: "",
+    assigned_agent_name: isAgent ? (user.name || "") : "" });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  const [dup, setDup] = useState(null); // pending duplicate, requires confirm
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
-  const save = async () => {
-    if (!f.client_name.trim()) { setErr("Client name is required."); return; }
-    setBusy(true); setErr("");
-    const code = "L-" + Math.random().toString(36).slice(2, 7).toUpperCase();
-    const { error } = await supabase.from("leads").insert({
-      lead_code: code, client_name: f.client_name.trim(), phone: f.phone.trim() || null,
-      whatsapp: f.phone.trim() || null, email: f.email.trim() || null, project: f.project.trim() || null,
-      area: f.area.trim() || null, budget: f.budget.trim() || null,
-      assigned_agent_name: f.assigned_agent_name.trim() || null, source: "Manual", status: "New", temperature: "Cold",
-    });
-    setBusy(false);
-    if (error) { setErr(error.message); return; }
-    onSaved();
+
+  const extract = async () => {
+    if (!aiText.trim()) return; setAiBusy(true); setAiErr("");
+    try {
+      const res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          system: "Extract real-estate lead fields from the user's text. Reply with ONLY a JSON object, no prose, with keys: client_name, phone, email, area, project, budget, property_type, ready_offplan, purpose, nationality, followup_note. Use empty string for anything not present. budget should keep currency like 'AED 8,000,000'. ready_offplan should be 'Off-plan' or 'Ready' or ''.",
+          messages: [{ role: "user", content: aiText.slice(0, 4000) }] }) });
+      const data = await res.json();
+      if (data.error) { setAiErr("AI not available: " + data.error); setAiBusy(false); return; }
+      let txt = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+      txt = txt.replace(/^```json/i, "").replace(/```$/, "").trim();
+      const j = JSON.parse(txt);
+      setF((s) => ({ ...s, ...Object.fromEntries(Object.entries(j).map(([k, v]) => [k, v || ""])),
+        assigned_agent_name: isAgent ? (user.name || "") : (j.assigned_agent_name || s.assigned_agent_name) }));
+      setMode("manual"); // show the filled form for review
+    } catch (e) { setAiErr("Couldn't read AI response. Try again or enter manually."); }
+    setAiBusy(false);
   };
+
+  const doInsert = async (overrideDup) => {
+    setBusy(true); setErr("");
+    const phone = normPhone(f.phone);
+    // duplicate check (phone or email)
+    if (!overrideDup) {
+      let dq = supabase.from("leads").select("lead_code, client_name, phone, email").limit(1);
+      const ors = [`phone.eq.${phone}`]; if (f.email.trim()) ors.push(`email.eq.${f.email.trim()}`);
+      const { data: hit } = await supabase.from("leads").select("lead_code, client_name, phone, email")
+        .or(ors.join(",")).limit(1);
+      if (hit && hit.length) {
+        if (isAgent) { setBusy(false); setErr("A lead with this phone/email already exists (" + hit[0].lead_code + "). Ask an admin to add it."); return; }
+        setDup(hit[0]); setBusy(false); return;
+      }
+    }
+    const code = "L-" + Math.random().toString(36).slice(2, 7).toUpperCase();
+    const { data: ins, error } = await supabase.from("leads").insert({
+      lead_code: code, client_name: f.client_name.trim(), phone, whatsapp: phone, email: f.email.trim() || null,
+      project: f.project.trim() || null, area: f.area.trim() || null, budget: f.budget.trim() || null,
+      property_type: f.property_type.trim() || null, ready_offplan: f.ready_offplan.trim() || null,
+      purpose: f.purpose.trim() || null, nationality: f.nationality.trim() || null, followup_note: f.followup_note.trim() || null,
+      assigned_agent_name: f.assigned_agent_name.trim() || null, source: "Manual", status: "New", temperature: "Cold",
+    }).select("id").single();
+    if (error) { setBusy(false); setErr(error.message); return; }
+    // audit
+    if (me && ins) supabase.from("lead_activity").insert({ lead_id: ins.id, actor_id: me.id,
+      action: aiUsed ? "lead_created_ai" : "lead_created", detail: { lead_code: code } }).then(() => {});
+    setBusy(false); onSaved();
+  };
+  const [aiUsed] = useState(false);
+
+  const save = () => {
+    if (!f.client_name.trim()) { setErr("Client name is required."); return; }
+    if (!normPhone(f.phone) || normPhone(f.phone).length < 7) { setErr("Phone number is required to create a lead."); return; }
+    setDup(null); doInsert(false);
+  };
+
   const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13,
     fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginTop: 5 };
+  const field = (lbl, k, opts = {}) => (
+    <label style={{ display: "block", marginBottom: 10 }}>
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>{lbl}</span>
+      <input value={f[k]} onChange={(e) => set(k, e.target.value)} list={opts.list}
+        placeholder={opts.ph || ""} disabled={opts.disabled}
+        onBlur={opts.norm ? () => set(k, normPhone(f[k])) : undefined}
+        style={{ ...inp, opacity: opts.disabled ? .6 : 1 }} />
+    </label>
+  );
+
   return <Modal title="Add lead" onClose={onClose}>
-    {[["Client name *", "client_name"], ["Phone", "phone"], ["Email", "email"], ["Project", "project"], ["Area", "area"], ["Budget", "budget"], ["Assign to (agent name)", "assigned_agent_name"]].map(([lbl, k]) => (
-      <label key={k} style={{ display: "block", marginBottom: 10 }}>
-        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>{lbl}</span>
-        <input value={f[k]} onChange={(e) => set(k, e.target.value)} style={inp} />
-      </label>
-    ))}
-    {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 8 }}>{err}</div>}
-    <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
-      borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>
-      {busy ? "Saving…" : "Save to database"}</button>
+    <div style={{ display: "flex", gap: 6, marginBottom: 14, background: T.bone, borderRadius: 10, padding: 4 }}>
+      {[["manual", "Manual"], ["ai", "✨ Add with AI"]].map(([m, lbl]) => (
+        <button key={m} onClick={() => setMode(m)} style={{ flex: 1, border: "none", borderRadius: 8, padding: "8px",
+          fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
+          background: mode === m ? T.paper : "transparent", color: mode === m ? T.ink : T.muted,
+          boxShadow: mode === m ? T.shadow : "none" }}>{lbl}</button>
+      ))}
+    </div>
+
+    {mode === "ai" ? <>
+      <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 8, lineHeight: 1.5 }}>
+        Paste messy client info — AI extracts the fields, then you review before saving.</div>
+      <textarea value={aiText} onChange={(e) => setAiText(e.target.value)} rows={5}
+        placeholder="e.g. Ahmed Khan, +971501234567, wants off-plan villa in Palm Jebel Ali, budget AED 8M, investment, Pakistani, call back next week"
+        style={{ ...inp, resize: "vertical", fontFamily: UI }} />
+      {aiErr && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, margin: "8px 0" }}>{aiErr}</div>}
+      <button onClick={extract} disabled={aiBusy || !aiText.trim()} style={{ width: "100%", marginTop: 10, background: T.btnBg,
+        color: T.btnFg, border: "none", borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700,
+        cursor: "pointer", fontFamily: UI, opacity: (aiBusy || !aiText.trim()) ? .5 : 1 }}>
+        {aiBusy ? "Extracting…" : "Extract lead → review"}</button>
+      <div style={{ fontSize: 10.5, color: T.faint, marginTop: 8, lineHeight: 1.5 }}>
+        AI fills the form for you to check — nothing saves without your confirmation. Requires the AI key set in Vercel.</div>
+    </> : <>
+      <datalist id="areas">{DUBAI_AREAS.map((a) => <option key={a} value={a} />)}</datalist>
+      <datalist id="projects">{DUBAI_PROJECTS.map((p) => <option key={p} value={p} />)}</datalist>
+      {field("Client name *", "client_name")}
+      {field("Phone * (required)", "phone", { norm: true, ph: "+9715…" })}
+      {field("Email", "email", { ph: "optional" })}
+      {field("Area", "area", { list: "areas", ph: "type or pick" })}
+      {field("Project", "project", { list: "projects", ph: "type or pick" })}
+      {field("Budget", "budget", { ph: "AED …" })}
+      {field("Property type", "property_type", { ph: "Villa / Apartment …" })}
+      {field("Ready / Off-plan", "ready_offplan", { ph: "Off-plan / Ready" })}
+      {field("Purpose", "purpose", { ph: "Investment / End-use" })}
+      {field("Nationality", "nationality")}
+      {field("Follow-up note", "followup_note")}
+      {field(isAgent ? "Assigned to (you)" : "Assign to (agent name)", "assigned_agent_name", { disabled: isAgent })}
+      {err && <div style={{ color: T.bad, fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>{err}</div>}
+      {dup && <div style={{ ...card, padding: 12, marginBottom: 10, borderColor: T.warnSoft, background: T.warnSoft }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: T.warn }}>Possible duplicate lead found</div>
+        <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 3 }}>{dup.lead_code} · {dup.client_name} · {dup.phone}</div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button onClick={() => { setDup(null); doInsert(true); }} style={{ ...miniBtn(), borderColor: T.warn, color: T.warn }}>Create anyway</button>
+          <button onClick={() => setDup(null)} style={{ ...miniBtn() }}>Cancel</button>
+        </div>
+      </div>}
+      {!dup && <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
+        borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>
+        {busy ? "Saving…" : "Save to database"}</button>}
+    </>}
   </Modal>;
 }
 
@@ -1628,5 +1725,155 @@ function Modal({ title, children, onClose }) {
       </div>
       {children}
     </div>
+  </div>;
+}
+
+/* ===================== PROFILE MENU (the "S" box) ======================== */
+function ProfileMenu({ user, dark, setDark, accent, setAccent, ACCENTS, signOut }) {
+  const [open, setOpen] = useState(false);
+  const [modal, setModal] = useState(null); // 'profile' | 'settings' | 'password'
+  const ini = (user?.name || "S").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  return <>
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen(!open)} style={{ width: 36, height: 36, borderRadius: 10, background: T.hero,
+        color: T.goldBright, display: "grid", placeItems: "center", fontFamily: DISPLAY, fontSize: 14, border: "none",
+        cursor: "pointer" }}>{ini}</button>
+      {open && <>
+        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 70 }} />
+        <div style={{ position: "absolute", right: 0, top: 44, width: 244, background: T.paper, border: `1px solid ${T.hair}`,
+          borderRadius: 14, boxShadow: T.shadowLg, zIndex: 71, overflow: "hidden", fontFamily: UI }}>
+          <div style={{ padding: "14px 16px", background: T.hero, color: "#fff" }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>{user?.name}</div>
+            <div style={{ fontSize: 11.5, color: "rgba(255,255,255,.6)", marginTop: 1 }}>{user?.email}</div>
+            <span style={{ display: "inline-block", marginTop: 7, fontSize: 10.5, fontWeight: 700, background: "rgba(212,175,92,.18)",
+              color: T.goldBright, borderRadius: 7, padding: "2px 9px" }}>{user?.roleLabel}</span>
+          </div>
+          <div style={{ padding: 6 }}>
+            {[["Profile", "profile"], ["Settings", "settings"], ["Change password", "password"]].map(([lbl, m]) => (
+              <button key={m} onClick={() => { setModal(m); setOpen(false); }} style={menuItem()}>{lbl}</button>
+            ))}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px" }}>
+              <span style={{ fontSize: 13, color: T.ink }}>Theme</span>
+              <div style={{ display: "flex", gap: 5 }}>
+                {ACCENTS.map(([k, label, hex]) => (
+                  <button key={k} onClick={() => setAccent(k)} title={label} style={{ width: 15, height: 15, borderRadius: 15,
+                    background: hex, border: accent === k ? `2px solid ${T.ink}` : "2px solid transparent", cursor: "pointer", padding: 0 }} />
+                ))}
+              </div>
+            </div>
+            <button onClick={() => setDark(!dark)} style={menuItem()}>{dark ? "Light mode" : "Dark mode"}</button>
+            <div style={{ height: 1, background: T.hairSoft, margin: "5px 8px" }} />
+            <button onClick={signOut} style={{ ...menuItem(), color: T.bad, fontWeight: 600 }}>Log out</button>
+          </div>
+        </div>
+      </>}
+    </div>
+    {modal === "password" && <ChangePasswordModal onClose={() => setModal(null)} />}
+    {modal === "profile" && <Modal title="Profile" onClose={() => setModal(null)}>
+      <Row k="Name" v={user?.name} /><Row k="Email" v={user?.email} /><Row k="Role" v={user?.roleLabel} />
+      <div style={{ fontSize: 12, color: T.muted, marginTop: 10, lineHeight: 1.5 }}>
+        Your name and role are managed by your Master Admin in the user settings.</div>
+    </Modal>}
+    {modal === "settings" && <Modal title="Settings" onClose={() => setModal(null)}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0" }}>
+        <span style={{ fontSize: 13 }}>Dark mode</span>
+        <button onClick={() => setDark(!dark)} style={{ ...miniBtn() }}>{dark ? "On" : "Off"}</button></div>
+      <div style={{ padding: "10px 0" }}>
+        <div style={{ fontSize: 13, marginBottom: 8 }}>Accent theme</div>
+        <div style={{ display: "flex", gap: 8 }}>{ACCENTS.map(([k, label, hex]) => (
+          <button key={k} onClick={() => setAccent(k)} style={{ display: "flex", alignItems: "center", gap: 6,
+            border: `1px solid ${accent === k ? T.gold : T.hair}`, background: accent === k ? T.goldSoft : T.paper,
+            borderRadius: 9, padding: "6px 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>
+            <span style={{ width: 12, height: 12, borderRadius: 12, background: hex }} /> {label}</button>))}</div>
+      </div>
+      <div style={{ fontSize: 11.5, color: T.faint, marginTop: 10 }}>More settings (notifications, security) arrive as those modules go live.</div>
+    </Modal>}
+  </>;
+}
+function menuItem() { return { width: "100%", textAlign: "left", background: "none", border: "none", padding: "9px 12px",
+  fontSize: 13, color: T.ink, cursor: "pointer", fontFamily: UI, borderRadius: 8 }; }
+function Row({ k, v }) { return <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0",
+  borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13 }}><span style={{ color: T.muted }}>{k}</span><b>{v}</b></div>; }
+
+function ChangePasswordModal({ onClose }) {
+  const [pw, setPw] = useState(""); const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState("");
+  const save = async () => {
+    if (pw.length < 8) { setMsg("Use at least 8 characters."); return; }
+    if (pw !== pw2) { setMsg("Passwords don't match."); return; }
+    setBusy(true); setMsg("");
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    setBusy(false);
+    setMsg(error ? "Error: " + error.message : "Password updated.");
+    if (!error) setTimeout(onClose, 1200);
+  };
+  const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13,
+    fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginTop: 5, marginBottom: 10 };
+  return <Modal title="Change password" onClose={onClose}>
+    <input type="password" placeholder="New password" value={pw} onChange={(e) => setPw(e.target.value)} style={inp} />
+    <input type="password" placeholder="Confirm new password" value={pw2} onChange={(e) => setPw2(e.target.value)} style={inp} />
+    {msg && <div style={{ color: msg === "Password updated." ? T.ok : T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{msg}</div>}
+    <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
+      borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>
+      {busy ? "Saving…" : "Update password"}</button>
+  </Modal>;
+}
+
+/* ===================== NOTIFICATIONS (the red dot) ======================= */
+function NotifBell({ go }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const load = async () => {
+    const { data } = await supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(30);
+    setItems(data || []);
+  };
+  useEffect(() => { load(); }, []);
+  const unread = items.filter((n) => !n.read).length;
+  const markAll = async () => {
+    const ids = items.filter((n) => !n.read).map((n) => n.id);
+    if (!ids.length) return;
+    await supabase.from("notifications").update({ read: true }).in("id", ids);
+    setItems((it) => it.map((n) => ({ ...n, read: true })));
+  };
+  const markOne = async (n) => {
+    if (n.read) return;
+    await supabase.from("notifications").update({ read: true }).eq("id", n.id);
+    setItems((it) => it.map((x) => x.id === n.id ? { ...x, read: true } : x));
+  };
+  const ago = (t) => { const d = (Date.now() - new Date(t)) / 6e4; if (d < 60) return Math.max(1, Math.round(d)) + "m";
+    if (d < 1440) return Math.round(d / 60) + "h"; return Math.round(d / 1440) + "d"; };
+  return <div style={{ position: "relative" }}>
+    <button onClick={() => { setOpen(!open); if (!open) load(); }} style={{ position: "relative", border: `1px solid ${T.hair}`,
+      background: T.paper, borderRadius: 9, width: 36, height: 36, display: "grid", placeItems: "center", cursor: "pointer" }}>
+      <Bell size={16} color={T.inkSoft} />
+      {unread > 0 && <span style={{ position: "absolute", top: 5, right: 5, minWidth: 15, height: 15, borderRadius: 15,
+        background: T.bad, color: "#fff", fontSize: 9, fontWeight: 800, display: "grid", placeItems: "center", padding: "0 3px" }}>{unread}</span>}
+    </button>
+    {open && <>
+      <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 70 }} />
+      <div style={{ position: "absolute", right: 0, top: 44, width: 320, maxWidth: "90vw", background: T.paper,
+        border: `1px solid ${T.hair}`, borderRadius: 14, boxShadow: T.shadowLg, zIndex: 71, overflow: "hidden", fontFamily: UI }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 15px", borderBottom: `1px solid ${T.hair}` }}>
+          <span style={{ fontWeight: 700, fontSize: 14 }}>Notifications</span>
+          {unread > 0 && <button onClick={markAll} style={{ background: "none", border: "none", color: T.gold,
+            fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Mark all read</button>}
+        </div>
+        <div style={{ maxHeight: 360, overflowY: "auto" }}>
+          {items.length === 0 ? <div style={{ padding: 26, textAlign: "center", color: T.muted, fontSize: 12.5 }}>No notifications yet.</div> :
+            items.map((n) => (
+            <button key={n.id} onClick={() => { markOne(n); if (n.link_screen && go) { go(n.link_screen); setOpen(false); } }}
+              style={{ display: "flex", gap: 10, width: "100%", textAlign: "left", padding: "11px 15px", background: n.read ? "transparent" : T.goldSoft,
+                border: "none", borderBottom: `1px solid ${T.hairSoft}`, cursor: "pointer", fontFamily: UI }}>
+              <span style={{ width: 7, height: 7, borderRadius: 7, background: n.read ? T.hair : T.gold, marginTop: 5, flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12.8, fontWeight: 600, color: T.ink }}>{n.title}</div>
+                {n.body && <div style={{ fontSize: 11.5, color: T.muted, marginTop: 1, lineHeight: 1.4 }}>{n.body}</div>}
+                <div style={{ fontSize: 10, color: T.faint, marginTop: 3 }}>{ago(n.created_at)} ago</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </>}
   </div>;
 }
