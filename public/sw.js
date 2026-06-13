@@ -2,8 +2,8 @@
 // SECURITY: caches ONLY the public static shell (HTML, hashed JS/CSS, icons, fonts).
 // It NEVER caches API responses, Supabase data, auth tokens, lead data, or any private
 // information — those are same-origin /api/* (bypassed) or cross-origin (bypassed).
-const CACHE = "amber-crm-v1";
-const STATIC = ["/", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png", "/favicon-32.png"];
+const CACHE = "amber-crm-v2";
+const STATIC = ["/", "/manifest.webmanifest", "/icon-192-v2.png", "/icon-512-v2.png", "/apple-touch-icon-v2.png", "/favicon-32-v2.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(STATIC)).catch(() => {}));
