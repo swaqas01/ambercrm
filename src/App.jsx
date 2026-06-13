@@ -107,6 +107,12 @@ const dubaiHour = () => { try { return parseInt(new Date().toLocaleString("en-US
 const greetWord = (h) => h >= 5 && h < 12 ? "Good morning" : h >= 12 && h < 17 ? "Good afternoon" : h >= 17 && h < 22 ? "Good evening" : "Good night";
 const dubaiToday = () => { try { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return new Date().toISOString().slice(0,10); } };
 const firstName = (n) => (n || "there").trim().split(/\s+/)[0];
+// Log a lead action to the activity trail (RLS: actor must be the signed-in user).
+function logAction(action, lead, actorId, extra) {
+  if (!actorId) return;
+  try { supabase.from("lead_activity").insert({ lead_id: (lead && lead.id) || null, actor_id: actorId, action,
+    detail: { client: lead && lead.client_name, lead_code: lead && lead.lead_code, ...(extra || {}) } }).then(() => {}, () => {}); } catch (e) {}
+}
 
 /* ================================ MOCK DATA ============================== */
 const AGENTS = [
@@ -405,79 +411,193 @@ function GoldBtn({ children, ghost }) {
 
 /* ============================ 1 ADMIN DASHBOARD ========================== */
 function AdminDash({ go }) {
-  const [rows, setRows] = useState(null);
+  const [leads, setLeads] = useState(null);
+  const [acts, setActs] = useState([]);
+  const [profs, setProfs] = useState([]);
   const [err, setErr] = useState("");
   useEffect(() => {
     (async () => {
-      const { data, error } = await supabase.from("leads")
-        .select("temperature,status,is_open,assigned_agent,assigned_agent_name,source").limit(5000);
-      if (error) { setErr(error.message); setRows([]); return; }
-      setRows(data || []);
+      try {
+        const [lr, ar, pr] = await Promise.all([
+          supabase.from("leads").select("created_at,updated_at,status,temperature,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,source,next_followup,deal_value,commission_value").limit(5000),
+          supabase.from("lead_activity").select("actor_id,action,created_at").order("created_at", { ascending: false }).limit(5000),
+          supabase.from("profiles").select("id,full_name,role").limit(500),
+        ]);
+        if (lr.error) { setErr("load"); setLeads([]); return; }
+        setLeads(lr.data || []); setActs(ar.data || []); setProfs(pr.data || []);
+      } catch (e) { setErr("load"); setLeads([]); }
     })();
   }, []);
 
   if (err) return <div style={{ ...card, padding: 22, borderColor: T.badSoft }}>
-    <div style={{ fontWeight: 700, color: T.bad }}>Unable to load dashboard data</div>
-    <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>{err}</div></div>;
-  if (rows === null) return <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading live data…</div>;
+    <div style={{ fontWeight: 700, color: T.bad }}>Unable to load this section.</div>
+    <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>Please try again or contact admin.</div></div>;
+  if (leads === null) return <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading live data…</div>;
 
-  const n = rows.length;
-  const cnt = (f) => rows.filter(f).length;
-  const cards = [
-    { label: "Total Leads", value: n, sub: "in database", f: { type: "all", label: "All leads" } },
-    { label: "Unassigned", value: cnt((r) => !r.assigned_agent), sub: "no account linked", f: { type: "unassigned", label: "Unassigned leads" } },
-    { label: "Hot", value: cnt((r) => r.temperature === "Hot"), sub: "temperature", f: { type: "temp", value: "Hot", label: "Hot leads" } },
-    { label: "Very Hot", value: cnt((r) => r.temperature === "Very Hot"), sub: "temperature", f: { type: "temp", value: "Very Hot", label: "Very Hot leads" } },
-    { label: "Open Pool", value: cnt((r) => r.is_open), sub: "released leads", f: { type: "open", label: "Open pool" } },
-    { label: "Closed Won", value: cnt((r) => r.status === "Closed Won"), sub: "won deals", f: { type: "status", value: "Closed Won", label: "Closed Won" } },
-  ];
+  const ymd = (iso) => { try { return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return ""; } };
+  const today = dubaiToday();
+  const ym = today.slice(0, 7), yyyy = today.slice(0, 4);
+  const qOf = (d) => Math.floor((parseInt((d || "").slice(5, 7) || "1", 10) - 1) / 3);
+  const thisQ = qOf(today);
+  const money = (n) => "AED " + Math.round(n || 0).toLocaleString();
 
-  // real leads-by-source
-  const bySource = Object.entries(rows.reduce((m, r) => { const k = r.source || "Unknown"; m[k] = (m[k] || 0) + 1; return m; }, {}))
-    .sort((a, b) => b[1] - a[1]);
-  // real leads-by-agent (name text, since accounts not yet linked)
-  const byAgent = Object.entries(rows.reduce((m, r) => { const k = r.assigned_agent_name || "Unassigned"; m[k] = (m[k] || 0) + 1; return m; }, {}))
-    .sort((a, b) => b[1] - a[1]);
+  const inToday = (iso) => ymd(iso) === today;
+  const inMonth = (iso) => ymd(iso).slice(0, 7) === ym;
+  const inQuarter = (iso) => { const d = ymd(iso); return d.slice(0, 4) === yyyy && qOf(d) === thisQ; };
+  const inYear = (iso) => ymd(iso).slice(0, 4) === yyyy;
+
+  const L = leads;
+  const won = L.filter((r) => r.status === "Closed Won");
+  const cnt = (f) => L.filter(f).length;
+  const sum = (arr, k) => arr.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const assignedTotal = cnt((r) => r.assigned_agent || r.current_owner || r.assigned_agent_name);
+  const convOverall = assignedTotal ? (won.length / assignedTotal * 100) : 0;
+  const wonMonth = won.filter((r) => inMonth(r.updated_at || r.created_at));
+  const monthLeads = L.filter((r) => inMonth(r.created_at));
+  const convMonth = monthLeads.length ? (wonMonth.length / monthLeads.length * 100) : 0;
+
+  // contact activity from the audit trail
+  const isCall = (a) => a === "call", isWa = (a) => a === "whatsapp", isView = (a) => a === "view_number" || a === "reveal_phone";
+  const actCount = (pred, period) => acts.filter((x) => pred(x.action) && (period === "today" ? inToday(x.created_at) : inMonth(x.created_at))).length;
+
+  // real security watch: velocity in the last 10 minutes, per actor
+  const tenMinAgo = Date.now() - 10 * 60 * 1000;
+  const recent = acts.filter((x) => new Date(x.created_at).getTime() >= tenMinAgo);
+  const byActor = {};
+  recent.forEach((x) => { (byActor[x.actor_id] = byActor[x.actor_id] || { view: 0, wa: 0, call: 0 }); if (isView(x.action)) byActor[x.actor_id].view++; else if (isWa(x.action)) byActor[x.actor_id].wa++; else if (isCall(x.action)) byActor[x.actor_id].call++; });
+  const nameOf = (id) => (profs.find((p) => p.id === id) || {}).full_name || "Unknown user";
+  const flags = [];
+  Object.entries(byActor).forEach(([id, c]) => {
+    if (c.view > 15) flags.push({ who: nameOf(id), reason: `${c.view} number reveals in 10 min`, sev: c.view > 30 ? "high" : "med", type: "view_number" });
+    if (c.wa > 15) flags.push({ who: nameOf(id), reason: `${c.wa} WhatsApp clicks in 10 min`, sev: c.wa > 30 ? "high" : "med", type: "whatsapp" });
+    if (c.call > 15) flags.push({ who: nameOf(id), reason: `${c.call} call clicks in 10 min`, sev: c.call > 30 ? "high" : "med", type: "call" });
+  });
+
+  // team performance by agent name (where the imported lead data lives), activity matched by account name
+  const agentNames = [...new Set(L.map((r) => r.assigned_agent_name).filter(Boolean))];
+  const perf = agentNames.map((nm) => {
+    const mine = L.filter((r) => r.assigned_agent_name === nm);
+    const w = mine.filter((r) => r.status === "Closed Won").length;
+    const acc = profs.find((p) => (p.full_name || "").toLowerCase() === nm.toLowerCase());
+    const accActs = acc ? acts.filter((x) => x.actor_id === acc.id && inMonth(x.created_at)) : null;
+    return { nm, assigned: mine.length, won: w, conv: mine.length ? (w / mine.length * 100) : 0,
+      hasAcc: !!acc,
+      calls: accActs ? accActs.filter((x) => isCall(x.action)).length : null,
+      wa: accActs ? accActs.filter((x) => isWa(x.action)).length : null,
+      views: accActs ? accActs.filter((x) => isView(x.action)).length : null,
+      overdue: mine.filter((r) => r.next_followup && r.next_followup < today && r.status !== "Closed Won" && r.status !== "Closed Lost").length };
+  }).sort((a, b) => b.assigned - a.assigned);
+
+  const bySource = Object.entries(L.reduce((m, r) => { const k = r.source || "Unknown"; m[k] = (m[k] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]);
   const maxSrc = Math.max(1, ...bySource.map((s) => s[1]));
-  const maxAg = Math.max(1, ...byAgent.map((a) => a[1]));
 
-  const ClickCard = ({ c }) => (
-    <button onClick={() => go("live", c.f)} style={{ ...card, padding: "16px 18px", textAlign: "left", cursor: "pointer",
-      border: `1px solid ${T.hair}`, background: T.paper, fontFamily: UI }}>
-      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>{c.label}</div>
-      <div style={{ fontFamily: DISPLAY, fontSize: 28, marginTop: 6, color: T.ink }}>{c.value}</div>
-      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
-        {c.sub} <ChevronRight size={12} color={T.gold} /></div>
+  const Stat = ({ label, value, sub, tone, onClick }) => (
+    <button onClick={onClick} disabled={!onClick} style={{ ...card, padding: "14px 16px", textAlign: "left",
+      cursor: onClick ? "pointer" : "default", border: `1px solid ${T.hair}`, background: T.paper, fontFamily: UI }}>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>{label}</div>
+      <div style={{ fontFamily: DISPLAY, fontSize: 24, marginTop: 5, color: tone === "gold" ? T.gold : tone === "bad" ? T.bad : tone === "ok" ? T.ok : T.ink }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: T.muted, marginTop: 3, display: "flex", alignItems: "center", gap: 3 }}>{sub}{onClick && <ChevronRight size={11} color={T.gold} />}</div>}
     </button>
   );
+  const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(135px,1fr))", gap: 10 };
 
   return <div>
     <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 14 }}>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok,
         borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}>
         <span style={{ width: 7, height: 7, borderRadius: 7, background: T.ok }} /> LIVE DATA</span>
-      <span style={{ fontSize: 12.5, color: T.muted }}>{n} leads · tap any card to drill in</span>
+      <span style={{ fontSize: 12.5, color: T.muted }}>{L.length} leads · {acts.length} activity events</span>
     </div>
 
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
-      {cards.map((c) => <ClickCard key={c.label} c={c} />)}
+    <SectionTitle>Leads</SectionTitle>
+    <div style={grid}>
+      <Stat label="Today" value={cnt((r) => inToday(r.created_at))} sub="new" onClick={() => go("live", { type: "all", label: "All leads" })} />
+      <Stat label="This month" value={monthLeads.length} sub="new" />
+      <Stat label="This quarter" value={cnt((r) => inQuarter(r.created_at))} sub="new" />
+      <Stat label="This year" value={cnt((r) => inYear(r.created_at))} sub="new" />
+      <Stat label="Total" value={L.length} sub="all leads" onClick={() => go("live", { type: "all", label: "All leads" })} />
+      <Stat label="Unassigned" value={cnt((r) => !r.assigned_agent && !r.assigned_agent_name)} sub="to assign" onClick={() => go("live", { type: "unassigned", label: "Unassigned leads" })} />
+      <Stat label="Open pool" value={cnt((r) => r.is_open)} tone="gold" onClick={() => go("live", { type: "open", label: "Open pool" })} />
+      <Stat label="Hot" value={cnt((r) => r.temperature === "Hot")} tone="bad" onClick={() => go("live", { type: "temp", value: "Hot", label: "Hot leads" })} />
+      <Stat label="Very Hot" value={cnt((r) => r.temperature === "Very Hot")} tone="bad" onClick={() => go("live", { type: "temp", value: "Very Hot", label: "Very Hot leads" })} />
+      <Stat label="Due today" value={cnt((r) => r.next_followup && r.next_followup <= today && r.status !== "Closed Won" && r.status !== "Closed Lost")} tone="gold" onClick={() => go("live", { type: "due", label: "Follow-ups due" })} />
+      <Stat label="Overdue" value={cnt((r) => r.next_followup && r.next_followup < today && r.status !== "Closed Won" && r.status !== "Closed Lost")} tone="bad" onClick={() => go("live", { type: "overdue", label: "Overdue follow-ups" })} />
+    </div>
+
+    <SectionTitle>Deals & commission</SectionTitle>
+    <div style={grid}>
+      <Stat label="Closed (month)" value={wonMonth.length} tone="ok" onClick={() => go("live", { type: "status", value: "Closed Won", label: "Closed Won" })} />
+      <Stat label="Closed (quarter)" value={won.filter((r) => inQuarter(r.updated_at || r.created_at)).length} tone="ok" />
+      <Stat label="Closed (year)" value={won.filter((r) => inYear(r.updated_at || r.created_at)).length} tone="ok" />
+      <Stat label="Closed (total)" value={won.length} tone="ok" onClick={() => go("live", { type: "status", value: "Closed Won", label: "Closed Won" })} />
+      <Stat label="Commission (month)" value={money(sum(wonMonth, "commission_value"))} tone="gold" />
+      <Stat label="Commission (year)" value={money(sum(won.filter((r) => inYear(r.updated_at || r.created_at)), "commission_value"))} tone="gold" />
+      <Stat label="Avg deal value" value={won.length ? money(sum(won, "deal_value") / won.length) : "AED 0"} />
+      <Stat label="Pipeline value" value={money(sum(L.filter((r) => r.status !== "Closed Won" && r.status !== "Closed Lost" && r.status !== "Dead Lead"), "deal_value"))} />
+    </div>
+
+    <SectionTitle>Conversion</SectionTitle>
+    <div style={grid}>
+      <Stat label="Overall" value={convOverall.toFixed(1) + "%"} sub="won / assigned" tone="gold" />
+      <Stat label="This month" value={convMonth.toFixed(1) + "%"} sub="won / new" />
+      <Stat label="Won : assigned" value={`${won.length} : ${assignedTotal}`} />
+    </div>
+
+    <SectionTitle>Agent activity <span style={{ fontSize: 10.5, color: T.muted, fontWeight: 600 }}>· View Number / Call / WhatsApp clicks</span></SectionTitle>
+    <div style={grid}>
+      <Stat label="Calls today" value={actCount(isCall, "today")} />
+      <Stat label="Calls (month)" value={actCount(isCall, "month")} />
+      <Stat label="WhatsApp today" value={actCount(isWa, "today")} tone="ok" />
+      <Stat label="WhatsApp (month)" value={actCount(isWa, "month")} tone="ok" />
+      <Stat label="Reveals today" value={actCount(isView, "today")} />
+      <Stat label="Reveals (month)" value={actCount(isView, "month")} />
     </div>
 
     <SectionTitle right={<button onClick={() => go("security")} style={{ background: "none", border: "none", color: T.bad,
       fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontFamily: UI }}>
-      Open security <ChevronRight size={13} /></button>}>Security watch <span style={{ fontSize: 10.5, color: T.faint, fontWeight: 600 }}>· sample until events table is live</span></SectionTitle>
-    <div style={{ ...card, borderColor: T.badSoft, overflow: "hidden" }}>
-      {SUS.slice(0, 2).map((s, i) => (
-        <div key={i} onClick={() => go("security")} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 16px",
-          borderTop: i ? `1px solid ${T.hairSoft}` : "none", cursor: "pointer" }}>
+      Open security <ChevronRight size={13} /></button>}>Security watch</SectionTitle>
+    <div style={{ ...card, borderColor: flags.length ? T.badSoft : T.hair, overflow: "hidden" }}>
+      {flags.length === 0 ? (
+        <div style={{ padding: "18px 16px", display: "flex", alignItems: "center", gap: 10, color: T.muted, fontSize: 13 }}>
+          <CheckCircle2 size={17} color={T.ok} /> No suspicious activity detected.</div>
+      ) : flags.slice(0, 6).map((s, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none" }}>
           <AlertTriangle size={17} color={s.sev === "high" ? T.bad : T.warn} style={{ flexShrink: 0 }} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.what}</div>
-            <div style={{ fontSize: 11.5, color: T.muted, marginTop: 1 }}>{s.who} · {s.when} · {s.action}</div>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.reason}</div>
+            <div style={{ fontSize: 11.5, color: T.muted, marginTop: 1 }}>{s.who} · just now</div>
           </div>
           <Chip tone={s.sev === "high" ? "bad" : "warn"}>{s.sev === "high" ? "High" : "Medium"}</Chip>
         </div>
       ))}
+    </div>
+
+    <SectionTitle>Team performance <span style={{ fontSize: 10.5, color: T.ok, fontWeight: 600 }}>· live</span></SectionTitle>
+    <div style={{ ...card, overflow: "hidden" }}>
+      <div style={{ overflowX: "auto" }}><div style={{ minWidth: 720 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 0.8fr 0.9fr 0.7fr 0.7fr 0.8fr", gap: 8, padding: "10px 16px",
+          fontSize: 10, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: T.muted, borderBottom: `1px solid ${T.hair}`, background: T.bone }}>
+          <span>Agent</span><span>Assigned</span><span>Closed</span><span>Conversion</span><span>Calls</span><span>WhatsApp</span><span>Overdue</span>
+        </div>
+        {perf.length === 0 ? <div style={{ padding: 22, textAlign: "center", color: T.muted, fontSize: 13 }}>No assigned leads yet.</div> :
+          perf.map((p, i) => (
+          <button key={p.nm} onClick={() => go("live", { type: "agent", value: p.nm, label: "Agent: " + p.nm })}
+            style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 0.8fr 0.9fr 0.7fr 0.7fr 0.8fr", gap: 8, alignItems: "center",
+              padding: "11px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", width: "100%", background: "none", border: "none", cursor: "pointer", fontFamily: UI, textAlign: "left", fontSize: 12.5 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}><Av name={p.nm} size={26} dark />
+              <span style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.nm}</span></span>
+            <span>{p.assigned}</span>
+            <span style={{ color: p.won ? T.ok : T.ink }}>{p.won}</span>
+            <span style={{ fontWeight: 700, color: p.conv >= 10 ? T.ok : T.ink }}>{p.conv.toFixed(0)}%</span>
+            <span>{p.hasAcc ? p.calls : "—"}</span>
+            <span>{p.hasAcc ? p.wa : "—"}</span>
+            <span style={{ color: p.overdue ? T.bad : T.faint }}>{p.overdue}</span>
+          </button>
+        ))}
+      </div></div>
+    </div>
+    <div style={{ fontSize: 11, color: T.faint, marginTop: 8, lineHeight: 1.5 }}>
+      Calls / WhatsApp show for agents whose login name matches the lead's agent name. Once imported leads are linked to agent accounts, every agent's activity maps automatically.
     </div>
 
     <SectionTitle>Leads by source <span style={{ fontSize: 10.5, color: T.ok, fontWeight: 600 }}>· live</span></SectionTitle>
@@ -485,26 +605,10 @@ function AdminDash({ go }) {
       {bySource.length === 0 ? <div style={{ color: T.muted, fontSize: 12.5 }}>No leads yet.</div> :
         bySource.map(([s, c]) => (
         <button key={s} onClick={() => go("live", { type: "source", value: s, label: "Source: " + s })}
-          style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, width: "100%", background: "none",
-            border: "none", cursor: "pointer", fontFamily: UI, padding: 0 }}>
+          style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, width: "100%", background: "none", border: "none", cursor: "pointer", fontFamily: UI, padding: 0 }}>
           <span style={{ width: 140, fontSize: 12.5, color: T.inkSoft, textAlign: "left" }}>{s}</span>
           <div style={{ flex: 1 }}><Bar pct={(c / maxSrc) * 100} /></div>
           <span style={{ width: 36, textAlign: "right", fontSize: 12.5, fontWeight: 700 }}>{c}</span>
-        </button>
-      ))}
-    </div>
-
-    <SectionTitle>Leads by agent <span style={{ fontSize: 10.5, color: T.ok, fontWeight: 600 }}>· live</span></SectionTitle>
-    <div style={{ ...card, padding: 18 }}>
-      {byAgent.map(([a, c]) => (
-        <button key={a} onClick={() => go("live", { type: "agent", value: a, label: "Agent: " + a })}
-          style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 9, width: "100%", background: "none",
-            border: "none", cursor: "pointer", fontFamily: UI, padding: 0 }}>
-          <Av name={a === "Unassigned" ? "U N" : a} size={26} dark />
-          <span style={{ width: 130, fontSize: 12.5, color: T.inkSoft, textAlign: "left" }}>{a}</span>
-          <div style={{ flex: 1 }}><Bar pct={(c / maxAg) * 100} color={T.gold} /></div>
-          <span style={{ width: 30, textAlign: "right", fontSize: 12.5, fontWeight: 700 }}>{c}</span>
-          <ChevronRight size={13} color={T.faint} />
         </button>
       ))}
     </div>
@@ -1408,7 +1512,7 @@ function LoginFlow({ onLogin, dark, setDark }) {
   const submitCreds = async () => {
     setErr("");
     const mail = email.trim().toLowerCase();
-    if (!mail.includes("@")) { setErr("Enter your work email — your email is your username."); return; }
+    if (!mail.includes("@")) { setErr("Enter your work email."); return; }
     if (pw.length < 4) { setErr("Enter your password."); return; }
     setBusy(true);
     try {
@@ -1430,29 +1534,63 @@ function LoginFlow({ onLogin, dark, setDark }) {
     fontSize: 14, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box" };
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 100, background: T.bone, display: "grid",
-      placeItems: "center", padding: 18, fontFamily: UI, overflowY: "auto" }}>
-      <button onClick={() => setDark(!dark)} style={{ position: "absolute", top: 16, right: 16,
-        border: `1px solid ${T.hair}`, background: T.paper, borderRadius: 9, width: 36, height: 36,
-        display: "grid", placeItems: "center", cursor: "pointer" }}>
-        {dark ? <Sun size={16} color={T.goldBright} /> : <Moon size={16} color={T.inkSoft} />}</button>
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "grid", placeItems: "center", padding: 18,
+      fontFamily: UI, overflowY: "auto",
+      background: "radial-gradient(1100px 600px at 78% -8%, rgba(196,154,74,.22), transparent 60%), linear-gradient(160deg, #0b1320 0%, #0e1828 42%, #111d2f 100%)" }}>
 
-      <div style={{ width: "100%", maxWidth: 400 }}>
-        {/* brand */}
+      {/* premium architectural backdrop — CSS/SVG only, no logo, no external imagery */}
+      <div style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
+        <svg viewBox="0 0 1440 900" preserveAspectRatio="xMidYMax slice" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0.5 }}>
+          <defs>
+            <linearGradient id="tower" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#1b2a40" /><stop offset="100%" stopColor="#0b1320" />
+            </linearGradient>
+            <linearGradient id="towerLit" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#243755" /><stop offset="100%" stopColor="#0d1626" />
+            </linearGradient>
+          </defs>
+          {/* skyline silhouette */}
+          <g>
+            <rect x="120" y="520" width="70" height="380" fill="url(#tower)" />
+            <rect x="210" y="430" width="60" height="470" fill="url(#towerLit)" />
+            <rect x="290" y="560" width="80" height="340" fill="url(#tower)" />
+            <polygon points="700,150 726,250 726,900 674,900 674,250" fill="url(#towerLit)" />
+            <rect x="660" y="250" width="80" height="650" fill="url(#towerLit)" opacity="0.5" />
+            <rect x="780" y="470" width="64" height="430" fill="url(#tower)" />
+            <rect x="858" y="380" width="72" height="520" fill="url(#towerLit)" />
+            <rect x="946" y="540" width="60" height="360" fill="url(#tower)" />
+            <rect x="1020" y="440" width="78" height="460" fill="url(#towerLit)" />
+            <rect x="1112" y="560" width="66" height="340" fill="url(#tower)" />
+            <rect x="1192" y="500" width="70" height="400" fill="url(#towerLit)" />
+            <rect x="40" y="600" width="64" height="300" fill="url(#tower)" />
+          </g>
+        </svg>
+        {/* subtle window lights */}
+        <div style={{ position: "absolute", inset: 0, background:
+          "radial-gradient(2px 2px at 715px 320px, rgba(212,175,92,.5), transparent), radial-gradient(2px 2px at 705px 420px, rgba(212,175,92,.35), transparent), radial-gradient(2px 2px at 885px 460px, rgba(212,175,92,.4), transparent), radial-gradient(2px 2px at 1050px 520px, rgba(212,175,92,.3), transparent)" }} />
+        {/* darkening vignette so the card pops */}
+        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(8,14,24,.2) 0%, rgba(8,14,24,.55) 100%)" }} />
+      </div>
+
+      <button onClick={() => setDark(!dark)} style={{ position: "absolute", top: 16, right: 16,
+        border: "1px solid rgba(255,255,255,.18)", background: "rgba(255,255,255,.06)", borderRadius: 9, width: 36, height: 36,
+        display: "grid", placeItems: "center", cursor: "pointer", zIndex: 2 }}>
+        {dark ? <Sun size={16} color="#E6C46B" /> : <Moon size={16} color="#cdd6e4" />}</button>
+
+      <div style={{ width: "100%", maxWidth: 410, position: "relative", zIndex: 2 }}>
+        {/* brand — text only, no logo */}
         <div style={{ textAlign: "center", marginBottom: 22 }}>
-          <div style={{ width: 54, height: 54, borderRadius: 16, margin: "0 auto 12px", display: "grid",
-            placeItems: "center", background: T.hero, boxShadow: T.shadowLg }}>
-            <span style={{ fontFamily: DISPLAY, fontSize: 22, color: T.goldBright, fontWeight: 500 }}>A</span></div>
-          <div style={{ fontFamily: DISPLAY, fontSize: 20, letterSpacing: ".2em", color: T.ink, fontWeight: 500 }}>AMBER</div>
-          <div style={{ fontFamily: DISPLAY, fontSize: 10, letterSpacing: ".42em", color: T.gold, marginTop: 3 }}>LEAD DESK</div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 27, letterSpacing: ".04em", color: "#fff", fontWeight: 500, lineHeight: 1.15 }}>
+            Amber Homes Real Estate</div>
+          <div style={{ width: 38, height: 2, background: "linear-gradient(90deg, transparent, #C49A4A, transparent)", margin: "12px auto 0" }} />
         </div>
 
-        <div style={{ background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 18, boxShadow: T.shadowLg, padding: "26px 24px" }}>
-          <div style={{ fontSize: 17, fontWeight: 700, color: T.ink }}>Sign in</div>
-          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, marginBottom: 18 }}>
-            Your work email is your username. Your dashboard is decided by your account.</div>
+        <div style={{ background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 18, boxShadow: "0 30px 80px rgba(0,0,0,.5)", padding: "28px 26px" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: T.ink }}>Sign in to access your CRM dashboard.</div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, marginBottom: 20 }}>
+            Use your Amber Homes work email and password.</div>
           <label style={{ display: "block", marginBottom: 12 }}>
-            <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>Email (username)</span>
+            <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>Work email</span>
             <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@amberhomes.ae"
               autoComplete="username" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }} style={{ ...inputS, marginTop: 6 }} />
           </label>
@@ -1475,16 +1613,16 @@ function LoginFlow({ onLogin, dark, setDark }) {
         </div>
 
         <div style={{ marginTop: 16, textAlign: "center" }}>
-          <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.5 }}>
-            Accounts are created by your Master Admin.<br />Trouble signing in? Contact your administrator.</div>
-          <div style={{ fontSize: 9.5, color: T.faint, marginTop: 8, opacity: .7 }}>Live · real login (Supabase) · build 2026-06-13c</div>
+          <div style={{ fontSize: 11.5, color: "rgba(255,255,255,.62)", lineHeight: 1.5 }}>
+            Your dashboard access is based on your assigned role.</div>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,.4)", marginTop: 6 }}>
+            Accounts are created by your Master Admin. Trouble signing in? Contact your administrator.</div>
         </div>
       </div>
     </div>
   );
 }
 
-/* ===================== LIVE LEADS (real Supabase data) ==================== */
 function LiveLeads({ user, filter, go }) {
   const isAgent = user && user.role === "agent";
   const [leads, setLeads] = useState(null);   // null = loading
@@ -1516,8 +1654,7 @@ function LiveLeads({ user, filter, go }) {
   const digits = (p) => String(p || "").replace(/\D/g, "");
   const reveal = async (l) => {
     setRevealed((r) => ({ ...r, [l.id]: true }));
-    if (me) supabase.from("lead_activity").insert({ lead_id: l.id, actor_id: me.id, action: "reveal_phone",
-      detail: { lead_code: l.lead_code } }).then(() => {});
+    if (me) logAction("view_number", l, me.id);
   };
 
   const matchFilter = (l) => {
@@ -1638,9 +1775,11 @@ function LiveLeads({ user, filter, go }) {
                 <Chip tone={l.is_open ? "gold" : l.temperature === "Hot" || l.temperature === "Very Hot" ? "bad" : "info"}>{l.is_open ? "Open" : l.status}</Chip>
                 <span style={{ display: "flex", gap: 6 }}>
                   {l.phone && <a href={`https://wa.me/${digits(l.phone)}`} target="_blank" rel="noreferrer" title="WhatsApp"
+                    onClick={() => logAction("whatsapp", l, me && me.id)}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
                     <MessageCircle size={14} color={T.ok} /></a>}
                   {l.phone && <a href={`tel:${digits(l.phone)}`} title="Call"
+                    onClick={() => logAction("call", l, me && me.id)}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
                     <Phone size={13} color={T.inkSoft} /></a>}
                 </span>
