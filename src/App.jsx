@@ -620,19 +620,21 @@ function AdminDash({ go }) {
 /* ============================ 2 AGENT DASHBOARD ========================== */
 function AgentDash({ go, user, openLead }) {
   const [rows, setRows] = useState(null);
+  const [acts, setActs] = useState([]);
   const [err, setErr] = useState("");
   const [modal, setModal] = useState(null); // 'target' | 'focus'
+  const TARGET = 4; // monthly deals target (placeholder until a manager sets a real one)
   useEffect(() => {
     (async () => {
       const { data: { user: au } } = await supabase.auth.getUser();
-      const { data, error } = await supabase.from("leads")
-        .select("id, client_name, phone, project, area, budget, status, temperature, next_followup, last_contacted, is_open, assigned_agent, created_by")
-        .limit(2000);
-      if (error) { setErr("Unable to load your leads. Please try again or contact admin."); setRows([]); return; }
       const uid = au?.id;
-      // "mine" = leads actually assigned to or created by this agent (RLS also returns the open pool; exclude that here)
-      const mine = (data || []).filter((l) => l.assigned_agent === uid || l.created_by === uid);
-      setRows(mine);
+      const [lr, ar] = await Promise.all([
+        supabase.from("leads").select("id, client_name, phone, project, area, budget, status, temperature, next_followup, last_contacted, is_open, assigned_agent, current_owner, created_by, deal_value, commission_value").limit(2000),
+        supabase.from("lead_activity").select("action, created_at").eq("actor_id", uid).order("created_at", { ascending: false }).limit(400),
+      ]);
+      if (lr.error) { setErr("Unable to load your dashboard. Please try again or contact admin."); setRows([]); return; }
+      const mine = (lr.data || []).filter((l) => l.assigned_agent === uid || l.current_owner === uid || l.created_by === uid);
+      setRows(mine); setActs(ar.data || []);
     })();
   }, []);
 
@@ -643,33 +645,52 @@ function AgentDash({ go, user, openLead }) {
   const hot = mine.filter((l) => l.temperature === "Hot" || l.temperature === "Very Hot");
   const closedWon = mine.filter((l) => l.status === "Closed Won");
   const notContacted = mine.filter((l) => !l.last_contacted && l.status !== "Closed Won" && l.status !== "Closed Lost");
+  const active = mine.filter((l) => l.status !== "Closed Won" && l.status !== "Closed Lost");
+  const conv = mine.length ? Math.round(closedWon.length / mine.length * 100) : 0;
+  const commission = closedWon.reduce((s, l) => s + (Number(l.commission_value) || 0), 0);
 
-  const Card = ({ label, value, sub, tone, onClick }) => (
-    <button onClick={onClick} style={{ ...card, padding: "16px 18px", textAlign: "left", cursor: "pointer",
+  // real follow-up streak: consecutive days (ending today/yesterday) with >=1 logged action
+  const days = new Set(acts.map((a) => { try { return new Date(a.created_at).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return ""; } }));
+  let streak = 0; { let d = new Date();
+    for (let i = 0; i < 60; i++) { const ds = d.toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+      if (days.has(ds)) streak++; else if (i > 0) break; else if (!days.has(ds)) { /* allow today empty */ } d.setDate(d.getDate() - 1); } }
+
+  const pct = Math.min(100, Math.round(closedWon.length / TARGET * 100));
+  const topHot = hot[0];
+
+  // circular progress ring
+  const R = 46, C = 2 * Math.PI * R, off = C * (1 - pct / 100);
+  const Ring = () => (
+    <svg width="116" height="116" viewBox="0 0 116 116">
+      <circle cx="58" cy="58" r={R} fill="none" stroke={T.hairSoft} strokeWidth="10" />
+      <circle cx="58" cy="58" r={R} fill="none" stroke={T.gold} strokeWidth="10" strokeLinecap="round"
+        strokeDasharray={C} strokeDashoffset={off} transform="rotate(-90 58 58)" />
+      <text x="58" y="54" textAnchor="middle" fontFamily={DISPLAY} fontSize="26" fill={T.ink}>{pct}%</text>
+      <text x="58" y="72" textAnchor="middle" fontSize="9.5" fill={T.muted} style={{ letterSpacing: ".1em" }}>OF TARGET</text>
+    </svg>
+  );
+
+  const Stat = ({ label, value, sub, tone, onClick }) => (
+    <button onClick={onClick} style={{ ...card, padding: "15px 17px", textAlign: "left", cursor: "pointer",
       border: `1px solid ${T.hair}`, background: T.paper, fontFamily: UI }}>
       <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>{label}</div>
-      <div style={{ fontFamily: DISPLAY, fontSize: 28, marginTop: 6, color: tone === "gold" ? T.gold : tone === "bad" ? T.bad : T.ink }}>{value}</div>
-      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
-        {sub} <ChevronRight size={12} color={T.gold} /></div>
+      <div style={{ fontFamily: DISPLAY, fontSize: 27, marginTop: 5, color: tone === "gold" ? T.gold : tone === "bad" ? T.bad : T.ink }}>{value}</div>
+      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>{sub} <ChevronRight size={12} color={T.gold} /></div>
     </button>
   );
 
   return <div>
-    {/* greeting banner — real name + Dubai time */}
+    {/* greeting banner */}
     <div style={{ ...card, padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
       flexWrap: "wrap", gap: 14, background: T.hero, border: "none", boxShadow: T.shadowLg }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
         <Av name={user?.name || "Agent"} size={46} />
         <div>
-          <div style={{ fontFamily: DISPLAY, fontSize: 19, color: "#fff" }}>{greetWord(h)}, {firstName(user?.name)}</div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 20, color: "#fff" }}>{greetWord(h)}, {firstName(user?.name)} 👋</div>
           <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)" }}>
             {new Date().toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", weekday: "long", day: "numeric", month: "long" })}
             {mine.length ? ` · ${dueToday.length} follow-up${dueToday.length === 1 ? "" : "s"} due` : ""}</div>
         </div>
-      </div>
-      <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "rgba(255,255,255,.5)" }}>My role</div>
-        <div style={{ fontFamily: DISPLAY, fontSize: 20, color: T.goldBright }}>{user?.roleLabel || "Agent"}</div>
       </div>
     </div>
 
@@ -678,12 +699,47 @@ function AgentDash({ go, user, openLead }) {
     {rows === null ? (
       <div style={{ ...card, padding: 40, marginTop: 14, textAlign: "center", color: T.muted }}>Loading your dashboard…</div>
     ) : (<>
+      {/* streak + plan my day */}
+      <div style={{ display: "flex", gap: 12, marginTop: 14, flexWrap: "wrap" }}>
+        <div style={{ ...card, padding: "14px 18px", display: "flex", alignItems: "center", gap: 11, flex: "1 1 200px" }}>
+          <Flame size={22} color={streak > 0 ? T.gold : T.faint} />
+          <div><div style={{ fontFamily: DISPLAY, fontSize: 18 }}>{streak > 0 ? `${streak} day${streak === 1 ? "" : "s"}` : "Start today"}</div>
+            <div style={{ fontSize: 10.5, color: T.muted, letterSpacing: ".08em", textTransform: "uppercase" }}>Follow-up streak</div></div>
+        </div>
+        <button onClick={() => setModal("focus")} style={{ flex: "1 1 200px", background: T.btnBg, color: T.btnFg, border: "none",
+          borderRadius: 14, padding: "14px 18px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI,
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Sparkle size={17} /> Plan my day</button>
+      </div>
+
+      {/* target ring + this-month gradient card */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 14, marginTop: 14 }}>
+        <div style={{ ...card, padding: 18, display: "flex", alignItems: "center", gap: 16 }}>
+          <Ring />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>Monthly target</div>
+            <div style={{ fontFamily: DISPLAY, fontSize: 20, marginTop: 3 }}>{closedWon.length} <span style={{ color: T.muted, fontSize: 14 }}>/ {TARGET} deals</span></div>
+            <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4, lineHeight: 1.4 }}>
+              {closedWon.length >= TARGET ? "Target smashed — keep going! 🎉" : `${TARGET - closedWon.length} more to hit your goal.`}</div>
+            <button onClick={() => setModal("target")} style={{ ...miniBtn(), marginTop: 8, padding: "5px 10px", fontSize: 11 }}>Details</button>
+          </div>
+        </div>
+        <div style={{ borderRadius: 16, padding: 20, background: `linear-gradient(135deg, ${T.gold}, ${T.goldBright})`, color: "#fff", boxShadow: T.shadowLg }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", opacity: .85 }}>
+            <Wallet size={14} /> {commission > 0 ? "Commission this month" : "This month"}</div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 30, marginTop: 8 }}>
+            {commission > 0 ? "AED " + Math.round(commission).toLocaleString() : closedWon.length + (closedWon.length === 1 ? " deal won" : " deals won")}</div>
+          <div style={{ fontSize: 12, opacity: .9, marginTop: 4 }}>{active.length} active · {hot.length} hot in your pipeline</div>
+          {topHot && <div style={{ marginTop: 12, background: "rgba(255,255,255,.16)", borderRadius: 10, padding: "9px 12px", fontSize: 12, lineHeight: 1.45 }}>
+            💡 Close <b>{topHot.client_name}</b>{topHot.project ? ` (${topHot.project})` : ""} to move toward your target.</div>}
+        </div>
+      </div>
+
+      {/* quick stats */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginTop: 14 }}>
-        <Card label="My Leads" value={mine.length} sub="view all" onClick={() => go("live")} />
-        <Card label="Due Today" value={dueToday.length} sub={dueToday.length ? "follow up now" : "all clear"} tone={dueToday.length ? "bad" : null} onClick={() => go("live", { type: "due", label: "Due today" })} />
-        <Card label="Hot Leads" value={hot.length} sub="prioritise" tone="gold" onClick={() => go("live", { type: "hot", label: "Hot & Very Hot" })} />
-        <Card label="Monthly Target" value={closedWon.length + " won"} sub="see progress" onClick={() => setModal("target")} />
-        <Card label="Today's Focus" value={dueToday.length + notContacted.length} sub="my tasks" onClick={() => setModal("focus")} />
+        <Stat label="My Leads" value={mine.length} sub="view all" onClick={() => go("live")} />
+        <Stat label="Due Today" value={dueToday.length} sub={dueToday.length ? "follow up now" : "all clear"} tone={dueToday.length ? "bad" : null} onClick={() => go("live", { type: "due", label: "Due today" })} />
+        <Stat label="Hot Leads" value={hot.length} sub="prioritise" tone="gold" onClick={() => go("live", { type: "hot", label: "Hot & Very Hot" })} />
+        <Stat label="Conversion" value={conv + "%"} sub="won / total" onClick={() => setModal("target")} />
       </div>
 
       {mine.length === 0 ? (
@@ -723,20 +779,23 @@ function AgentDash({ go, user, openLead }) {
             </div>
           ))}
         </div>
+        <div style={{ fontSize: 11, color: T.faint, marginTop: 10 }}>The full team leaderboard lives on the manager dashboard. Here you see your own progress only.</div>
       </>)}
     </>)}
 
-    {modal === "target" && <Modal title="Monthly target" onClose={() => setModal(null)}>
+    {modal === "target" && <Modal title="My month" onClose={() => setModal(null)}>
       <div style={{ display: "grid", gap: 10 }}>
         <Row k="Closed won (this month)" v={closedWon.length} />
-        <Row k="Active leads" v={mine.filter((l) => l.status !== "Closed Won" && l.status !== "Closed Lost").length} />
+        <Row k="Monthly target" v={TARGET + " deals"} />
+        <Row k="Active leads" v={active.length} />
         <Row k="Hot / Very hot" v={hot.length} />
-        <Row k="Pipeline (count)" v={mine.length} />
+        <Row k="Conversion" v={conv + "%"} />
+        {commission > 0 && <Row k="Commission (won)" v={"AED " + Math.round(commission).toLocaleString()} />}
       </div>
       <div style={{ fontSize: 11.5, color: T.faint, marginTop: 12, lineHeight: 1.5 }}>
-        Monetary targets and commission tracking connect here once your manager sets your monthly target.</div>
+        Your monthly target is a default for now — ask your manager to set your real target and commission tracking will appear here.</div>
     </Modal>}
-    {modal === "focus" && <Modal title="Today's focus" onClose={() => setModal(null)}>
+    {modal === "focus" && <Modal title="Plan my day" onClose={() => setModal(null)}>
       <FocusList title="Follow-ups due" items={dueToday} go={go} onClose={() => setModal(null)} />
       <FocusList title="Not yet contacted" items={notContacted} go={go} onClose={() => setModal(null)} />
       {dueToday.length + notContacted.length === 0 && <div style={{ color: T.muted, fontSize: 13, textAlign: "center", padding: 16 }}>Nothing urgent right now. 🎉</div>}
