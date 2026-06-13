@@ -103,6 +103,10 @@ const THEME_CSS = `
 `;
 const DISPLAY = "'Plus Jakarta Sans', system-ui, sans-serif";
 const UI = "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif";
+const dubaiHour = () => { try { return parseInt(new Date().toLocaleString("en-US", { timeZone: "Asia/Dubai", hour: "2-digit", hour12: false }), 10) % 24; } catch (e) { return new Date().getHours(); } };
+const greetWord = (h) => h >= 5 && h < 12 ? "Good morning" : h >= 12 && h < 17 ? "Good afternoon" : h >= 17 && h < 22 ? "Good evening" : "Good night";
+const dubaiToday = () => { try { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return new Date().toISOString().slice(0,10); } };
+const firstName = (n) => (n || "there").trim().split(/\s+/)[0];
 
 /* ================================ MOCK DATA ============================== */
 const AGENTS = [
@@ -201,6 +205,15 @@ const NAV = [
   ["settings", "Settings & Permissions", Settings],
 ];
 
+// Role-aware screen titles: agents see friendly labels, not "Leads (Live)" / DB wording.
+function screenLabel(screen, user) {
+  const isAgent = user && user.role === "agent";
+  if (screen === "live") return isAgent ? "My Leads" : "Leads (Live)";
+  if (screen === "agent") return isAgent ? "My Dashboard" : "Agent Dashboard";
+  const n = NAV.find(([k]) => k === screen);
+  return n ? n[1] : "";
+}
+
 /* ================================= SHELL ================================= */
 export default function App() {
   const [screen, setScreen] = useState("admin");
@@ -249,7 +262,7 @@ export default function App() {
     }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} />, lead: <LeadDetail />, open: <OpenLeads />,
+    live: <LiveLeads user={user} filter={filter} go={go} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} />, lead: <LeadDetail />, open: <OpenLeads />,
     assign: <Assignment />, pipeline: <Pipeline go={go} />, performance: <Performance />,
     security: <SecurityLog />, matching: <Matching go={go} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -273,7 +286,8 @@ export default function App() {
             <div style={{ fontFamily: DISPLAY, fontSize: 10.5, letterSpacing: ".42em", color: T.goldBright, marginTop: 3, fontWeight: 400 }}>LEAD DESK</div>
           </div>
           <nav style={{ flex: 1, overflowY: "auto", padding: "12px 10px" }}>
-            {NAV.filter(([k]) => user && canOpen(user.role, k)).map(([k, label, Ic]) => {
+            {NAV.filter(([k]) => user && canOpen(user.role, k)).map(([k, label0, Ic]) => {
+              const label = screenLabel(k, user);
               const on = screen === k;
               return (
                 <button key={k} onClick={() => go(k)} style={{ display: "flex", alignItems: "center", gap: 11,
@@ -309,7 +323,7 @@ export default function App() {
               borderRadius: 9, width: 36, height: 36, display: "grid", placeItems: "center", cursor: "pointer" }}><Menu size={18} /></button>}
             <div>
               <div style={{ fontFamily: DISPLAY, fontSize: narrow ? 16 : 19, letterSpacing: ".02em" }}>
-                {NAV.find(([k]) => k === screen)[1]}</div>
+                {screenLabel(screen, user)}</div>
               <div style={{ fontSize: 11, color: T.muted, letterSpacing: ".14em", textTransform: "uppercase" }}>Amber Homes Real Estate · Dubai</div>
             </div>
           </div>
@@ -498,64 +512,141 @@ function AdminDash({ go }) {
 }
 
 /* ============================ 2 AGENT DASHBOARD ========================== */
-function AgentDash({ go }) {
+function AgentDash({ go, user }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+  const [modal, setModal] = useState(null); // 'target' | 'focus'
+  useEffect(() => {
+    (async () => {
+      const { data: { user: au } } = await supabase.auth.getUser();
+      const { data, error } = await supabase.from("leads")
+        .select("id, client_name, phone, project, area, budget, status, temperature, next_followup, last_contacted, is_open, assigned_agent, created_by")
+        .limit(2000);
+      if (error) { setErr("Unable to load your leads. Please try again or contact admin."); setRows([]); return; }
+      const uid = au?.id;
+      // "mine" = leads actually assigned to or created by this agent (RLS also returns the open pool; exclude that here)
+      const mine = (data || []).filter((l) => l.assigned_agent === uid || l.created_by === uid);
+      setRows(mine);
+    })();
+  }, []);
+
+  const h = dubaiHour();
+  const today = dubaiToday();
+  const mine = rows || [];
+  const dueToday = mine.filter((l) => l.next_followup && l.next_followup <= today && l.status !== "Closed Won" && l.status !== "Closed Lost");
+  const hot = mine.filter((l) => l.temperature === "Hot" || l.temperature === "Very Hot");
+  const closedWon = mine.filter((l) => l.status === "Closed Won");
+  const notContacted = mine.filter((l) => !l.last_contacted && l.status !== "Closed Won" && l.status !== "Closed Lost");
+
+  const Card = ({ label, value, sub, tone, onClick }) => (
+    <button onClick={onClick} style={{ ...card, padding: "16px 18px", textAlign: "left", cursor: "pointer",
+      border: `1px solid ${T.hair}`, background: T.paper, fontFamily: UI }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>{label}</div>
+      <div style={{ fontFamily: DISPLAY, fontSize: 28, marginTop: 6, color: tone === "gold" ? T.gold : tone === "bad" ? T.bad : T.ink }}>{value}</div>
+      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
+        {sub} <ChevronRight size={12} color={T.gold} /></div>
+    </button>
+  );
+
   return <div>
+    {/* greeting banner — real name + Dubai time */}
     <div style={{ ...card, padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
       flexWrap: "wrap", gap: 14, background: T.hero, border: "none", boxShadow: T.shadowLg }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <Av name="Derya Altun" size={46} />
+        <Av name={user?.name || "Agent"} size={46} />
         <div>
-          <div style={{ fontFamily: DISPLAY, fontSize: 19, color: "#fff" }}>Good morning, Derya</div>
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)" }}>Thursday 11 June · 3 follow-ups due · 1 site visit</div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 19, color: "#fff" }}>{greetWord(h)}, {firstName(user?.name)}</div>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)" }}>
+            {new Date().toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", weekday: "long", day: "numeric", month: "long" })}
+            {mine.length ? ` · ${dueToday.length} follow-up${dueToday.length === 1 ? "" : "s"} due` : ""}</div>
         </div>
       </div>
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "rgba(255,255,255,.5)" }}>Commission estimate</div>
-        <div style={{ fontFamily: DISPLAY, fontSize: 24, color: T.goldBright }}>AED 240,500</div>
+        <div style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "rgba(255,255,255,.5)" }}>My role</div>
+        <div style={{ fontFamily: DISPLAY, fontSize: 20, color: T.goldBright }}>{user?.roleLabel || "Agent"}</div>
       </div>
     </div>
 
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginTop: 14 }}>
-      <Kpi label="My Leads" value="34" />
-      <Kpi label="Due Today" value="3" sub="1 overdue" trend="down" />
-      <Kpi label="Hot Leads" value="6" gold />
-      <Kpi label="Monthly Target" value="71%" sub="AED 8.5M of 12M" trend="up" />
-    </div>
+    {err && <div style={{ ...card, padding: 14, marginTop: 14, borderColor: T.badSoft, color: T.bad, fontSize: 13 }}>{err}</div>}
 
-    <SectionTitle>Today's focus</SectionTitle>
-    <div style={{ display: "grid", gap: 10 }}>
-      {LEADS.filter((l) => l.agent === "Derya Altun").map((l) => (
-        <div key={l.id} onClick={() => go("lead")} style={{ ...card, padding: "14px 16px", cursor: "pointer",
-          display: "flex", alignItems: "center", gap: 13, flexWrap: "wrap" }}>
-          <Av name={l.name} />
-          <div style={{ flex: 1, minWidth: 160 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>{l.name}</span><TempTag t={l.temp} /></div>
-            <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{l.area} · {l.ptype} · {l.budget}</div>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <Chip tone="info">{l.status}</Chip>
-            <div style={{ fontSize: 11.5, color: l.next === "Today" || (l.next || "").includes("Today") ? T.bad : T.muted, marginTop: 5,
-              display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}><Clock size={12} /> {l.next}</div>
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {[Phone, MessageCircle, Mail].map((Ic, i) => (
-              <button key={i} onClick={(e) => e.stopPropagation()} style={{ width: 32, height: 32, borderRadius: 9,
-                border: `1px solid ${T.hair}`, background: i === 1 ? T.okSoft : T.paper, display: "grid",
-                placeItems: "center", cursor: "pointer" }}><Ic size={14} color={i === 1 ? T.ok : T.inkSoft} /></button>
-            ))}
-          </div>
+    {rows === null ? (
+      <div style={{ ...card, padding: 40, marginTop: 14, textAlign: "center", color: T.muted }}>Loading your dashboard…</div>
+    ) : (<>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginTop: 14 }}>
+        <Card label="My Leads" value={mine.length} sub="view all" onClick={() => go("live")} />
+        <Card label="Due Today" value={dueToday.length} sub={dueToday.length ? "follow up now" : "all clear"} tone={dueToday.length ? "bad" : null} onClick={() => go("live", { type: "due", label: "Due today" })} />
+        <Card label="Hot Leads" value={hot.length} sub="prioritise" tone="gold" onClick={() => go("live", { type: "hot", label: "Hot & Very Hot" })} />
+        <Card label="Monthly Target" value={closedWon.length + " won"} sub="see progress" onClick={() => setModal("target")} />
+        <Card label="Today's Focus" value={dueToday.length + notContacted.length} sub="my tasks" onClick={() => setModal("focus")} />
+      </div>
+
+      {mine.length === 0 ? (
+        <div style={{ ...card, padding: 44, marginTop: 18, textAlign: "center" }}>
+          <UserCircle size={28} color={T.faint} style={{ marginBottom: 10 }} />
+          <div style={{ fontWeight: 700, fontSize: 15 }}>No leads assigned yet</div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, maxWidth: 340, marginInline: "auto", lineHeight: 1.5 }}>
+            When your manager assigns leads to you — or you add your own — they'll appear here and in My Leads.</div>
+          <button onClick={() => go("live")} style={{ marginTop: 14, background: T.btnBg, color: T.btnFg, border: "none",
+            borderRadius: 10, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Go to My Leads</button>
         </div>
-      ))}
-    </div>
+      ) : (<>
+        <SectionTitle right={<button onClick={() => go("live")} style={{ background: "none", border: "none", color: T.gold,
+          fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: UI, display: "flex", alignItems: "center", gap: 3 }}>
+          All my leads <ChevronRight size={13} /></button>}>Today's focus</SectionTitle>
+        <div style={{ display: "grid", gap: 10 }}>
+          {(dueToday.length ? dueToday : mine).slice(0, 5).map((l) => (
+            <div key={l.id} style={{ ...card, padding: "13px 15px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <Av name={l.client_name} />
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{l.client_name}</span>
+                  {(l.temperature === "Hot" || l.temperature === "Very Hot") && <Chip tone="bad">{l.temperature}</Chip>}
+                </div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{[l.area, l.project, l.budget].filter(Boolean).join(" · ") || "—"}</div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {l.phone && <a href={`https://wa.me/${String(l.phone).replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
+                  style={{ width: 34, height: 34, borderRadius: 9, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
+                  <MessageCircle size={15} color={T.ok} /></a>}
+                {l.phone && <a href={`tel:${String(l.phone).replace(/\D/g, "")}`}
+                  style={{ width: 34, height: 34, borderRadius: 9, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
+                  <Phone size={14} color={T.inkSoft} /></a>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </>)}
+    </>)}
 
-    <SectionTitle>My week</SectionTitle>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
-      <Kpi label="Conversion" value="18%" sub="team avg 13%" trend="up" />
-      <Kpi label="Avg response" value="11 min" sub="target 30 min" trend="up" />
-      <Kpi label="Missed follow-ups" value="1" sub="this week" />
-      <Kpi label="Site visits" value="2" sub="1 today, 4:30 PM" />
-    </div>
+    {modal === "target" && <Modal title="Monthly target" onClose={() => setModal(null)}>
+      <div style={{ display: "grid", gap: 10 }}>
+        <Row k="Closed won (this month)" v={closedWon.length} />
+        <Row k="Active leads" v={mine.filter((l) => l.status !== "Closed Won" && l.status !== "Closed Lost").length} />
+        <Row k="Hot / Very hot" v={hot.length} />
+        <Row k="Pipeline (count)" v={mine.length} />
+      </div>
+      <div style={{ fontSize: 11.5, color: T.faint, marginTop: 12, lineHeight: 1.5 }}>
+        Monetary targets and commission tracking connect here once your manager sets your monthly target.</div>
+    </Modal>}
+    {modal === "focus" && <Modal title="Today's focus" onClose={() => setModal(null)}>
+      <FocusList title="Follow-ups due" items={dueToday} go={go} onClose={() => setModal(null)} />
+      <FocusList title="Not yet contacted" items={notContacted} go={go} onClose={() => setModal(null)} />
+      {dueToday.length + notContacted.length === 0 && <div style={{ color: T.muted, fontSize: 13, textAlign: "center", padding: 16 }}>Nothing urgent right now. 🎉</div>}
+    </Modal>}
+  </div>;
+}
+function FocusList({ title, items, go, onClose }) {
+  if (!items.length) return null;
+  return <div style={{ marginBottom: 12 }}>
+    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted, marginBottom: 6 }}>{title} · {items.length}</div>
+    {items.slice(0, 6).map((l) => (
+      <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 0", borderBottom: `1px solid ${T.hairSoft}` }}>
+        <Av name={l.client_name} size={26} />
+        <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{l.client_name}</span>
+        {l.phone && <a href={`https://wa.me/${String(l.phone).replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
+          style={{ fontSize: 11.5, color: T.ok, fontWeight: 700, textDecoration: "none" }}>WhatsApp</a>}
+      </div>
+    ))}
   </div>;
 }
 
@@ -1395,9 +1486,11 @@ function LoginFlow({ onLogin, dark, setDark }) {
 
 /* ===================== LIVE LEADS (real Supabase data) ==================== */
 function LiveLeads({ user, filter, go }) {
+  const isAgent = user && user.role === "agent";
   const [leads, setLeads] = useState(null);   // null = loading
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
+  const [tab, setTab] = useState("all");
   const [revealed, setRevealed] = useState({});
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -1408,17 +1501,21 @@ function LiveLeads({ user, filter, go }) {
     const { data: { user: au } } = await supabase.auth.getUser();
     setMe(au);
     const { data, error } = await supabase.from("leads")
-      .select("id, lead_code, client_name, phone, email, project, area, assigned_agent_name, status, temperature, is_open, created_on")
-      .order("created_on", { ascending: false }).limit(1000);
-    if (error) { setErr(error.message); setLeads([]); return; }
-    setLeads(data || []);
+      .select("id, lead_code, client_name, phone, email, project, area, budget, assigned_agent_name, assigned_agent, current_owner, created_by, status, temperature, is_open, next_followup, last_contacted, created_on")
+      .order("created_on", { ascending: false }).limit(2000);
+    if (error) { setErr(isAgent ? "Unable to load your leads. Please try again or contact admin." : ("Couldn't load leads: " + error.message)); setLeads([]); return; }
+    let rows = data || [];
+    // Agents: show only leads actually assigned to or created by them (RLS also returns the open pool — exclude that here).
+    if (isAgent && au) rows = rows.filter((l) => l.assigned_agent === au.id || l.current_owner === au.id || l.created_by === au.id);
+    setLeads(rows);
   };
   useEffect(() => { load(); }, []);
 
+  const today = dubaiToday();
   const maskPhone = (p) => { if (!p) return "—"; const s = String(p); return s.slice(0, 5) + " ••• " + s.slice(-2); };
+  const digits = (p) => String(p || "").replace(/\D/g, "");
   const reveal = async (l) => {
     setRevealed((r) => ({ ...r, [l.id]: true }));
-    // log the reveal to the immutable audit trail
     if (me) supabase.from("lead_activity").insert({ lead_id: l.id, actor_id: me.id, action: "reveal_phone",
       detail: { lead_code: l.lead_code } }).then(() => {});
   };
@@ -1432,71 +1529,123 @@ function LiveLeads({ user, filter, go }) {
       case "open":       return l.is_open === true;
       case "source":     return (l.source || "Unknown") === filter.value;
       case "agent":      return (l.assigned_agent_name || "Unassigned") === filter.value;
+      case "hot":        return l.temperature === "Hot" || l.temperature === "Very Hot";
+      case "due":        return l.next_followup && l.next_followup <= today && l.status !== "Closed Won" && l.status !== "Closed Lost";
+      case "overdue":    return l.next_followup && l.next_followup < today && l.status !== "Closed Won" && l.status !== "Closed Lost";
       default:           return true;
     }
   };
-  const filtered = (leads || []).filter(matchFilter).filter((l) => {
+  const TABS = ["all", "New", "Hot", "Very Hot", "Warm", "Cold", "Follow-up due", "Overdue", "Closed Won", "Closed Lost"];
+  const matchTab = (l) => {
+    switch (tab) {
+      case "all": return true;
+      case "Follow-up due": return l.next_followup && l.next_followup <= today && l.status !== "Closed Won" && l.status !== "Closed Lost";
+      case "Overdue": return l.next_followup && l.next_followup < today && l.status !== "Closed Won" && l.status !== "Closed Lost";
+      case "Hot": case "Very Hot": case "Warm": case "Cold": return l.temperature === tab;
+      default: return l.status === tab;
+    }
+  };
+  const filtered = (leads || []).filter(matchFilter).filter(matchTab).filter((l) => {
     if (!q.trim()) return true;
     const s = q.toLowerCase();
-    return [l.client_name, l.project, l.area, l.assigned_agent_name, l.lead_code, l.status]
-      .some((v) => (v || "").toLowerCase().includes(s));
+    return [l.client_name, l.project, l.area, l.assigned_agent_name, l.lead_code, l.status].some((v) => (v || "").toLowerCase().includes(s));
   });
 
   return <div>
     {filter && go && (
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-        <button onClick={() => go("admin")} style={{ ...miniBtn() }}>← Dashboard</button>
-        <span style={{ fontSize: 12.5, color: T.muted }}>Dashboard <span style={{ color: T.faint }}>›</span> Leads <span style={{ color: T.faint }}>›</span> <b style={{ color: T.ink }}>{filter.label}</b></span>
+        <button onClick={() => go(isAgent ? "agent" : "admin")} style={{ ...miniBtn() }}>← {isAgent ? "Dashboard" : "Dashboard"}</button>
+        <span style={{ fontSize: 12.5, color: T.muted }}>{isAgent ? "My Dashboard" : "Dashboard"} <span style={{ color: T.faint }}>›</span> {isAgent ? "My Leads" : "Leads"} <span style={{ color: T.faint }}>›</span> <b style={{ color: T.ink }}>{filter.label}</b></span>
         <span style={{ background: T.goldSoft, color: T.gold, borderRadius: 8, padding: "3px 10px", fontSize: 11.5, fontWeight: 700 }}>
           {filtered.length} {filtered.length === 1 ? "lead" : "leads"}</span>
       </div>
     )}
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok,
-          borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}>
-          <span style={{ width: 7, height: 7, borderRadius: 7, background: T.ok }} /> LIVE DATABASE</span>
-        <span style={{ fontSize: 12.5, color: T.muted }}>
-          {leads === null ? "Loading…" : `${leads.length} leads in Supabase`}</span>
+        {isAgent ? (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.goldSoft, color: T.gold,
+            borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}>
+            <UserCircle size={12} /> {leads === null ? "Loading…" : `${leads.length} ${leads.length === 1 ? "lead" : "leads"}`}</span>
+        ) : (<>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok,
+            borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}>
+            <span style={{ width: 7, height: 7, borderRadius: 7, background: T.ok }} /> LIVE DATABASE</span>
+          <span style={{ fontSize: 12.5, color: T.muted }}>{leads === null ? "Loading…" : `${leads.length} leads`}</span>
+        </>)}
       </div>
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={load} style={{ ...miniBtn() }}><RefreshCw size={13} /> Refresh</button>
-        <button onClick={() => setShowImport(true)} style={{ ...miniBtn() }}><Upload size={13} /> Import file</button>
+        {!isAgent && <button onClick={() => setShowImport(true)} style={{ ...miniBtn() }}><Upload size={13} /> Import file</button>}
         <button onClick={() => setShowAdd(true)} style={{ background: T.btnBg, color: T.btnFg, border: "none",
           borderRadius: 9, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
           display: "inline-flex", alignItems: "center", gap: 6 }}><Plus size={14} /> Add lead</button>
       </div>
     </div>
 
-    {err && <div style={{ ...card, padding: 14, marginTop: 14, borderColor: T.badSoft, color: T.bad, fontSize: 13 }}>
-      Couldn't load leads: {err}</div>}
+    {err && <div style={{ ...card, padding: 14, marginTop: 14, borderColor: T.badSoft, color: T.bad, fontSize: 13 }}>{err}</div>}
 
     <div style={{ ...card, padding: "10px 14px", marginTop: 14, display: "flex", alignItems: "center", gap: 9 }}>
       <Search size={15} color={T.muted} />
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, project, area, agent…"
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "Search my leads…" : "Search name, project, area, agent…"}
         style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 13, fontFamily: UI, color: T.ink }} />
       {q && <span style={{ fontSize: 11.5, color: T.muted }}>{filtered.length} match</span>}
+    </div>
+
+    {/* status tabs */}
+    <div style={{ display: "flex", gap: 7, marginTop: 12, overflowX: "auto", paddingBottom: 3 }}>
+      {TABS.map((t) => (
+        <button key={t} onClick={() => setTab(t)} style={{ flexShrink: 0, border: `1px solid ${tab === t ? T.gold : T.hair}`,
+          background: tab === t ? T.goldSoft : T.paper, color: tab === t ? T.gold : T.muted, borderRadius: 999,
+          padding: "6px 13px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>
+          {t === "all" ? "All" : t}</button>
+      ))}
     </div>
 
     {leads === null ? (
       <div style={{ ...card, padding: 40, marginTop: 14, textAlign: "center", color: T.muted }}>Loading your leads…</div>
     ) : leads.length === 0 ? (
-      <div style={{ ...card, padding: 40, marginTop: 14, textAlign: "center" }}>
-        <Database size={26} color={T.faint} style={{ marginBottom: 10 }} />
-        <div style={{ fontWeight: 700, fontSize: 15 }}>No leads yet</div>
-        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>
-          Run <b>02_import_leads.sql</b> in Supabase, or use Import file / Add lead above.</div>
+      <div style={{ ...card, padding: 44, marginTop: 14, textAlign: "center" }}>
+        <UserCircle size={26} color={T.faint} style={{ marginBottom: 10 }} />
+        <div style={{ fontWeight: 700, fontSize: 15 }}>{isAgent ? "No leads assigned yet" : "No leads yet"}</div>
+        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, maxWidth: 360, marginInline: "auto", lineHeight: 1.5 }}>
+          {isAgent ? "When your manager assigns leads to you — or you add your own with the button above — they'll appear here."
+                   : "Import a CSV or use Add lead above to get started."}</div>
       </div>
+    ) : filtered.length === 0 ? (
+      <div style={{ ...card, padding: 36, marginTop: 14, textAlign: "center", color: T.muted, fontSize: 13 }}>No leads match this filter.</div>
     ) : (
       <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
         <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: 880 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "0.7fr 1.4fr 1.3fr 1.3fr 1.1fr 1.2fr 0.9fr", gap: 8,
+          <div style={{ minWidth: isAgent ? 820 : 880 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr" : "0.7fr 1.4fr 1.3fr 1.3fr 1.1fr 1.2fr 0.9fr", gap: 8,
               padding: "10px 16px", fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
               color: T.muted, borderBottom: `1px solid ${T.hair}`, background: T.bone }}>
-              <span>Code</span><span>Client</span><span>Project</span><span>Phone</span><span>Area</span><span>Agent</span><span>Status</span>
+              {isAgent ? <><span>Client</span><span>Project</span><span>Budget</span><span>Next follow-up</span><span>Status</span><span>Contact</span></>
+                       : <><span>Code</span><span>Client</span><span>Project</span><span>Phone</span><span>Area</span><span>Agent</span><span>Status</span></>}
             </div>
-            {filtered.map((l, i) => (
+            {filtered.map((l, i) => (isAgent ? (
+              <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr",
+                gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{l.client_name}
+                    {(l.temperature === "Hot" || l.temperature === "Very Hot") && <span style={{ width: 7, height: 7, borderRadius: 7, background: T.bad }} />}</div>
+                  <div style={{ fontSize: 10.5, color: T.faint }}>{l.area || "—"}</div>
+                </div>
+                <span style={{ color: T.inkSoft }}>{l.project || "—"}</span>
+                <span style={{ color: T.inkSoft }}>{l.budget || "—"}</span>
+                <span style={{ color: l.next_followup && l.next_followup < today ? T.bad : T.inkSoft, fontSize: 12 }}>
+                  {l.next_followup || "—"}</span>
+                <Chip tone={l.is_open ? "gold" : l.temperature === "Hot" || l.temperature === "Very Hot" ? "bad" : "info"}>{l.is_open ? "Open" : l.status}</Chip>
+                <span style={{ display: "flex", gap: 6 }}>
+                  {l.phone && <a href={`https://wa.me/${digits(l.phone)}`} target="_blank" rel="noreferrer" title="WhatsApp"
+                    style={{ width: 30, height: 30, borderRadius: 8, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
+                    <MessageCircle size={14} color={T.ok} /></a>}
+                  {l.phone && <a href={`tel:${digits(l.phone)}`} title="Call"
+                    style={{ width: 30, height: 30, borderRadius: 8, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
+                    <Phone size={13} color={T.inkSoft} /></a>}
+                </span>
+              </div>
+            ) : (
               <div key={l.id} style={{ display: "grid", gridTemplateColumns: "0.7fr 1.4fr 1.3fr 1.3fr 1.1fr 1.2fr 0.9fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5 }}>
                 <span style={{ fontWeight: 700, color: T.gold, fontSize: 11 }}>{l.lead_code}</span>
@@ -1512,13 +1661,14 @@ function LiveLeads({ user, filter, go }) {
                 <span>{l.assigned_agent_name || <span style={{ color: T.faint }}>unassigned</span>}</span>
                 <Chip tone={l.is_open ? "gold" : "info"}>{l.is_open ? "Open" : l.status}</Chip>
               </div>
-            ))}
+            )))}
           </div>
         </div>
       </div>
     )}
     <div style={{ fontSize: 11, color: T.faint, marginTop: 10 }}>
-      This screen reads your real Supabase database. Phone reveals are written to the activity log. What each person sees is enforced by row-level security.
+      {isAgent ? "These are your leads only. Tap WhatsApp or call to reach a client directly."
+               : "This screen reads your real database. Phone reveals are written to the activity log. What each person sees is enforced by row-level security."}
     </div>
 
     {showAdd && <AddLeadModal me={me} user={user} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />}
@@ -1737,7 +1887,21 @@ function Modal({ title, children, onClose }) {
 function ProfileMenu({ user, dark, setDark, accent, setAccent, ACCENTS, signOut }) {
   const [open, setOpen] = useState(false);
   const [modal, setModal] = useState(null); // 'profile' | 'settings' | 'password'
+  const [details, setDetails] = useState(null);
   const ini = (user?.name || "S").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  useEffect(() => {
+    if ((modal === "profile" || modal === "settings") && !details && user?.id) {
+      (async () => {
+        const today = dubaiToday();
+        const { data: p } = await supabase.from("profiles").select("phone, department, job_title, last_login, created_at, active, twofa_required").eq("id", user.id).single();
+        const { data: ls } = await supabase.from("leads").select("status, next_followup, assigned_agent, current_owner, created_by").limit(2000);
+        const mine = (ls || []).filter((l) => l.assigned_agent === user.id || l.current_owner === user.id || l.created_by === user.id);
+        setDetails({ ...(p || {}), assigned: mine.length,
+          closed: mine.filter((l) => l.status === "Closed Won").length,
+          due: mine.filter((l) => l.next_followup && l.next_followup <= today && l.status !== "Closed Won" && l.status !== "Closed Lost").length });
+      })();
+    }
+  }, [modal]);
   return <>
     <div style={{ position: "relative" }}>
       <button onClick={() => setOpen(!open)} style={{ width: 36, height: 36, borderRadius: 10, background: T.hero,
@@ -1774,24 +1938,76 @@ function ProfileMenu({ user, dark, setDark, accent, setAccent, ACCENTS, signOut 
       </>}
     </div>
     {modal === "password" && <ChangePasswordModal onClose={() => setModal(null)} />}
-    {modal === "profile" && <Modal title="Profile" onClose={() => setModal(null)}>
-      <Row k="Name" v={user?.name} /><Row k="Email" v={user?.email} /><Row k="Role" v={user?.roleLabel} />
-      <div style={{ fontSize: 12, color: T.muted, marginTop: 10, lineHeight: 1.5 }}>
-        Your name and role are managed by your Master Admin in the user settings.</div>
+    {modal === "profile" && <Modal title="My profile" onClose={() => { setModal(null); }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
+        <Av name={user?.name || "Agent"} size={54} />
+        <div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 18 }}>{user?.name}</div>
+          <span style={{ display: "inline-block", marginTop: 4, fontSize: 10.5, fontWeight: 700, background: T.goldSoft,
+            color: T.gold, borderRadius: 7, padding: "2px 9px" }}>{user?.roleLabel}</span>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
+        {[["Assigned", details?.assigned], ["Closed", details?.closed], ["Due", details?.due]].map(([k, v]) => (
+          <div key={k} style={{ ...card, padding: "10px 8px", textAlign: "center" }}>
+            <div style={{ fontFamily: DISPLAY, fontSize: 22 }}>{details ? (v ?? 0) : "—"}</div>
+            <div style={{ fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: ".06em" }}>{k}</div>
+          </div>))}
+      </div>
+      <Row k="Email" v={user?.email} />
+      <Row k="Phone" v={details?.phone || "—"} />
+      <Row k="Role" v={user?.roleLabel} />
+      <Row k="Department" v={details?.department || "—"} />
+      <Row k="Job title" v={details?.job_title || "—"} />
+      <Row k="Status" v={details?.active === false ? "Inactive" : "Active"} />
+      <Row k="Joined" v={details?.created_at ? new Date(details.created_at).toLocaleDateString() : "—"} />
+      <Row k="Last login" v={details?.last_login ? new Date(details.last_login).toLocaleString() : "—"} />
+      <div style={{ marginTop: 14, fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Preferred theme</div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+        {ACCENTS.map(([k, label, hex]) => (
+          <button key={k} onClick={() => setAccent(k)} style={{ display: "flex", alignItems: "center", gap: 6,
+            border: `1px solid ${accent === k ? T.gold : T.hair}`, background: accent === k ? T.goldSoft : T.paper,
+            borderRadius: 9, padding: "6px 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>
+            <span style={{ width: 12, height: 12, borderRadius: 12, background: hex }} /> {label}</button>))}
+        <button onClick={() => setDark(!dark)} style={{ ...miniBtn() }}>{dark ? "Light mode" : "Dark mode"}</button>
+      </div>
+      <button onClick={() => setModal("password")} style={{ ...miniBtn(), width: "100%", justifyContent: "center", marginTop: 14 }}>
+        <Lock size={13} /> Change password</button>
+      <div style={{ fontSize: 11, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>
+        To update your name, phone, role or team, contact your administrator.</div>
     </Modal>}
     {modal === "settings" && <Modal title="Settings" onClose={() => setModal(null)}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0" }}>
-        <span style={{ fontSize: 13 }}>Dark mode</span>
-        <button onClick={() => setDark(!dark)} style={{ ...miniBtn() }}>{dark ? "On" : "Off"}</button></div>
-      <div style={{ padding: "10px 0" }}>
-        <div style={{ fontSize: 13, marginBottom: 8 }}>Accent theme</div>
-        <div style={{ display: "flex", gap: 8 }}>{ACCENTS.map(([k, label, hex]) => (
+      <SettingsBlock title="Appearance">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0" }}>
+          <span style={{ fontSize: 13 }}>Dark mode</span>
+          <button onClick={() => setDark(!dark)} style={{ ...miniBtn() }}>{dark ? "On" : "Off"}</button></div>
+        <div style={{ fontSize: 12.5, marginTop: 8, marginBottom: 8, color: T.muted }}>Accent theme</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{ACCENTS.map(([k, label, hex]) => (
           <button key={k} onClick={() => setAccent(k)} style={{ display: "flex", alignItems: "center", gap: 6,
             border: `1px solid ${accent === k ? T.gold : T.hair}`, background: accent === k ? T.goldSoft : T.paper,
             borderRadius: 9, padding: "6px 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>
             <span style={{ width: 12, height: 12, borderRadius: 12, background: hex }} /> {label}</button>))}</div>
-      </div>
-      <div style={{ fontSize: 11.5, color: T.faint, marginTop: 10 }}>More settings (notifications, security) arrive as those modules go live.</div>
+      </SettingsBlock>
+      <SettingsBlock title="Security">
+        <button onClick={() => setModal("password")} style={{ ...miniBtn(), width: "100%", justifyContent: "center" }}>
+          <Lock size={13} /> Change password</button>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0 2px" }}>
+          <span style={{ fontSize: 13 }}>Two-factor authentication</span>
+          <Chip tone={details?.twofa_required ? "gold" : "muted"}>{details?.twofa_required ? "Required — set up on device" : "Not enabled"}</Chip></div>
+        <Row k="Last login" v={details?.last_login ? new Date(details.last_login).toLocaleString() : "—"} />
+      </SettingsBlock>
+      <SettingsBlock title="Notifications">
+        {[["New lead assigned", true], ["Follow-up reminders", true], ["Lead reassigned / opened", true]].map(([l, on]) => (
+          <div key={l} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0" }}>
+            <span style={{ fontSize: 12.5 }}>{l}</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: on ? T.ok : T.faint }}>{on ? "On" : "Off"}</span></div>))}
+        <div style={{ fontSize: 10.5, color: T.faint, marginTop: 4 }}>Notification preferences are on by default. Per-channel controls arrive with the alerts module.</div>
+      </SettingsBlock>
+      <SettingsBlock title="Account">
+        <Row k="Name" v={user?.name} /><Row k="Email" v={user?.email} /><Row k="Role" v={user?.roleLabel} />
+      </SettingsBlock>
+      <button onClick={signOut} style={{ width: "100%", background: T.badSoft, color: T.bad, border: `1px solid ${T.bad}`,
+        borderRadius: 10, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: UI, marginTop: 6 }}>Log out</button>
     </Modal>}
   </>;
 }
@@ -1799,25 +2015,39 @@ function menuItem() { return { width: "100%", textAlign: "left", background: "no
   fontSize: 13, color: T.ink, cursor: "pointer", fontFamily: UI, borderRadius: 8 }; }
 function Row({ k, v }) { return <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0",
   borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13 }}><span style={{ color: T.muted }}>{k}</span><b>{v}</b></div>; }
+function SettingsBlock({ title, children }) {
+  return <div style={{ marginBottom: 16 }}>
+    <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: T.gold, marginBottom: 8 }}>{title}</div>
+    <div style={{ ...card, padding: "10px 14px" }}>{children}</div>
+  </div>;
+}
 
 function ChangePasswordModal({ onClose }) {
-  const [pw, setPw] = useState(""); const [pw2, setPw2] = useState("");
-  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState("");
+  const [cur, setCur] = useState(""); const [pw, setPw] = useState(""); const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(""); const [ok, setOk] = useState(false);
   const save = async () => {
-    if (pw.length < 8) { setMsg("Use at least 8 characters."); return; }
-    if (pw !== pw2) { setMsg("Passwords don't match."); return; }
+    if (!cur) { setMsg("Enter your current password."); return; }
+    if (pw.length < 8) { setMsg("New password must be at least 8 characters."); return; }
+    if (pw !== pw2) { setMsg("New passwords don't match."); return; }
     setBusy(true); setMsg("");
+    // verify current password by re-authenticating
+    const { data: { user: au } } = await supabase.auth.getUser();
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email: au.email, password: cur });
+    if (authErr) { setBusy(false); setMsg("Current password is incorrect."); return; }
     const { error } = await supabase.auth.updateUser({ password: pw });
     setBusy(false);
-    setMsg(error ? "Error: " + error.message : "Password updated.");
-    if (!error) setTimeout(onClose, 1200);
+    if (error) { setMsg("Couldn't update password. Please try again."); return; }
+    setOk(true); setMsg("Password updated successfully.");
+    setTimeout(onClose, 1300);
   };
   const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13,
     fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginTop: 5, marginBottom: 10 };
   return <Modal title="Change password" onClose={onClose}>
+    <input type="password" placeholder="Current password" value={cur} onChange={(e) => setCur(e.target.value)} style={inp} />
     <input type="password" placeholder="New password" value={pw} onChange={(e) => setPw(e.target.value)} style={inp} />
     <input type="password" placeholder="Confirm new password" value={pw2} onChange={(e) => setPw2(e.target.value)} style={inp} />
-    {msg && <div style={{ color: msg === "Password updated." ? T.ok : T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{msg}</div>}
+    <div style={{ fontSize: 11, color: T.faint, marginBottom: 10 }}>At least 8 characters. Use a mix of letters, numbers and symbols.</div>
+    {msg && <div style={{ color: ok ? T.ok : T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{msg}</div>}
     <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
       borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>
       {busy ? "Saving…" : "Update password"}</button>

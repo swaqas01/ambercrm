@@ -21,7 +21,7 @@ const SCREEN_ACCESS = {
   master_admin: "ALL",
   admin:        ["admin","live","open","lead","assign","pipeline","performance","security","matching","score","careers","commission","settings"],
   sales_manager:["admin","live","open","lead","assign","pipeline","performance","matching","score","settings"],
-  agent:        ["agent","live","open","lead","settings"],
+  agent:        ["agent","live"],
   marketing:    ["admin","live","open","lead","settings"],
   accounts:     ["admin","commission","lead","settings"],
 };
