@@ -60,6 +60,13 @@ export async function buildCrmContext(user, lead) {
       JSON.stringify({ name: lead.client_name, area: lead.area, project: lead.project, status: lead.status,
         temp: lead.temperature, budget: lead.budget, purpose: lead.purpose, ready_offplan: lead.ready_offplan,
         timeline: lead.timeline, next: lead.next_followup });
+    try {
+      const { data: hd } = await supabase.from("hot_resale_deals")
+        .select("project_name, area, property_type, bedrooms, price, why_hot, agent_name, client_suitability, whatsapp_pitch")
+        .eq("status", "Approved").limit(25);
+      if (hd && hd.length) ctx += "\n\nApproved hot resale deals (shared board — ONLY use these, never invent a deal):\n" +
+        JSON.stringify(hd.map((d) => ({ project: d.project_name, area: d.area, type: d.property_type, beds: d.bedrooms, price: d.price, why: d.why_hot, suitability: d.client_suitability, postedBy: d.agent_name })));
+    } catch (e) {}
     return ctx;
   } catch (e) { return null; }
 }

@@ -56,7 +56,7 @@ export default async function handler(req, res) {
       const id = created.user.id;
       await svc.from("profiles").update({ full_name, role, phone: phone || null, department: department || null,
         job_title: job_title || null, lead_scope: lead_scope || "own", notes: notes || null, created_by: callerId,
-        force_password_change: true, first_login: true, twofa_required: role === "agent" ? true : !!twofa,
+        force_password_change: true, first_login: true, twofa_required: true,
         password_last_changed_at: null, password_expires_at: null, active: status !== "inactive" }).eq("id", id);
       await audit("user_created", id, null, { email, role }, full_name);
       await notify("New user created", `${full_name} (${role}) was added.`, "users");

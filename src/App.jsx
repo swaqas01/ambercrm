@@ -211,6 +211,7 @@ const NAV = [
   ["commission", "Commissions", Coins],
   ["deals", "Deals", Coins],
   ["projects", "Projects", Building2],
+  ["hotdeals", "Hot Resale Deals", Flame],
   ["ailogs", "Ask Amber Logs", Sparkle],
   ["kb", "AI Knowledge Base", BookOpen],
   ["settings", "Settings & Permissions", Settings],
@@ -289,6 +290,7 @@ export default function App() {
     assign: <Assignment />, pipeline: <Pipeline go={go} />, performance: <Performance />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
+    hotdeals: <HotDeals user={user} go={go} />,
   };
   return (
     <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: T.bone, minHeight: 600, display: "flex", color: T.ink,
@@ -678,6 +680,8 @@ function AgentDash({ go, user, openLead }) {
   const [rows, setRows] = useState(null);
   const [acts, setActs] = useState([]);
   const [fups, setFups] = useState([]);
+  const [projAnn, setProjAnn] = useState([]);
+  const [hotDeals, setHotDeals] = useState([]);
   const [err, setErr] = useState("");
   const [modal, setModal] = useState(null); // 'target' | 'focus' | 'plan'
   const [planText, setPlanText] = useState("");
@@ -711,6 +715,22 @@ function AgentDash({ go, user, openLead }) {
           await supabase.from("follow_ups").update({ notified: true }).eq("id", f.id);
         } catch (e) {}
       }
+      // featured project announcements + approved hot-deal teaser
+      const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+      try {
+        const { data: pj } = await supabase.from("projects")
+          .select("name, developer, area, target_client, announcement_text, announcement_priority, announcement_expiry, featured_on_dashboard, agent_visible, deleted")
+          .eq("featured_on_dashboard", true).eq("deleted", false);
+        const feats = (pj || []).filter((p) => p.agent_visible !== false && (!p.announcement_expiry || p.announcement_expiry >= todayStr))
+          .sort((a, b) => (b.announcement_priority || 0) - (a.announcement_priority || 0));
+        setProjAnn(feats);
+      } catch (e) {}
+      try {
+        const { data: hot } = await supabase.from("hot_resale_deals")
+          .select("project_name, area, property_type, bedrooms, agent_name, featured")
+          .eq("status", "Approved").order("featured", { ascending: false }).order("created_at", { ascending: false }).limit(5);
+        setHotDeals(hot || []);
+      } catch (e) {}
     })();
   }, []);
 
@@ -794,18 +814,37 @@ function AgentDash({ go, user, openLead }) {
     finally { setPlanBusy(false); }
   };
 
+  const MOTIVATION = ["Every call counts today — work your hot leads first.", "Follow-ups close deals. Clear your due list early.", "One strong viewing can change your month.", "Speed wins in Dubai — reply fast, book the viewing faster.", "Your pipeline is only as warm as your last call."];
+  const motiv = MOTIVATION[new Date().getDate() % MOTIVATION.length];
+  const projTop = (projAnn || [])[0];
+  const hotTop = (hotDeals || [])[0];
+  const annText = projTop ? (projTop.announcement_text || (projTop.name + " by " + (projTop.developer || "Amber Homes") + " — check the project knowledge before calling your clients."))
+    : hotTop ? ((hotTop.agent_name || "An agent") + " posted a hot resale in " + (hotTop.area || "Dubai") + (hotTop.bedrooms ? " (" + hotTop.bedrooms + " " + hotTop.property_type + ")" : "") + " — do you have a buyer?")
+    : null;
+  const AnnIcon = projTop ? Building2 : Flame;
+  const annGo = projTop ? () => go("projects") : () => go("hotdeals");
+
   return <div>
     {/* greeting banner */}
-    <div style={{ ...card, padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
-      flexWrap: "wrap", gap: 14, background: T.hero, border: "none", boxShadow: T.shadowLg }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <Av name={user?.name || "Agent"} size={46} />
-        <div>
-          <div style={{ fontFamily: DISPLAY, fontSize: 20, color: "#fff" }}>{greetWord(h)}, {firstName(user?.name)} 👋</div>
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)" }}>
-            {new Date().toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", weekday: "long", day: "numeric", month: "long" })}
-            {mine.length ? ` · ${dueToday.length} follow-up${dueToday.length === 1 ? "" : "s"} due` : ""}</div>
+    <div style={{ ...card, padding: "22px 24px", background: T.hero, border: "none", boxShadow: T.shadowLg }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 15, flexWrap: "wrap" }}>
+        <Av name={user?.name || "Agent"} size={52} />
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontFamily: DISPLAY, fontSize: 26, color: "#fff", lineHeight: 1.1 }}>{greetWord(h)}, {firstName(user?.name)}</div>
+          <div style={{ fontSize: 12.5, color: "rgba(255,255,255,.62)", marginTop: 4 }}>{new Date().toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", weekday: "long", day: "numeric", month: "long" })} · Dubai</div>
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,.82)", marginTop: 7 }}>{motiv}</div>
         </div>
+      </div>
+      {annText && <div onClick={annGo} style={{ marginTop: 16, background: "rgba(255,255,255,.10)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 11, cursor: "pointer" }}>
+        <span style={{ width: 30, height: 30, borderRadius: 9, background: "rgba(212,175,92,.22)", display: "grid", placeItems: "center", flexShrink: 0 }}><AnnIcon size={16} color={T.goldBright} /></span>
+        <span style={{ fontSize: 13, color: "#fff", fontWeight: 600, lineHeight: 1.4, flex: 1 }}>{annText}</span>
+        <ChevronRight size={16} color="rgba(255,255,255,.6)" />
+      </div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+        {[["My Leads", Database, () => go("live")], ["Due Today", Clock, () => go("live", { type: "due", label: "Due today" })], ["Ask Amber", Sparkle, () => window.dispatchEvent(new CustomEvent("amber-open"))], ["Projects", Building2, () => go("projects")], ["Hot Deals", Flame, () => go("hotdeals")], ["Plan My Day", Send, runPlan]].map(([label, Ic, fn]) => (
+          <button key={label} onClick={fn} style={{ display: "flex", alignItems: "center", gap: 7, background: "rgba(255,255,255,.10)", border: "1px solid rgba(255,255,255,.16)", color: "#fff", borderRadius: 10, padding: "9px 13px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>
+            <Ic size={14} color={T.goldBright} /> {label}</button>
+        ))}
       </div>
     </div>
 
@@ -821,13 +860,7 @@ function AgentDash({ go, user, openLead }) {
           <div><div style={{ fontFamily: DISPLAY, fontSize: 18 }}>{streak > 0 ? `${streak} day${streak === 1 ? "" : "s"}` : "Start today"}</div>
             <div style={{ fontSize: 10.5, color: T.muted, letterSpacing: ".08em", textTransform: "uppercase" }}>Follow-up streak</div></div>
         </div>
-        <button onClick={runPlan} style={{ flex: "1 1 200px", background: T.btnBg, color: T.btnFg, border: "none",
-          borderRadius: 14, padding: "14px 18px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI,
-          display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Sparkle size={17} /> Plan my day</button>
-        <button onClick={() => go("projects")} style={{ flex: "1 1 160px", background: T.paper, color: T.ink, border: `1px solid ${T.hair}`,
-          borderRadius: 14, padding: "14px 18px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
-          display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Building2 size={16} color={T.gold} /> Project knowledge</button>
-        <button onClick={() => go("deals")} style={{ flex: "1 1 160px", background: T.paper, color: T.ink, border: `1px solid ${T.hair}`,
+        <button onClick={() => go("deals")} style={{ flex: "1 1 200px", background: T.paper, color: T.ink, border: `1px solid ${T.hair}`,
           borderRadius: 14, padding: "14px 18px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
           display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Coins size={16} color={T.gold} /> My closed deals</button>
       </div>
@@ -2273,8 +2306,8 @@ const pInp = { width: "100%", padding: "9px 11px", borderRadius: 9, border: `1px
 function ProjectEditor({ project, user, onSaved, onCancel }) {
   const isNew = project === "new";
   const seed = isNew
-    ? { name: "", developer: "", area: "", property_type: "", starting_price: "", payment_plan: "", handover_date: "", commission_pct: "", unit_types: "", bedroom_options: "", selling_points: "", investment_points: "", risks_notes: "", golden_visa: "", target_client: "", status: "active", launch_date: "", talking_points: "", do_not_say: "", agent_visible: true, review_date: "" }
-    : { ...project, launch_date: project.launch_date || "", review_date: project.review_date || "" };
+    ? { name: "", developer: "", area: "", property_type: "", starting_price: "", payment_plan: "", handover_date: "", commission_pct: "", unit_types: "", bedroom_options: "", selling_points: "", investment_points: "", risks_notes: "", golden_visa: "", target_client: "", status: "active", launch_date: "", talking_points: "", do_not_say: "", agent_visible: true, review_date: "", featured_on_dashboard: false, announcement_text: "", announcement_priority: "", announcement_expiry: "" }
+    : { ...project, launch_date: project.launch_date || "", review_date: project.review_date || "", announcement_text: project.announcement_text || "", announcement_priority: project.announcement_priority == null ? "" : project.announcement_priority, announcement_expiry: project.announcement_expiry || "", featured_on_dashboard: !!project.featured_on_dashboard };
   const [f, setF] = useState(seed);
   const [files, setFiles] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -2289,8 +2322,11 @@ function ProjectEditor({ project, user, onSaved, onCancel }) {
   const save = async () => {
     setSaving(true); setErr("");
     if (!f.name.trim()) { setErr("Project name is required."); setSaving(false); return; }
-    const row = {}; ["name", "developer", "area", "property_type", "starting_price", "payment_plan", "handover_date", "commission_pct", "unit_types", "bedroom_options", "selling_points", "investment_points", "risks_notes", "golden_visa", "target_client", "status", "talking_points", "do_not_say", "agent_visible"].forEach((k) => { row[k] = f[k] === "" ? null : f[k]; });
+    const row = {}; ["name", "developer", "area", "property_type", "starting_price", "payment_plan", "handover_date", "commission_pct", "unit_types", "bedroom_options", "selling_points", "investment_points", "risks_notes", "golden_visa", "target_client", "status", "talking_points", "do_not_say", "agent_visible", "announcement_text"].forEach((k) => { row[k] = f[k] === "" ? null : f[k]; });
     row.launch_date = f.launch_date || null; row.review_date = f.review_date || null;
+    row.featured_on_dashboard = !!f.featured_on_dashboard;
+    row.announcement_expiry = f.announcement_expiry || null;
+    row.announcement_priority = f.announcement_priority === "" || f.announcement_priority == null ? 0 : Number(f.announcement_priority);
     row.updated_by = user.id; row.updated_at = new Date().toISOString();
     try {
       let pid = isNew ? null : project.id;
@@ -2368,6 +2404,23 @@ function ProjectEditor({ project, user, onSaved, onCancel }) {
           <div style={{ flex: "1 1 140px" }}><label style={lbl}>Launch date</label><input type="date" value={f.launch_date || ""} onChange={(e) => set("launch_date", e.target.value)} style={pInp} /></div>
           <div style={{ flex: "1 1 140px" }}><label style={lbl}>Review date</label><input type="date" value={f.review_date || ""} onChange={(e) => set("review_date", e.target.value)} style={pInp} /></div>
           <button onClick={() => set("agent_visible", !f.agent_visible)} style={{ flex: "0 1 auto", padding: "9px 13px", borderRadius: 9, border: `1px solid ${f.agent_visible ? T.ok : T.hair}`, background: f.agent_visible ? T.okSoft : T.paper, color: f.agent_visible ? T.ok : T.muted, cursor: "pointer", fontWeight: 700, fontFamily: UI, fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>{f.agent_visible ? <Eye size={14} /> : <EyeOff size={14} />} {f.agent_visible ? "Visible to agents" : "Hidden from agents"}</button>
+        </div>
+
+        {/* dashboard announcement (Part 7) */}
+        <div style={{ marginBottom: 14, ...card, padding: 14, borderColor: f.featured_on_dashboard ? T.goldEdge : T.hair }}>
+          <button onClick={() => set("featured_on_dashboard", !f.featured_on_dashboard)} style={{ display: "flex", alignItems: "center", gap: 9, background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: UI }}>
+            <span style={{ width: 38, height: 22, borderRadius: 999, background: f.featured_on_dashboard ? T.gold : T.hair, position: "relative", transition: "background .15s", flexShrink: 0 }}>
+              <span style={{ position: "absolute", top: 2, left: f.featured_on_dashboard ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: "#fff", transition: "left .15s" }} /></span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: T.ink, display: "flex", alignItems: "center", gap: 6 }}><Star size={14} color={f.featured_on_dashboard ? T.gold : T.faint} /> Feature on Agent Dashboard</span>
+          </button>
+          {f.featured_on_dashboard && <div style={{ marginTop: 12 }}>
+            <label style={lbl}>Announcement text <span style={{ textTransform: "none", fontWeight: 500, color: T.faint }}>(leave blank for an auto headline)</span></label>
+            <textarea value={f.announcement_text || ""} onChange={(e) => set("announcement_text", e.target.value)} rows={2} style={{ ...pInp, resize: "vertical" }} placeholder={'e.g. "Palm Jebel Ali is launching — are you working your villa clients?"'} />
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 10 }}>
+              <div style={{ flex: "1 1 140px" }}><label style={lbl}>Priority</label><input type="number" value={f.announcement_priority} onChange={(e) => set("announcement_priority", e.target.value)} style={pInp} placeholder="0 = normal" /></div>
+              <div style={{ flex: "1 1 140px" }}><label style={lbl}>Expiry date</label><input type="date" value={f.announcement_expiry || ""} onChange={(e) => set("announcement_expiry", e.target.value)} style={pInp} /></div>
+            </div>
+          </div>}
         </div>
 
         {/* files (existing projects only) */}
@@ -3245,6 +3298,11 @@ function AskAmber({ narrow, user }) {
     fetchKnowledge(user).then(setKb).catch(() => setKb([])); // verified company knowledge
   };
   const reset = () => { setMentor(null); setMsgs([]); setInput(""); };
+  useEffect(() => {
+    const onOpen = (e) => { setOpen(true); if (!mentor) pick(MENTORS[0]); const p = e && e.detail && e.detail.prompt; if (p) setInput(p); };
+    window.addEventListener("amber-open", onOpen);
+    return () => window.removeEventListener("amber-open", onOpen);
+  }, [mentor]);
 
   const send = async (q) => {
     const text = (q != null ? q : input).trim();
@@ -3605,15 +3663,19 @@ function LiveLeads({ user, filter, go, openLead }) {
     }
   };
   const TABS = ["all", "New", "Hot", "Very Hot", "Warm", "Cold", "Follow-up due", "Overdue", "Closed Won", "Closed Lost"];
-  const matchTab = (l) => {
-    switch (tab) {
+  const tabDef = (t, l) => {
+    switch (t) {
       case "all": return true;
       case "Follow-up due": return l.next_followup && l.next_followup <= today && l.status !== "Closed Won" && l.status !== "Closed Lost";
       case "Overdue": return l.next_followup && l.next_followup < today && l.status !== "Closed Won" && l.status !== "Closed Lost";
-      case "Hot": case "Very Hot": case "Warm": case "Cold": return l.temperature === tab;
-      default: return l.status === tab;
+      case "Hot": case "Very Hot": case "Warm": case "Cold": return l.temperature === t;
+      default: return l.status === t;
     }
   };
+  const matchTab = (l) => tabDef(tab, l);
+  const baseLeads = (leads || []).filter(matchFilter);
+  const tabCount = (t) => baseLeads.filter((l) => tabDef(t, l)).length;
+  const TAB_TONE = { Hot: T.bad, "Very Hot": T.bad, Warm: T.warn, Cold: T.muted, "Closed Won": T.ok, "Closed Lost": T.bad, Overdue: T.bad, "Follow-up due": T.gold, New: T.gold };
   const filtered = (leads || []).filter(matchFilter).filter(matchTab).filter((l) => {
     if (!q.trim()) return true;
     const s = q.toLowerCase();
@@ -3660,14 +3722,23 @@ function LiveLeads({ user, filter, go, openLead }) {
       {q && <span style={{ fontSize: 11.5, color: T.muted }}>{filtered.length} match</span>}
     </div>
 
-    {/* status tabs */}
-    <div style={{ display: "flex", gap: 7, marginTop: 12, overflowX: "auto", paddingBottom: 3 }}>
-      {TABS.map((t) => (
-        <button key={t} onClick={() => setTab(t)} style={{ flexShrink: 0, border: `1px solid ${tab === t ? T.gold : T.hair}`,
-          background: tab === t ? T.goldSoft : T.paper, color: tab === t ? T.gold : T.muted, borderRadius: 999,
-          padding: "6px 13px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>
-          {t === "all" ? "All" : t}</button>
-      ))}
+    {/* filter chips */}
+    <div style={{ display: "flex", gap: 8, marginTop: 12, overflowX: "auto", paddingBottom: 4, WebkitOverflowScrolling: "touch" }}>
+      {TABS.map((t) => {
+        const on = tab === t;
+        const tone = t === "all" ? T.gold : (TAB_TONE[t] || T.gold);
+        const n = tabCount(t);
+        return (
+          <button key={t} onClick={() => setTab(t)} style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 7,
+            border: `1px solid ${on ? tone : T.hair}`, background: on ? tone : T.paper, color: on ? "#fff" : T.inkSoft,
+            borderRadius: 999, padding: "7px 11px 7px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
+            boxShadow: on ? T.shadow : "none", transition: "all .15s ease", whiteSpace: "nowrap" }}>
+            {t === "all" ? "All" : t}
+            <span style={{ fontSize: 11, fontWeight: 800, minWidth: 18, textAlign: "center", borderRadius: 999, padding: "1px 6px",
+              background: on ? "rgba(255,255,255,.24)" : T.bone, color: on ? "#fff" : (n ? tone : T.faint) }}>{n}</span>
+          </button>
+        );
+      })}
     </div>
 
     {leads === null ? (
@@ -3976,6 +4047,237 @@ function ImportModal({ onClose, onDone, me }) {
       fontFamily: UI, opacity: (!rows || busy) ? .5 : 1 }}>{busy ? "Importing…" : `Import ${rows ? rows.length : ""} leads`}</button>
   </Modal>;
 }
+
+function HotDealForm({ initial, me, onClose, onSaved }) {
+  const PROP_TYPES = ["Apartment", "Villa", "Townhouse", "Penthouse", "Plot", "Commercial", "Other"];
+  const blank = { project_name: "", area: "", property_type: "Apartment", bedrooms: "", price: "", deal_summary: "", why_hot: "", contact_note: "", unit_number: "", size_sqft: "", view: "", floor: "", occupancy: "", seller_urgency: "", last_txn: "", market_price: "", expected_roi: "", listing_link: "", expiry_date: "", client_suitability: "", whatsapp_pitch: "" };
+  const [f, setF] = useState(initial ? { ...blank, ...initial, expiry_date: initial.expiry_date || "" } : blank);
+  const [more, setMore] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const lbl = { fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: T.muted, display: "block", marginTop: 11, marginBottom: 5 };
+  const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 9, padding: "9px 11px", fontSize: 13, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box" };
+  const submit = async (asDraft) => {
+    setErr("");
+    if (!asDraft) {
+      for (const [k, label] of [["project_name", "Project name"], ["area", "Location / area"], ["property_type", "Property type"], ["price", "Price"], ["deal_summary", "Deal summary"], ["why_hot", "Why it's a hot deal"]]) {
+        if (!String(f[k] || "").trim()) { setErr(label + " is required."); return; }
+      }
+    } else if (!String(f.project_name || "").trim()) { setErr("Add at least a project name to save a draft."); return; }
+    setBusy(true);
+    const row = { ...f, status: asDraft ? "Draft" : "Pending Approval" };
+    Object.keys(row).forEach((k) => { if (row[k] === "") row[k] = null; });
+    try {
+      let res;
+      if (initial && initial.id) res = await supabase.from("hot_resale_deals").update(row).eq("id", initial.id);
+      else { row.agent_id = me.id; row.agent_name = me.name; res = await supabase.from("hot_resale_deals").insert(row); }
+      if (res.error) throw res.error;
+      try { await supabase.from("admin_audit").insert({ action: initial && initial.id ? "hot_deal_edited" : (asDraft ? "hot_deal_created" : "hot_deal_submitted"), performed_by: me.id, detail: f.project_name }); } catch (e) {}
+      setBusy(false); onSaved(asDraft);
+    } catch (e) {
+      setBusy(false);
+      setErr(/permission|protected|allowed/i.test(e.message || "") ? "You can't submit this deal right now." : "Unable to save the deal. Please try again.");
+    }
+  };
+  const Field = ({ k, label, type, opts, area, ph }) => (
+    <div><span style={lbl}>{label}</span>
+      {opts ? <select value={f[k] || ""} onChange={(e) => set(k, e.target.value)} style={{ ...inp, background: T.paper }}>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+        : area ? <textarea value={f[k] || ""} onChange={(e) => set(k, e.target.value)} rows={2} placeholder={ph || ""} style={{ ...inp, resize: "vertical" }} />
+          : <input type={type || "text"} value={f[k] || ""} onChange={(e) => set(k, e.target.value)} placeholder={ph || ""} style={inp} />}</div>
+  );
+  return <Modal title={initial && initial.id ? "Edit hot resale deal" : "Post a hot resale deal"} onClose={onClose}>
+    <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>Your deal goes to an admin for approval before it appears to the team. Posting as <b style={{ color: T.ink }}>{me.name}</b>.</div>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+      <Field k="project_name" label="Project name *" ph="e.g. Palm Jebel Ali Villas" />
+      <Field k="area" label="Location / area *" ph="e.g. Dubai Hills Estate" />
+      <Field k="property_type" label="Property type *" opts={PROP_TYPES} />
+      <Field k="bedrooms" label="Bedrooms" ph="e.g. 3 BR" />
+      <Field k="price" label="Price *" ph="e.g. AED 4.2M" />
+      <Field k="expiry_date" label="Expiry date" type="date" />
+    </div>
+    <Field k="deal_summary" label="Deal summary *" area ph="One or two lines a buyer would care about." />
+    <Field k="why_hot" label="Why it's a hot deal *" area ph="Below market? Motivated seller? Rare unit?" />
+    <Field k="contact_note" label="Contact / internal note" area ph="Seller contact or internal note (not shown publicly)." />
+    <button onClick={() => setMore((m) => !m)} style={{ ...miniBtn(), marginTop: 12, padding: "7px 12px", fontSize: 12 }}>{more ? "− Hide" : "+ Add"} optional details</button>
+    {more && <div style={{ marginTop: 6 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <Field k="unit_number" label="Unit number" />
+        <Field k="size_sqft" label="Size (sqft)" />
+        <Field k="view" label="View" />
+        <Field k="floor" label="Floor" />
+        <Field k="occupancy" label="Occupancy" opts={["", "Vacant", "Rented", "Vacant on transfer"]} />
+        <Field k="seller_urgency" label="Seller urgency" opts={["", "Low", "Medium", "High", "Distressed"]} />
+        <Field k="last_txn" label="Last transaction comp" />
+        <Field k="market_price" label="Market price comp" />
+        <Field k="expected_roi" label="Expected ROI / yield" />
+        <Field k="listing_link" label="External listing link" />
+      </div>
+      <Field k="client_suitability" label="Client suitability" area ph="Who is this perfect for?" />
+      <Field k="whatsapp_pitch" label="WhatsApp pitch text" area ph="Leave blank and the CRM will generate one." />
+    </div>}
+    {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginTop: 12 }}>{err}</div>}
+    <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+      <button onClick={() => submit(true)} disabled={busy} style={{ ...miniBtn(), flex: "0 0 auto", padding: "11px 16px" }}>Save draft</button>
+      <button onClick={() => submit(false)} disabled={busy} style={{ flex: 1, background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "Submitting…" : "Submit for approval"}</button>
+    </div>
+  </Modal>;
+}
+
+function HotDeals({ user, go }) {
+  const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
+  const me = user;
+  const [deals, setDeals] = useState(null);
+  const [tab, setTab] = useState(isAdmin ? "pending" : "board");
+  const [showForm, setShowForm] = useState(false);
+  const [editDeal, setEditDeal] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [toast, setToast] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => { const { data } = await supabase.from("hot_resale_deals").select("*").order("created_at", { ascending: false }); setDeals(data || []); };
+  useEffect(() => { load(); }, []);
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2600); };
+  const audit = (action, deal, extra) => { try { supabase.from("admin_audit").insert({ action, performed_by: me.id, detail: (deal && deal.project_name) || null, new_value: extra || null }); } catch (e) {} };
+
+  const all = deals || [];
+  const approved = all.filter((d) => d.status === "Approved");
+  const mine = all.filter((d) => d.agent_id === me.id);
+  const pending = all.filter((d) => d.status === "Pending Approval");
+
+  const fmtDate = (d) => { try { return new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); } catch (e) { return ""; } };
+  const STATUS_TONE = { Approved: [T.ok, T.okSoft], "Pending Approval": [T.warn, T.warnSoft], Rejected: [T.bad, T.badSoft], "Needs Correction": [T.warn, T.warnSoft], Draft: [T.muted, T.hairSoft], Expired: [T.faint, T.hairSoft], Removed: [T.faint, T.hairSoft] };
+  const badge = (s) => { const [c, b] = STATUS_TONE[s] || [T.muted, T.hairSoft]; return <span style={{ fontSize: 10, fontWeight: 700, color: c, background: b, borderRadius: 6, padding: "2px 8px" }}>{s}</span>; };
+
+  const copyPitch = (d) => {
+    const txt = d.whatsapp_pitch && d.whatsapp_pitch.trim() ? d.whatsapp_pitch
+      : "🔥 Hot Resale — " + d.project_name + ", " + d.area + "\n" + d.property_type + (d.bedrooms ? " · " + d.bedrooms : "") + " · " + d.price + "\n\n" + d.why_hot + "\n\nKeen to know more? Let's talk.";
+    try { navigator.clipboard.writeText(txt); } catch (e) {}
+    flash("WhatsApp pitch copied"); audit("hot_deal_pitch_copied", d);
+  };
+  const askAmber = (d) => {
+    audit("hot_deal_ask_amber", d);
+    window.dispatchEvent(new CustomEvent("amber-open", { detail: { prompt: "Help me pitch this approved hot resale deal: " + d.project_name + " in " + d.area + ", " + d.property_type + (d.bedrooms ? " " + d.bedrooms : "") + ", " + d.price + ". Why it's hot: " + d.why_hot + ". Draft a short WhatsApp message and tell me which of my clients might match." } }));
+  };
+  const openDetail = (d) => { setDetail(d); setNoteDraft(d.approval_notes || ""); audit("hot_deal_viewed", d); };
+
+  const setStatus = async (d, status) => {
+    setBusy(true);
+    const upd = { status, approval_notes: noteDraft || null };
+    if (status === "Approved") upd.approved_by = me.id;
+    const { error } = await supabase.from("hot_resale_deals").update(upd).eq("id", d.id);
+    setBusy(false);
+    if (error) { flash("Action failed. Please try again."); return; }
+    audit("hot_deal_" + status.toLowerCase().replace(/[ /]+/g, "_"), d, { notes: noteDraft || null });
+    setDetail(null); load();
+    flash(status === "Approved" ? "Approved — team notified" : status === "Rejected" ? "Rejected — agent notified" : status === "Needs Correction" ? "Sent back for correction" : status === "Removed" ? "Removed" : "Updated");
+  };
+  const toggleFeature = async (d) => { setBusy(true); const { error } = await supabase.from("hot_resale_deals").update({ featured: !d.featured }).eq("id", d.id); setBusy(false); if (!error) { audit(d.featured ? "hot_deal_unfeatured" : "hot_deal_featured", d); const nd = { ...d, featured: !d.featured }; setDetail(nd); load(); flash(nd.featured ? "Featured on dashboard" : "Unfeatured"); } };
+
+  const Card = ({ d, ownerView }) => (
+    <div style={{ ...card, padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "14px 16px", background: T.goldSoft, borderBottom: `1px solid ${T.hairSoft}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+          <div style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 800, color: T.ink, lineHeight: 1.2 }}>{d.project_name}</div>
+          {d.featured && <Star size={14} color={T.gold} />}
+        </div>
+        <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>{d.area} · {d.property_type}{d.bedrooms ? " · " + d.bedrooms : ""}</div>
+      </div>
+      <div style={{ padding: "14px 16px", flex: 1 }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: T.gold, fontFamily: DISPLAY }}>{d.price}</div>
+        <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 8, lineHeight: 1.5 }}>{d.why_hot}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 12, flexWrap: "wrap" }}>
+          <Av name={d.agent_name || "Agent"} size={20} />
+          <span style={{ fontSize: 11.5, color: T.muted }}>Posted by <b style={{ color: T.ink }}>{d.agent_name || "Agent"}</b> · {fmtDate(d.created_at)}</span>
+        </div>
+        {ownerView && <div style={{ marginTop: 8 }}>{badge(d.status)}{d.status === "Needs Correction" && d.approval_notes && <div style={{ fontSize: 11.5, color: T.bad, marginTop: 5 }}>Note: {d.approval_notes}</div>}</div>}
+        {d.expiry_date && <div style={{ fontSize: 11, color: T.faint, marginTop: 8 }}>Expires {fmtDate(d.expiry_date)}</div>}
+      </div>
+      <div style={{ padding: "10px 14px", borderTop: `1px solid ${T.hairSoft}`, display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button onClick={() => openDetail(d)} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5 }}><Eye size={12} /> Details</button>
+        {ownerView && (d.status === "Needs Correction" || d.status === "Draft") && <button onClick={() => { setEditDeal(d); setShowForm(true); }} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5 }}><Pencil size={12} /> Edit & resubmit</button>}
+        {d.status === "Approved" && <>
+          <button onClick={() => copyPitch(d)} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5, borderColor: T.ok, color: T.ok }}><MessageCircle size={12} /> Copy pitch</button>
+          <button onClick={() => askAmber(d)} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5, borderColor: T.goldEdge, color: T.gold }}><Sparkle size={12} /> Ask Amber</button>
+        </>}
+      </div>
+    </div>
+  );
+
+  const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 14 };
+  const tabs = isAdmin ? [["pending", "Pending", pending.length], ["board", "Approved", approved.length], ["all", "All deals", all.length]]
+    : [["board", "Hot deals", approved.length], ["mine", "My submissions", mine.length]];
+  const shown = tab === "pending" ? pending : tab === "mine" ? mine : tab === "all" ? all : approved;
+
+  return <div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+      <div>
+        <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 10 }}><Flame size={21} color={T.gold} /> Hot Resale Deals</div>
+        <div style={{ color: T.muted, fontSize: 13, marginTop: 4 }}>{isAdmin ? "Review agent submissions and publish approved deals to the team." : "Hot resale opportunities shared across the team. Post your own — an admin approves before it goes live."}</div>
+      </div>
+      <button onClick={() => { setEditDeal(null); setShowForm(true); }} style={{ background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10, padding: "11px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: UI, display: "flex", alignItems: "center", gap: 7 }}><Plus size={15} /> Post Hot Deal</button>
+    </div>
+
+    <div style={{ display: "flex", gap: 8, margintop: 16, marginTop: 16, flexWrap: "wrap" }}>
+      {tabs.map(([k, label, n]) => <button key={k} onClick={() => setTab(k)} style={{ border: `1px solid ${tab === k ? T.gold : T.hair}`, background: tab === k ? T.goldSoft : T.paper, color: tab === k ? T.gold : T.muted, borderRadius: 999, padding: "7px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>{label}{typeof n === "number" ? " · " + n : ""}</button>)}
+    </div>
+
+    <div style={{ marginTop: 16 }}>
+      {deals === null ? <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>Loading hot deals…</div>
+        : shown.length === 0 ? <div style={{ ...card, padding: 40, textAlign: "center" }}>
+            <Flame size={26} color={T.faint} style={{ marginBottom: 10 }} />
+            <div style={{ fontWeight: 700 }}>{tab === "pending" ? "No deals waiting for approval." : tab === "mine" ? "You haven't posted any hot deals yet." : "No approved hot deals yet."}</div>
+            <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>{isAdmin ? "Approved deals appear to the whole team." : "Tap Post Hot Deal to share an opportunity."}</div>
+          </div>
+        : tab === "pending" ? <div style={{ display: "grid", gap: 10 }}>
+            {pending.map((d) => <div key={d.id} style={{ ...card, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{d.project_name} <span style={{ color: T.muted, fontWeight: 500 }}>· {d.area} · {d.property_type}{d.bedrooms ? " · " + d.bedrooms : ""}</span></div>
+                <div style={{ fontSize: 12.5, color: T.gold, fontWeight: 700, marginTop: 2 }}>{d.price}</div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>By {d.agent_name || "Agent"} · {fmtDate(d.created_at)}</div>
+              </div>
+              <button onClick={() => openDetail(d)} style={{ background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 9, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Review</button>
+            </div>)}
+          </div>
+        : <div style={grid}>{shown.map((d) => <Card key={d.id} d={d} ownerView={tab === "mine" || (tab === "all" && isAdmin)} />)}</div>}
+    </div>
+
+    {showForm && <HotDealForm initial={editDeal} me={me} onClose={() => { setShowForm(false); setEditDeal(null); }} onSaved={(asDraft) => { setShowForm(false); setEditDeal(null); load(); flash(asDraft ? "Saved as draft" : "Submitted for approval"); if (!isAdmin) setTab(asDraft ? "mine" : "mine"); }} />}
+
+    {detail && <Modal title={detail.project_name} onClose={() => setDetail(null)}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>{badge(detail.status)}{detail.featured && <span style={{ fontSize: 10, fontWeight: 700, color: T.gold, background: T.goldSoft, borderRadius: 6, padding: "2px 8px", display: "inline-flex", alignItems: "center", gap: 4 }}><Star size={10} /> Featured</span>}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color: T.gold, fontFamily: DISPLAY, margin: "6px 0" }}>{detail.price}</div>
+      <div style={{ fontSize: 12.5, color: T.muted }}>{detail.area} · {detail.property_type}{detail.bedrooms ? " · " + detail.bedrooms : ""}</div>
+      {[["Deal summary", detail.deal_summary], ["Why it's hot", detail.why_hot], ["Client suitability", detail.client_suitability], ["Unit", detail.unit_number], ["Size", detail.size_sqft], ["View", detail.view], ["Floor", detail.floor], ["Occupancy", detail.occupancy], ["Seller urgency", detail.seller_urgency], ["Last transaction", detail.last_txn], ["Market price", detail.market_price], ["Expected ROI", detail.expected_roi], ["Expiry", detail.expiry_date ? fmtDate(detail.expiry_date) : null]].filter(([, v]) => v).map(([k, v]) => <div key={k} style={{ marginTop: 10 }}><div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: T.muted }}>{k}</div><div style={{ fontSize: 13, color: T.ink, marginTop: 2, lineHeight: 1.5 }}>{v}</div></div>)}
+      {detail.listing_link && <div style={{ marginTop: 10 }}><a href={detail.listing_link} target="_blank" rel="noreferrer" style={{ color: T.gold, fontSize: 12.5, fontWeight: 700 }}>External listing ↗</a></div>}
+      <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.hairSoft}` }}>
+        <Av name={detail.agent_name || "Agent"} size={22} /><span style={{ fontSize: 12, color: T.muted }}>Posted by <b style={{ color: T.ink }}>{detail.agent_name || "Agent"}</b> · {fmtDate(detail.created_at)}</span>
+      </div>
+      {(isAdmin || detail.contact_note) && detail.contact_note && <div style={{ marginTop: 10, padding: "10px 12px", background: T.bone, borderRadius: 9, fontSize: 12, color: T.inkSoft }}><b style={{ color: T.ink }}>Internal note:</b> {detail.contact_note}</div>}
+
+      {detail.status === "Approved" && <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+        <button onClick={() => copyPitch(detail)} style={{ ...miniBtn(), padding: "10px 14px", borderColor: T.ok, color: T.ok }}><MessageCircle size={13} /> Copy WhatsApp pitch</button>
+        <button onClick={() => askAmber(detail)} style={{ ...miniBtn(), padding: "10px 14px", borderColor: T.goldEdge, color: T.gold }}><Sparkle size={13} /> Ask Amber to pitch this</button>
+      </div>}
+
+      {isAdmin && <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.hair}` }}>
+        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: T.gold, marginBottom: 8 }}>Admin review</div>
+        <textarea value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} rows={2} placeholder="Approval / rejection / correction note (shown to the agent)…" style={{ width: "100%", border: `1px solid ${T.hair}`, borderRadius: 9, padding: "9px 11px", fontSize: 12.5, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", resize: "vertical" }} />
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          {detail.status !== "Approved" && <button onClick={() => setStatus(detail, "Approved")} disabled={busy} style={{ background: T.ok, color: "#fff", border: "none", borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}><Check size={13} /> Approve</button>}
+          <button onClick={() => setStatus(detail, "Needs Correction")} disabled={busy} style={{ ...miniBtn(), padding: "10px 14px" }}><RefreshCw size={13} /> Request correction</button>
+          <button onClick={() => setStatus(detail, "Rejected")} disabled={busy} style={{ ...miniBtn(), padding: "10px 14px", borderColor: T.badSoft, color: T.bad }}><X size={13} /> Reject</button>
+          {detail.status === "Approved" && <button onClick={() => toggleFeature(detail)} disabled={busy} style={{ ...miniBtn(), padding: "10px 14px", borderColor: T.goldEdge, color: T.gold }}><Star size={13} /> {detail.featured ? "Unfeature" : "Feature on dashboard"}</button>}
+          {detail.status === "Approved" && <button onClick={() => setStatus(detail, "Removed")} disabled={busy} style={{ ...miniBtn(), padding: "10px 14px" }}>Remove</button>}
+        </div>
+      </div>}
+    </Modal>}
+
+    {toast && <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.ink, color: "#fff", padding: "11px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600, zIndex: 200, boxShadow: T.shadowLg }}>{toast}</div>}
+  </div>;
+}
+
 
 function Modal({ title, children, onClose }) {
   return <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 80,
