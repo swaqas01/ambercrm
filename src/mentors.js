@@ -14,16 +14,28 @@ export const MENTORS = [
 ];
 export const mentorById = (id) => MENTORS.find((m) => m.id === id) || MENTORS[0];
 
+// Pure courtesy / greeting — ALWAYS allowed. Never flagged, never refused. Matches only
+// when the whole message is essentially a greeting or basic courtesy (no real request).
+const GREETING_RE = /^(hi+|hey+|hello+|yo|hiya|hii|salams?|salaams?|assalam[\sou-]*alaikum|good (morning|afternoon|evening|day)|gm|morning|how are you( doing)?|how('?s| is) (it going|everything|things)|how do you do|what'?s up|whats up|sup|thanks?|thank you|thankyou|thx|ty|okay? thanks?|cool thanks?|great thanks?|nice thanks?|what can you (help|do)( me)?( with)?|what do you do|how can you help( me)?|can you (help|guide) me( today)?|guide me( today)?|are you (there|ready)|you there|hello there|greetings|good to see you)[\s.!,?]*$/i;
+export function isPureGreeting(text) {
+  const t = String(text || "").trim();
+  if (!t || t.length > 64) return false;
+  return GREETING_RE.test(t);
+}
+
 // Lightweight client-side guard for clearly non-work content (the server enforces too).
+// Tightened to avoid false positives on real-estate words like "date" (handover date),
+// "story" (two-story), "sing", etc. Greetings are handled above and never reach this.
 const BAD = [
-  /\b(sex|sexual|nude|naked|horny|hookup|hook up|dick|boobs|porn)\b/i,
-  /\b(date|dating|girlfriend|boyfriend|crush|romance|romantic|flirt|love you|marry me)\b/i,
-  /\b(gossip|rumou?r|who is dating|secretly|behind (his|her|their) back)\b/i,
-  /\b(idiot|stupid|shut up|f[\*u]ck|bitch|bastard|asshole)\b/i,
-  /\b(joke|meme|bored|time ?pass|timepass|entertain me|sing|poem|story)\b/i,
+  /\b(sex|sexual|nude|naked|horny|hookup|hook up|dick|boobs|porn|xxx)\b/i,
+  /\b(dating|girlfriend|boyfriend|flirt|flirting|romance|romantic|kiss|love you|marry me)\b/i,
+  /\b(gossip|who is dating|behind (his|her|their) back|spread (a )?rumou?r)\b/i,
+  /\b(idiot|stupid|shut up|f[\*u]ck|fuck|bitch|bastard|asshole)\b/i,
+  /\b(tell me a joke|write a joke|sing me a song|sing a song|write (me )?a poem|tell me a story|play a game|entertain me|i'?m bored|time ?pass|timepass)\b/i,
 ];
 export function classifyInappropriate(text) {
   const t = String(text || "");
+  if (isPureGreeting(t)) return null; // courtesy is always allowed
   if (BAD[0].test(t)) return "sexual";
   if (BAD[1].test(t)) return "personal";
   if (BAD[2].test(t)) return "gossip";

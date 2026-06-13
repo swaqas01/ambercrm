@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Component } from "react";
 import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall } from "./supabase.js";
-import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, categorize, logAi, fetchKnowledge, pickKnowledge } from "./mentors.js";
+import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, isPureGreeting, categorize, logAi, fetchKnowledge, pickKnowledge } from "./mentors.js";
 import {
   BookOpen, Pencil, Trash2, Save, Check,
   LayoutDashboard, UserCircle, FileText, UserPlus, Kanban, BarChart3,
@@ -559,7 +559,7 @@ export default function App() {
             {SCREENS[screen] || <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>This section isn't available. <button onClick={() => go(roleInfo(user.role).home === "agent" ? "agent" : "admin")} style={{ ...miniBtn(), marginLeft: 8 }}>Go to dashboard</button></div>}
           </ScreenBoundary>
         </div>
-        <AskAmber narrow={narrow} user={user} />
+        <AskAmber narrow={narrow} user={user} openLead={openLead} />
       </main>}
     </div>
   );
@@ -3713,7 +3713,75 @@ function AiSourceForm({ initial, cats, trust, onSave, onClose }) {
 }
 
 /* ========================= AI CHAT (ALL USERS) =========================== */
-function AskAmber({ narrow, user }) {
+// Detect a CRM lead-list question so Ask Amber can answer it with actionable cards.
+function leadIntent(text) {
+  const t = String(text || "").toLowerCase();
+  if (/(plan my day|what should i (focus on|do|prioriti[sz]e) today|^my day\b|plan my today)/.test(t)) return { kind: "plan" };
+  if (/(missed?\b.*(follow|lead|client))|((follow|lead|client).*\bmissed?\b)|(did i miss.*follow)|\boverdue\b/.test(t)) return { kind: "overdue" };
+  if (/(due (today|now).*(follow|lead))|(follow.?ups? due)|(today'?s follow)|(follow.?ups? for today)/.test(t)) return { kind: "due" };
+  if (/(hot leads?)|(which (leads?|clients?) (should i|to|do i) (call|contact|message|chase))|(who (should i|to|do i) (call|message|contact))|(which client should i message)/.test(t)) return { kind: "hot" };
+  if (/(which (of my )?(leads?|clients?) need)|((leads?|clients?) need (attention|action|a follow|to follow|follow))|(which leads? to work)/.test(t)) return { kind: "attention" };
+  return null;
+}
+
+// Run the lead query against ONLY the data this user may see (RLS + explicit agent filter,
+// mirroring buildCrmContext). Returns { heading, leads:[{id,name,project,status,temp,due,phone,reason}] }.
+async function runLeadQuery(intent, user) {
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+  const { data: { user: au } } = await supabase.auth.getUser();
+  const { data, error } = await supabase.from("leads")
+    .select("id, client_name, area, project, status, temperature, next_followup, last_contacted, phone, purpose, is_open, assigned_agent, current_owner, created_by")
+    .limit(800);
+  if (error) throw error;
+  let rows = data || [];
+  const isAgent = user && user.role === "agent";
+  if (isAgent && au) rows = rows.filter((l) => l.assigned_agent === au.id || l.current_owner === au.id || l.created_by === au.id);
+  const open = rows.filter((l) => l.status !== "Closed Won" && l.status !== "Closed Lost");
+  const d10 = (v) => String(v || "").slice(0, 10);
+  const hotRank = (l) => (l.temperature === "Very Hot" ? 0 : l.temperature === "Hot" ? 1 : l.temperature === "Warm" ? 2 : 3);
+  const byDue = (a, b) => d10(a.next_followup).localeCompare(d10(b.next_followup));
+  const fmtDue = (v) => { const s = d10(v); if (!s) return "no follow-up set"; if (s < today) return "overdue (" + s + ")"; if (s === today) return "due today"; return "due " + s; };
+  let picked = [], heading = "";
+  if (intent.kind === "overdue") {
+    picked = open.filter((l) => d10(l.next_followup) && d10(l.next_followup) < today).sort(byDue);
+    heading = picked.length ? `You have ${picked.length} missed/overdue follow-up${picked.length > 1 ? "s" : ""}. Start with these:` : "You're all caught up — no overdue follow-ups right now. Want your hot leads instead?";
+  } else if (intent.kind === "due") {
+    picked = open.filter((l) => d10(l.next_followup) && d10(l.next_followup) <= today).sort(byDue);
+    heading = picked.length ? `You have ${picked.length} follow-up${picked.length > 1 ? "s" : ""} due today or earlier:` : "Nothing due today — your follow-ups are clear.";
+  } else if (intent.kind === "hot") {
+    picked = open.filter((l) => hotRank(l) <= 1).sort((a, b) => hotRank(a) - hotRank(b) || byDue(a, b));
+    heading = picked.length ? `Your hottest leads to action${picked.length > 8 ? " (top 8)" : ""}:` : "No hot leads in your pipeline right now. Want me to show what's due?";
+  } else if (intent.kind === "attention") {
+    const overdue = open.filter((l) => d10(l.next_followup) && d10(l.next_followup) < today);
+    const hot = open.filter((l) => hotRank(l) <= 1 && !overdue.includes(l));
+    const noDate = open.filter((l) => !d10(l.next_followup) && !hot.includes(l) && !overdue.includes(l));
+    const seen = new Set(); picked = [];
+    [...overdue.sort(byDue), ...hot, ...noDate].forEach((l) => { if (!seen.has(l.id)) { seen.add(l.id); picked.push(l); } });
+    heading = picked.length ? `These leads need attention first:` : "Nothing urgent — your pipeline looks under control.";
+  } else { // plan
+    const overdue = open.filter((l) => d10(l.next_followup) && d10(l.next_followup) < today).sort(byDue);
+    const due = open.filter((l) => d10(l.next_followup) === today);
+    const hot = open.filter((l) => hotRank(l) <= 1 && d10(l.next_followup) !== today && !(d10(l.next_followup) && d10(l.next_followup) < today));
+    const seen = new Set(); picked = [];
+    [...overdue, ...due, ...hot].forEach((l) => { if (!seen.has(l.id)) { seen.add(l.id); picked.push(l); } });
+    heading = picked.length ? `Here's your plan — ${overdue.length} overdue, ${due.length} due today, plus your hot leads. Work them top to bottom:` : "Your pipeline is clear for today. Add follow-up dates to your leads and I'll build your day around them.";
+  }
+  const reasonFor = (l) => {
+    const bits = []; const s = d10(l.next_followup);
+    if (hotRank(l) === 0) bits.push("Very hot"); else if (hotRank(l) === 1) bits.push("Hot lead");
+    if (s && s < today) bits.push("follow-up overdue"); else if (s === today) bits.push("follow-up due today"); else if (!s) bits.push("no follow-up set");
+    if (l.project) bits.push("interest: " + l.project);
+    return bits.join(" · ") || "Worth a touch today";
+  };
+  const leads = picked.slice(0, 8).map((l) => ({
+    id: l.id, name: l.client_name || "Lead", project: l.project || l.area || "—",
+    status: l.is_open ? "Open" : (l.status || "—"), temp: l.temperature || "—",
+    due: fmtDue(l.next_followup), phone: l.phone || "", reason: reasonFor(l),
+  }));
+  return { heading, leads };
+}
+
+function AskAmber({ narrow, user, openLead }) {
   const [open, setOpen] = useState(false);
   const [mentor, setMentor] = useState(null);     // chosen mentor object
   const [msgs, setMsgs] = useState([]);
@@ -3743,18 +3811,46 @@ function AskAmber({ narrow, user }) {
     return () => window.removeEventListener("amber-open", onOpen);
   }, [mentor]);
 
+  const logLeadAction = (action, ld) => { try { logAi({ user, mentor, question: "[lead action: " + action + "] " + (ld.name || ld.id), responseSum: "lead_action:" + action, category: "crm", status: "success" }); } catch (e) {} };
+  const draftFor = (ld) => {
+    const q = `Draft a short, warm WhatsApp follow-up message for my lead ${ld.name}${ld.project && ld.project !== "—" ? " (interested in " + ld.project + ")" : ""}. One short paragraph, professional, ready to copy.`;
+    send(q);
+  };
   const send = async (q) => {
     const text = (q != null ? q : input).trim();
     if (!text || busy || !mentor) return;
     setInput("");
+    // Pure courtesy/greeting → friendly in-persona reply, no model call, never flagged or refused.
+    if (isPureGreeting(text)) {
+      const courtesy = { ambreen_ai: "Doing great — now tell me which client we're converting today? Send me a lead, objection, project or follow-up and I'll help you handle it.",
+        saad_ai: "I'm ready. Share the lead, project or client situation and I'll give you the best next move.",
+        ibrahim_ai: "All good — let's make your day productive. Which lead or project are we working on?" }[mentor.id] || "Ready to help — send me a lead, client, project or follow-up.";
+      setMsgs((m) => [...m, { role: "user", text }, { role: "assistant", text: courtesy }]);
+      logAi({ user, mentor, question: text, responseSum: courtesy, fullResponse: courtesy, category: "greeting", status: "success" });
+      return;
+    }
     // client-side guard: refuse obvious non-work content without calling the model
     const cat = classifyInappropriate(text);
     if (cat) {
-      const refusal = { ambreen_ai: "Nice try, but Ask Amber is for work — not gossip or time-pass. Ask me about your leads, follow-ups or deals.",
-        saad_ai: "This is not work-related. Ask me about your leads, clients, deals, CRM or Dubai real estate.",
-        ibrahim_ai: "Let's keep it work-related. I can help you with clients, WhatsApp replies, leads, follow-ups or CRM questions." }[mentor.id];
+      const refusal = { ambreen_ai: "Let's keep Ask Amber for the real work — that one's not for me. Send me a lead, objection, project or follow-up and I'll help you win it.",
+        saad_ai: "That's outside what I'm here for. Bring me a lead, client, deal, project or CRM question and I'll give you the move.",
+        ibrahim_ai: "Let's keep it work-related — easy. Send me a client, WhatsApp reply, lead or follow-up and I'll help you sort it." }[mentor.id];
       setMsgs((m) => [...m, { role: "user", text }, { role: "assistant", text: refusal }]);
       logAi({ user, mentor, question: text, responseSum: "[refused: " + cat + "]", status: "refused", flagCategory: cat });
+      return;
+    }
+    // CRM lead-list question → answer with actionable lead cards (RLS limits to permitted leads).
+    const li = leadIntent(text);
+    if (li) {
+      setMsgs((m) => [...m, { role: "user", text }]); setBusy(true);
+      try {
+        const out = await runLeadQuery(li, user);
+        setMsgs((m) => [...m, { role: "assistant", text: out.heading, leads: out.leads }]);
+        logAi({ user, mentor, question: text, responseSum: out.heading + " (" + out.leads.length + " leads)", category: "follow_up", status: "success" });
+      } catch (e) {
+        setMsgs((m) => [...m, { role: "assistant", text: "I couldn't pull your leads just now. Please try again." }]);
+        logAi({ user, mentor, question: text, status: "error" });
+      } finally { setBusy(false); }
       return;
     }
     const next = [...msgs, { role: "user", text }];
@@ -3854,6 +3950,31 @@ function AskAmber({ narrow, user }) {
               {m.sources && m.sources.length > 0 && (
                 <div style={{ maxWidth: "88%", marginTop: 4, fontSize: 10.5, color: T.faint, display: "flex", alignItems: "center", gap: 4, paddingLeft: 2 }}>
                   <BookOpen size={11} /> Based on: {m.sources.join(" · ")}
+                </div>
+              )}
+              {m.leads && m.leads.length > 0 && (
+                <div style={{ width: "100%", display: "grid", gap: 8, marginTop: 8 }}>
+                  {m.leads.map((ld) => {
+                    const tcol = /hot/i.test(ld.temp) ? T.bad : ld.temp === "Warm" ? T.warn : T.muted;
+                    const cardBtn = { ...miniBtn(), padding: "6px 9px", fontSize: 11, display: "inline-flex", alignItems: "center", gap: 5 };
+                    const ph = String(ld.phone || "").replace(/\D/g, "");
+                    return (
+                      <div key={ld.id} style={{ background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 12, padding: "10px 12px", boxShadow: T.shadow }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                          <div style={{ fontWeight: 700, fontSize: 12.8, color: T.ink }}>{ld.name}</div>
+                          <div style={{ fontSize: 10.5, fontWeight: 700, color: tcol, whiteSpace: "nowrap" }}>{ld.temp}</div>
+                        </div>
+                        <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{ld.project} · {ld.status} · {ld.due}</div>
+                        <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3, lineHeight: 1.4 }}>{ld.reason}</div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                          <button onClick={() => { logLeadAction("open", ld); if (openLead) { openLead(ld.id); setOpen(false); } }} style={cardBtn}>Open Lead</button>
+                          {ph && <button onClick={() => { logLeadAction("whatsapp", ld); window.open("https://wa.me/" + ph, "_blank"); }} style={{ ...cardBtn, borderColor: T.ok, color: T.ok }}><MessageCircle size={11} /> WhatsApp</button>}
+                          {ph && <button onClick={() => { logLeadAction("call", ld); window.location.href = "tel:" + ph; }} style={cardBtn}><Phone size={11} /> Call</button>}
+                          <button onClick={() => draftFor(ld)} style={cardBtn}><Sparkle size={11} /> Draft message</button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
