@@ -183,6 +183,7 @@ const COMMISSIONS = [
   { deal: "D-121", client: "T. Nakamura", project: "Seapoint", value: 3.4, pct: 2, gross: 68000, agent: "Lara Petrova", agentCut: 30600, status: "Paid", invoice: "Settled" },
 ];
 const NAV = [
+  ["live", "Leads (Live)", Database],
   ["admin", "Admin Dashboard", LayoutDashboard],
   ["agent", "Agent Dashboard", UserCircle],
   ["lead", "Lead Detail", FileText],
@@ -237,7 +238,7 @@ export default function App() {
   }, []);
   const go = (s) => { setScreen(s); setNavOpen(false); };
   const SCREENS = {
-    admin: <AdminDash go={go} />, agent: <AgentDash go={go} />, lead: <LeadDetail />, open: <OpenLeads />,
+    live: <LiveLeads user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} />, lead: <LeadDetail />, open: <OpenLeads />,
     assign: <Assignment />, pipeline: <Pipeline go={go} />, performance: <Performance />,
     security: <SecurityLog />, matching: <Matching go={go} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -1322,4 +1323,222 @@ function LoginFlow({ onLogin, dark, setDark }) {
       </div>
     </div>
   );
+}
+
+/* ===================== LIVE LEADS (real Supabase data) ==================== */
+function LiveLeads({ user }) {
+  const [leads, setLeads] = useState(null);   // null = loading
+  const [err, setErr] = useState("");
+  const [q, setQ] = useState("");
+  const [revealed, setRevealed] = useState({});
+  const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [me, setMe] = useState(null);
+
+  const load = async () => {
+    setErr("");
+    const { data: { user: au } } = await supabase.auth.getUser();
+    setMe(au);
+    const { data, error } = await supabase.from("leads")
+      .select("id, lead_code, client_name, phone, email, project, area, assigned_agent_name, status, temperature, is_open, created_on")
+      .order("created_on", { ascending: false }).limit(1000);
+    if (error) { setErr(error.message); setLeads([]); return; }
+    setLeads(data || []);
+  };
+  useEffect(() => { load(); }, []);
+
+  const maskPhone = (p) => { if (!p) return "—"; const s = String(p); return s.slice(0, 5) + " ••• " + s.slice(-2); };
+  const reveal = async (l) => {
+    setRevealed((r) => ({ ...r, [l.id]: true }));
+    // log the reveal to the immutable audit trail
+    if (me) supabase.from("lead_activity").insert({ lead_id: l.id, actor_id: me.id, action: "reveal_phone",
+      detail: { lead_code: l.lead_code } }).then(() => {});
+  };
+
+  const filtered = (leads || []).filter((l) => {
+    if (!q.trim()) return true;
+    const s = q.toLowerCase();
+    return [l.client_name, l.project, l.area, l.assigned_agent_name, l.lead_code, l.status]
+      .some((v) => (v || "").toLowerCase().includes(s));
+  });
+
+  return <div>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok,
+          borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}>
+          <span style={{ width: 7, height: 7, borderRadius: 7, background: T.ok }} /> LIVE DATABASE</span>
+        <span style={{ fontSize: 12.5, color: T.muted }}>
+          {leads === null ? "Loading…" : `${leads.length} leads in Supabase`}</span>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={load} style={{ ...miniBtn() }}><RefreshCw size={13} /> Refresh</button>
+        <button onClick={() => setShowImport(true)} style={{ ...miniBtn() }}><Upload size={13} /> Import file</button>
+        <button onClick={() => setShowAdd(true)} style={{ background: T.btnBg, color: T.btnFg, border: "none",
+          borderRadius: 9, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
+          display: "inline-flex", alignItems: "center", gap: 6 }}><Plus size={14} /> Add lead</button>
+      </div>
+    </div>
+
+    {err && <div style={{ ...card, padding: 14, marginTop: 14, borderColor: T.badSoft, color: T.bad, fontSize: 13 }}>
+      Couldn't load leads: {err}</div>}
+
+    <div style={{ ...card, padding: "10px 14px", marginTop: 14, display: "flex", alignItems: "center", gap: 9 }}>
+      <Search size={15} color={T.muted} />
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, project, area, agent…"
+        style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 13, fontFamily: UI, color: T.ink }} />
+      {q && <span style={{ fontSize: 11.5, color: T.muted }}>{filtered.length} match</span>}
+    </div>
+
+    {leads === null ? (
+      <div style={{ ...card, padding: 40, marginTop: 14, textAlign: "center", color: T.muted }}>Loading your leads…</div>
+    ) : leads.length === 0 ? (
+      <div style={{ ...card, padding: 40, marginTop: 14, textAlign: "center" }}>
+        <Database size={26} color={T.faint} style={{ marginBottom: 10 }} />
+        <div style={{ fontWeight: 700, fontSize: 15 }}>No leads yet</div>
+        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>
+          Run <b>02_import_leads.sql</b> in Supabase, or use Import file / Add lead above.</div>
+      </div>
+    ) : (
+      <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ minWidth: 880 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "0.7fr 1.4fr 1.3fr 1.3fr 1.1fr 1.2fr 0.9fr", gap: 8,
+              padding: "10px 16px", fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
+              color: T.muted, borderBottom: `1px solid ${T.hair}`, background: T.bone }}>
+              <span>Code</span><span>Client</span><span>Project</span><span>Phone</span><span>Area</span><span>Agent</span><span>Status</span>
+            </div>
+            {filtered.map((l, i) => (
+              <div key={l.id} style={{ display: "grid", gridTemplateColumns: "0.7fr 1.4fr 1.3fr 1.3fr 1.1fr 1.2fr 0.9fr",
+                gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5 }}>
+                <span style={{ fontWeight: 700, color: T.gold, fontSize: 11 }}>{l.lead_code}</span>
+                <span style={{ fontWeight: 600 }}>{l.client_name}</span>
+                <span style={{ color: T.inkSoft }}>{l.project || "—"}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 12 }}>{revealed[l.id] ? l.phone : maskPhone(l.phone)}</span>
+                  {!revealed[l.id] && <button onClick={() => reveal(l)} title="Reveal is logged"
+                    style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold, borderRadius: 6,
+                      padding: "2px 6px", fontSize: 9.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Reveal</button>}
+                </span>
+                <span style={{ color: T.inkSoft }}>{l.area || "—"}</span>
+                <span>{l.assigned_agent_name || <span style={{ color: T.faint }}>unassigned</span>}</span>
+                <Chip tone={l.is_open ? "gold" : "info"}>{l.is_open ? "Open" : l.status}</Chip>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )}
+    <div style={{ fontSize: 11, color: T.faint, marginTop: 10 }}>
+      This screen reads your real Supabase database. Phone reveals are written to the activity log. What each person sees is enforced by row-level security.
+    </div>
+
+    {showAdd && <AddLeadModal me={me} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />}
+    {showImport && <ImportModal me={me} onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); load(); }} />}
+  </div>;
+}
+function miniBtn() { return { background: T.paper, color: T.ink, border: `1px solid ${T.hair}`, borderRadius: 9,
+  padding: "8px 13px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: UI,
+  display: "inline-flex", alignItems: "center", gap: 6 }; }
+
+/* ---- Add Lead (writes to Supabase) ---- */
+function AddLeadModal({ onClose, onSaved, me }) {
+  const [f, setF] = useState({ client_name: "", phone: "", email: "", project: "", area: "", budget: "", assigned_agent_name: "" });
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const save = async () => {
+    if (!f.client_name.trim()) { setErr("Client name is required."); return; }
+    setBusy(true); setErr("");
+    const code = "L-" + Math.random().toString(36).slice(2, 7).toUpperCase();
+    const { error } = await supabase.from("leads").insert({
+      lead_code: code, client_name: f.client_name.trim(), phone: f.phone.trim() || null,
+      whatsapp: f.phone.trim() || null, email: f.email.trim() || null, project: f.project.trim() || null,
+      area: f.area.trim() || null, budget: f.budget.trim() || null,
+      assigned_agent_name: f.assigned_agent_name.trim() || null, source: "Manual", status: "New", temperature: "Cold",
+    });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onSaved();
+  };
+  const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13,
+    fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginTop: 5 };
+  return <Modal title="Add lead" onClose={onClose}>
+    {[["Client name *", "client_name"], ["Phone", "phone"], ["Email", "email"], ["Project", "project"], ["Area", "area"], ["Budget", "budget"], ["Assign to (agent name)", "assigned_agent_name"]].map(([lbl, k]) => (
+      <label key={k} style={{ display: "block", marginBottom: 10 }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>{lbl}</span>
+        <input value={f[k]} onChange={(e) => set(k, e.target.value)} style={inp} />
+      </label>
+    ))}
+    {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 8 }}>{err}</div>}
+    <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
+      borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>
+      {busy ? "Saving…" : "Save to database"}</button>
+  </Modal>;
+}
+
+/* ---- Import file (CSV) → Supabase ---- */
+function ImportModal({ onClose, onDone, me }) {
+  const [rows, setRows] = useState(null); const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(""); const [done, setDone] = useState(0);
+  const parseCsv = (text) => {
+    const lines = text.split(/\r?\n/).filter((l) => l.trim());
+    if (!lines.length) return [];
+    const split = (l) => { const out = []; let cur = "", inq = false;
+      for (let i = 0; i < l.length; i++) { const c = l[i];
+        if (c === '"') inq = !inq; else if (c === "," && !inq) { out.push(cur); cur = ""; } else cur += c; }
+      out.push(cur); return out.map((s) => s.trim().replace(/^"|"$/g, "")); };
+    const hdr = split(lines[0]).map((h) => h.toLowerCase());
+    const pick = (cells, names) => { for (const n of names) { const idx = hdr.findIndex((h) => h.includes(n)); if (idx >= 0 && cells[idx]) return cells[idx]; } return null; };
+    return lines.slice(1).map((l) => { const c = split(l);
+      return { client_name: pick(c, ["customer", "name", "client"]) || "Unknown",
+        phone: pick(c, ["mobile", "phone", "whatsapp"]), email: pick(c, ["email"]),
+        project: pick(c, ["property type", "project"]), area: pick(c, ["location", "area"]),
+        assigned_agent_name: pick(c, ["agent"]) }; });
+  };
+  const onFile = (e) => { const file = e.target.files[0]; if (!file) return;
+    const r = new FileReader(); r.onload = () => { try { setRows(parseCsv(String(r.result))); setErr(""); }
+      catch (x) { setErr("Couldn't read that file. Use a .csv export."); } }; r.readAsText(file); };
+  const run = async () => {
+    if (!rows || !rows.length) return; setBusy(true); setErr(""); let n = 0;
+    for (let i = 0; i < rows.length; i += 50) {
+      const batch = rows.slice(i, i + 50).map((x, j) => ({
+        lead_code: "L-" + Date.now().toString(36).slice(-4) + (i + j),
+        client_name: x.client_name, phone: x.phone ? "+" + String(x.phone).replace(/\D/g, "") : null,
+        whatsapp: x.phone ? "+" + String(x.phone).replace(/\D/g, "") : null, email: x.email || null,
+        project: x.project || null, area: x.area || null, assigned_agent_name: x.assigned_agent_name || null,
+        source: "Import", status: "New", temperature: "Cold" }));
+      const { error } = await supabase.from("leads").insert(batch);
+      if (error) { setErr(error.message); setBusy(false); return; }
+      n += batch.length; setDone(n);
+    }
+    setBusy(false); onDone();
+  };
+  return <Modal title="Import leads from file" onClose={onClose}>
+    <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>
+      Upload a <b>.csv</b> file. Columns are auto-detected (customer/name, mobile/phone, email, property type/project, location/area, agent).
+      For Excel, use File → Save As → CSV first.</div>
+    <input type="file" accept=".csv,text/csv" onChange={onFile} style={{ fontSize: 13, marginBottom: 12 }} />
+    {rows && <div style={{ ...card, padding: 12, marginBottom: 12, fontSize: 12.5 }}>
+      Found <b>{rows.length}</b> rows. First: {rows[0]?.client_name} · {rows[0]?.project || "—"}</div>}
+    {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 8 }}>{err}</div>}
+    {busy && <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 8 }}>Importing… {done} saved</div>}
+    <button onClick={run} disabled={!rows || busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
+      borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: rows ? "pointer" : "default",
+      fontFamily: UI, opacity: (!rows || busy) ? .5 : 1 }}>{busy ? "Importing…" : `Import ${rows ? rows.length : ""} leads`}</button>
+  </Modal>;
+}
+
+function Modal({ title, children, onClose }) {
+  return <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 80,
+    display: "grid", placeItems: "center", padding: 16 }}>
+    <div onClick={(e) => e.stopPropagation()} style={{ background: T.paper, borderRadius: 16, boxShadow: T.shadowLg,
+      width: "100%", maxWidth: 420, maxHeight: "86vh", overflowY: "auto", padding: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <span style={{ fontFamily: DISPLAY, fontSize: 17 }}>{title}</span>
+        <button onClick={onClose} style={{ border: "none", background: T.bone, borderRadius: 8, width: 30, height: 30,
+          display: "grid", placeItems: "center", cursor: "pointer" }}><X size={15} color={T.inkSoft} /></button>
+      </div>
+      {children}
+    </div>
+  </div>;
 }
