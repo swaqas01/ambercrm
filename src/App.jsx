@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { supabase, roleInfo } from "./supabase.js";
+import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall } from "./supabase.js";
 import {
   LayoutDashboard, UserCircle, FileText, UserPlus, Kanban, BarChart3,
   ShieldAlert, Building2, Gauge, Briefcase, Coins, Settings, Menu, X,
@@ -186,6 +186,7 @@ const COMMISSIONS = [
 const NAV = [
   ["live", "Leads (Live)", Database],
   ["admin", "Admin Dashboard", LayoutDashboard],
+  ["users", "Users & Agents", Users],
   ["agent", "Agent Dashboard", UserCircle],
   ["lead", "Lead Detail", FileText],
   ["assign", "Lead Assignment", UserPlus],
@@ -215,8 +216,10 @@ export default function App() {
         const { data: prof } = await supabase.from("profiles").select("full_name, role, active").eq("id", session.user.id).single();
         if (prof && prof.active !== false) {
           const ri = roleInfo(prof.role);
-          setUser({ name: prof.full_name || session.user.email, email: session.user.email, role: prof.role, roleLabel: ri.label });
+          setUser({ name: prof.full_name || session.user.email, email: session.user.email, role: prof.role,
+            roleLabel: ri.label, id: session.user.id, mustChangePw: !!prof.force_password_change });
           setScreen(ri.home === "agent" ? "agent" : "admin");
+          stampLogin(session.user.id);
         }
       }
       if (mounted) setAuthChecked(true);
@@ -241,12 +244,12 @@ export default function App() {
   const go = (s, f = null) => { setScreen(s); setFilter(f); setNavOpen(false); };
   // role guard — agents may only open their own surfaces
   useEffect(() => {
-    if (user && user.role === "agent" && !["agent", "live", "open", "lead"].includes(screen)) {
-      setScreen("agent");
+    if (user && !canOpen(user.role, screen)) {
+      setScreen(roleInfo(user.role).home === "agent" ? "agent" : "admin");
     }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} />, lead: <LeadDetail />, open: <OpenLeads />,
+    live: <LiveLeads user={user} filter={filter} go={go} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} />, lead: <LeadDetail />, open: <OpenLeads />,
     assign: <Assignment />, pipeline: <Pipeline go={go} />, performance: <Performance />,
     security: <SecurityLog />, matching: <Matching go={go} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -256,6 +259,10 @@ export default function App() {
       transition: "background .25s ease" }}>
       <style>{THEME_CSS}</style>
       {!user && <LoginFlow onLogin={(u) => { setUser(u); setScreen(u.home === "agent" ? "agent" : "admin"); }} dark={dark} setDark={setDark} />}
+      {user && user.mustChangePw && <ForcedPasswordChange onDone={async () => {
+        await supabase.from("profiles").update({ force_password_change: false }).eq("id", user.id);
+        setUser({ ...user, mustChangePw: false });
+      }} signOut={signOut} />}
       {/* sidebar */}
       {user && (!narrow || navOpen) && (
         <aside style={{ width: 232, background: T.side, color: "#fff", flexShrink: 0, display: "flex",
@@ -266,11 +273,7 @@ export default function App() {
             <div style={{ fontFamily: DISPLAY, fontSize: 10.5, letterSpacing: ".42em", color: T.goldBright, marginTop: 3, fontWeight: 400 }}>LEAD DESK</div>
           </div>
           <nav style={{ flex: 1, overflowY: "auto", padding: "12px 10px" }}>
-            {NAV.filter(([k]) => {
-              const agentAllowed = ["agent", "live", "open", "lead"];
-              const isAgent = user && user.role === "agent";
-              return isAgent ? agentAllowed.includes(k) : true;
-            }).map(([k, label, Ic]) => {
+            {NAV.filter(([k]) => user && canOpen(user.role, k)).map(([k, label, Ic]) => {
               const on = screen === k;
               return (
                 <button key={k} onClick={() => go(k)} style={{ display: "flex", alignItems: "center", gap: 11,
@@ -1321,12 +1324,14 @@ function LoginFlow({ onLogin, dark, setDark }) {
       const { data, error } = await supabase.auth.signInWithPassword({ email: mail, password: pw });
       if (error) { setBusy(false); setErr("Email or password is incorrect."); return; }
       const { data: prof } = await supabase.from("profiles")
-        .select("full_name, role, active").eq("id", data.user.id).single();
+        .select("full_name, role, active, force_password_change").eq("id", data.user.id).single();
       if (!prof) { setBusy(false); setErr("No profile found for this account. Contact your admin."); return; }
-      if (prof.active === false) { setBusy(false); setErr("This account has been deactivated."); return; }
+      if (prof.active === false) { setBusy(false); setErr("This account has been deactivated. Contact your administrator."); return; }
       const ri = roleInfo(prof.role);
       setBusy(false);
-      onLogin({ name: prof.full_name || data.user.email, email: data.user.email, role: prof.role, roleLabel: ri.label, home: ri.home });
+      stampLogin(data.user.id);
+      onLogin({ name: prof.full_name || data.user.email, email: data.user.email, role: prof.role, roleLabel: ri.label,
+        home: ri.home, id: data.user.id, mustChangePw: !!prof.force_password_change });
     } catch (e) { setBusy(false); setErr("Could not reach the server. Check your connection."); }
   };
 
@@ -1876,4 +1881,269 @@ function NotifBell({ go }) {
       </div>
     </>}
   </div>;
+}
+
+/* ===================== FORCED FIRST-LOGIN PASSWORD CHANGE ================= */
+function ForcedPasswordChange({ onDone, signOut }) {
+  const [pw, setPw] = useState(""); const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState("");
+  const save = async () => {
+    if (pw.length < 8) { setMsg("Use at least 8 characters."); return; }
+    if (pw !== pw2) { setMsg("Passwords don't match."); return; }
+    setBusy(true); setMsg("");
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    setBusy(false);
+    if (error) { setMsg("Error: " + error.message); return; }
+    onDone();
+  };
+  const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "11px 13px", fontSize: 14,
+    fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginBottom: 10 };
+  return <div style={{ position: "fixed", inset: 0, zIndex: 110, background: T.bone, display: "grid", placeItems: "center", padding: 18, fontFamily: UI }}>
+    <div style={{ width: "100%", maxWidth: 380, background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 18, boxShadow: T.shadowLg, padding: 26 }}>
+      <div style={{ fontWeight: 800, fontSize: 18 }}>Set your password</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, marginBottom: 18 }}>
+        For security, please choose your own password before continuing.</div>
+      <input type="password" placeholder="New password" value={pw} onChange={(e) => setPw(e.target.value)} style={inp} />
+      <input type="password" placeholder="Confirm password" value={pw2} onChange={(e) => setPw2(e.target.value)} style={inp} />
+      {msg && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{msg}</div>}
+      <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
+        borderRadius: 11, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>
+        {busy ? "Saving…" : "Save & continue"}</button>
+      <button onClick={signOut} style={{ width: "100%", marginTop: 8, background: "none", border: "none", color: T.muted,
+        fontSize: 12, cursor: "pointer", fontFamily: UI }}>Sign out instead</button>
+    </div>
+  </div>;
+}
+
+/* ========================= USERS & AGENTS (Master Admin) ================= */
+const ROLE_OPTIONS = [["agent","Agent"],["sales_manager","Sales Manager"],["admin","Admin"],["marketing","Marketing"],["accounts","Accounts"],["master_admin","Master Admin"]];
+const roleLabel = (r) => (ROLE_OPTIONS.find(([k]) => k === r) || [r, r])[1];
+
+function UsersAdmin({ user }) {
+  const [users, setUsers] = useState(null);
+  const [err, setErr] = useState("");
+  const [q, setQ] = useState(""); const [roleFilter, setRoleFilter] = useState("all");
+  const [showAdd, setShowAdd] = useState(false);
+  const [edit, setEdit] = useState(null);
+
+  const load = async () => {
+    setErr("");
+    const r = await adminCall("list_users", {});
+    if (r.error) { setErr(r.error); setUsers([]); return; }
+    setUsers(r.users || []);
+  };
+  useEffect(() => { load(); }, []);
+
+  if (user?.role !== "master_admin")
+    return <div style={{ ...card, padding: 30, textAlign: "center" }}>
+      <Lock size={24} color={T.faint} style={{ marginBottom: 8 }} />
+      <div style={{ fontWeight: 700 }}>Master Admin only</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>You don't have permission to manage users.</div></div>;
+
+  const filtered = (users || []).filter((u) => {
+    if (roleFilter !== "all" && u.role !== roleFilter) return false;
+    if (!q.trim()) return true; const s = q.toLowerCase();
+    return [u.full_name, u.email, u.phone, u.department].some((v) => (v || "").toLowerCase().includes(s));
+  });
+
+  return <div>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok,
+          borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}>
+          <Users size={12} /> {users === null ? "Loading…" : `${users.length} users`}</span>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={load} style={{ ...miniBtn() }}><RefreshCw size={13} /> Refresh</button>
+        <button onClick={() => setShowAdd(true)} style={{ background: T.btnBg, color: T.btnFg, border: "none",
+          borderRadius: 9, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
+          display: "inline-flex", alignItems: "center", gap: 6 }}><UserPlus size={14} /> Add new user</button>
+      </div>
+    </div>
+
+    {err && <div style={{ ...card, padding: 14, marginTop: 14, borderColor: T.badSoft, color: T.bad, fontSize: 13 }}>
+      {err.includes("SERVICE_ROLE") ? "User management needs the SUPABASE_SERVICE_ROLE_KEY set in Vercel (Settings → Environment Variables), then redeploy." : err}</div>}
+
+    <div style={{ ...card, padding: "10px 14px", marginTop: 14, display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+      <Search size={15} color={T.muted} />
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, email, phone…"
+        style={{ flex: 1, minWidth: 140, border: "none", outline: "none", background: "transparent", fontSize: 13, fontFamily: UI, color: T.ink }} />
+      <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} style={{ border: `1px solid ${T.hair}`,
+        borderRadius: 8, padding: "6px 10px", fontSize: 12.5, fontFamily: UI, background: T.paper, color: T.ink }}>
+        <option value="all">All roles</option>
+        {ROLE_OPTIONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+      </select>
+    </div>
+
+    {users === null ? <div style={{ ...card, padding: 40, marginTop: 14, textAlign: "center", color: T.muted }}>Loading users…</div> :
+      <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ minWidth: 820 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1.2fr 1fr 0.8fr 0.7fr 1fr", gap: 8, padding: "10px 16px",
+              fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: T.muted,
+              borderBottom: `1px solid ${T.hair}`, background: T.bone }}>
+              <span>Name</span><span>Role</span><span>Status</span><span>Leads</span><span>Last login</span><span>Actions</span>
+            </div>
+            {filtered.map((u, i) => (
+              <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1.6fr 1.2fr 1fr 0.8fr 0.7fr 1fr", gap: 8,
+                alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                  <Av name={u.full_name || u.email} size={30} dark />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.full_name || "—"}</div>
+                    <div style={{ fontSize: 10.5, color: T.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.email}</div>
+                  </div>
+                </div>
+                <Chip tone={u.role === "master_admin" ? "gold" : u.role === "agent" ? "info" : "muted"}>{roleLabel(u.role)}</Chip>
+                <Chip tone={u.active ? "ok" : "bad"}>{u.active ? "Active" : "Inactive"}</Chip>
+                <span>{u.assigned_leads}{u.open_leads ? ` (${u.open_leads} open)` : ""}</span>
+                <span style={{ fontSize: 11, color: T.muted }}>{u.last_login ? new Date(u.last_login).toLocaleDateString() : "never"}</span>
+                <button onClick={() => setEdit(u)} style={{ ...miniBtn(), justifySelf: "start" }}>Manage</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>}
+    <div style={{ fontSize: 11, color: T.faint, marginTop: 10 }}>
+      Creating a user makes a real login. First login forces a password change. All actions are recorded in the admin audit log.
+    </div>
+
+    {showAdd && <AddUserModal onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />}
+    {edit && <ManageUserModal u={edit} users={users} onClose={() => setEdit(null)} onChanged={() => { setEdit(null); load(); }} />}
+  </div>;
+}
+
+function AddUserModal({ onClose, onSaved }) {
+  const [f, setF] = useState({ full_name: "", email: "", phone: "", role: "agent", department: "", job_title: "",
+    password: "", password2: "", lead_scope: "own", twofa: true, status: "active", notes: "" });
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [ok, setOk] = useState(null);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const gen = () => { const p = "Amber" + Math.random().toString(36).slice(2, 8) + "!"; set("password", p); set("password2", p); };
+  const save = async () => {
+    if (!f.full_name.trim()) { setErr("Full name is required."); return; }
+    if (!f.email.includes("@")) { setErr("Valid email is required."); return; }
+    if (f.password.length < 8) { setErr("Initial password must be at least 8 characters."); return; }
+    if (f.password !== f.password2) { setErr("Passwords don't match."); return; }
+    setBusy(true); setErr("");
+    const r = await adminCall("create_user", f);
+    setBusy(false);
+    if (r.error) { setErr(r.error); return; }
+    setOk({ email: f.email, password: f.password });
+  };
+  const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13,
+    fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginTop: 5 };
+  const L = (lbl, k, opts = {}) => <label style={{ display: "block", marginBottom: 10 }}>
+    <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>{lbl}</span>
+    <input value={f[k]} onChange={(e) => set(k, e.target.value)} type={opts.type || "text"} placeholder={opts.ph || ""} style={inp} /></label>;
+
+  if (ok) return <Modal title="User created ✓" onClose={onSaved}>
+    <div style={{ fontSize: 13, color: T.inkSoft, lineHeight: 1.6, marginBottom: 12 }}>
+      Share these credentials securely. They'll be asked to set their own password on first login.</div>
+    <div style={{ ...card, padding: 14, background: T.bone }}>
+      <Row k="Email" v={ok.email} /><Row k="Temp password" v={ok.password} />
+    </div>
+    <button onClick={() => navigator.clipboard && navigator.clipboard.writeText(`Email: ${ok.email}\nPassword: ${ok.password}`)}
+      style={{ ...miniBtn(), width: "100%", justifyContent: "center", marginTop: 12 }}>Copy credentials</button>
+    <button onClick={onSaved} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10,
+      padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, marginTop: 8 }}>Done</button>
+  </Modal>;
+
+  return <Modal title="Add new user" onClose={onClose}>
+    {L("Full name *", "full_name")}
+    {L("Email *", "email", { type: "email", ph: "name@amberhomes.ae" })}
+    {L("Phone", "phone", { ph: "optional" })}
+    <label style={{ display: "block", marginBottom: 10 }}>
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Role *</span>
+      <select value={f.role} onChange={(e) => set("role", e.target.value)} style={inp}>
+        {ROLE_OPTIONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
+    {L("Department / team", "department")}
+    {L("Job title", "job_title")}
+    <label style={{ display: "block", marginBottom: 10 }}>
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Lead access scope</span>
+      <select value={f.lead_scope} onChange={(e) => set("lead_scope", e.target.value)} style={inp}>
+        <option value="own">Own leads only</option><option value="team">Team leads</option><option value="all">All leads</option></select></label>
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+      <div style={{ flex: 1 }}>{L("Initial password *", "password", { type: "text" })}</div>
+      <button onClick={gen} style={{ ...miniBtn(), marginBottom: 10 }}>Generate</button>
+    </div>
+    {L("Confirm password *", "password2", { type: "text" })}
+    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginBottom: 10, cursor: "pointer" }}>
+      <input type="checkbox" checked={f.twofa} onChange={(e) => set("twofa", e.target.checked)} /> Require 2FA setup (recommended)</label>
+    {L("Notes", "notes")}
+    {err && <div style={{ color: T.bad, fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>{err}</div>}
+    <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
+      borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>
+      {busy ? "Creating…" : "Create user"}</button>
+    <div style={{ fontSize: 10.5, color: T.faint, marginTop: 8, lineHeight: 1.5 }}>
+      First login forces a password change. Full TOTP 2FA enrollment is completed by the user on their device.</div>
+  </Modal>;
+}
+
+function ManageUserModal({ u, users, onClose, onChanged }) {
+  const [role, setRole] = useState(u.role);
+  const [busy, setBusy] = useState(""); const [msg, setMsg] = useState("");
+  const [pw, setPw] = useState(""); const [deact, setDeact] = useState(false);
+  const [leadAction, setLeadAction] = useState("open"); const [reassignTo, setReassignTo] = useState("");
+  const others = (users || []).filter((x) => x.id !== u.id && x.active);
+
+  const changeRole = async () => { setBusy("role"); setMsg("");
+    const r = await adminCall("set_role", { id: u.id, role, oldRole: u.role });
+    setBusy(""); setMsg(r.error || "Role updated."); if (!r.error) setTimeout(onChanged, 800); };
+  const resetPw = async () => { if (pw.length < 8) { setMsg("Password must be 8+ characters."); return; }
+    setBusy("pw"); setMsg(""); const r = await adminCall("reset_password", { id: u.id, password: pw, force: true });
+    setBusy(""); setMsg(r.error || "Password reset. User must change it on next login."); };
+  const reactivate = async () => { setBusy("act"); const r = await adminCall("set_active", { id: u.id, active: true });
+    setBusy(""); setMsg(r.error || "Reactivated."); if (!r.error) setTimeout(onChanged, 800); };
+  const doDeactivate = async () => { setBusy("act"); setMsg("");
+    const target = others.find((x) => x.id === reassignTo);
+    const r = await adminCall("set_active", { id: u.id, active: false, reason: "Deactivated by Master Admin",
+      leadAction, reassignTo: leadAction === "reassign" ? reassignTo : null,
+      reassignName: leadAction === "reassign" && target ? target.full_name : null, userName: u.full_name });
+    setBusy(""); setMsg(r.error || `Deactivated. ${r.affected || 0} lead(s) handled.`); if (!r.error) setTimeout(onChanged, 1000); };
+
+  const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13,
+    fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginTop: 5 };
+  return <Modal title={u.full_name || u.email} onClose={onClose}>
+    <Row k="Email" v={u.email} /><Row k="Status" v={u.active ? "Active" : "Inactive"} />
+    <Row k="Assigned leads" v={u.assigned_leads} /><Row k="Last login" v={u.last_login ? new Date(u.last_login).toLocaleString() : "never"} />
+
+    <div style={{ marginTop: 16, fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Role</div>
+    <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+      <select value={role} onChange={(e) => setRole(e.target.value)} style={{ ...inp, marginTop: 0 }}>
+        {ROLE_OPTIONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+      <button onClick={changeRole} disabled={busy === "role" || role === u.role} style={{ ...miniBtn(), opacity: role === u.role ? .5 : 1 }}>
+        {busy === "role" ? "…" : "Update"}</button>
+    </div>
+
+    <div style={{ marginTop: 16, fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Reset password</div>
+    <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+      <input value={pw} onChange={(e) => setPw(e.target.value)} placeholder="New temp password" style={{ ...inp, marginTop: 0 }} />
+      <button onClick={resetPw} disabled={busy === "pw"} style={{ ...miniBtn() }}>{busy === "pw" ? "…" : "Reset"}</button>
+    </div>
+
+    <div style={{ height: 1, background: T.hairSoft, margin: "18px 0 14px" }} />
+    {u.active ? (!deact ?
+      <button onClick={() => setDeact(true)} style={{ width: "100%", background: T.badSoft, color: T.bad, border: `1px solid ${T.bad}`,
+        borderRadius: 10, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Deactivate user</button> :
+      <div style={{ ...card, padding: 14, background: T.badSoft, borderColor: T.bad }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: T.bad, marginBottom: 8 }}>What happens to this user's active leads?</div>
+        {[["open", "Move all to Open Leads pool"], ["reassign", "Reassign to another agent"], ["block", "Keep assigned, just block access"]].map(([k, l]) => (
+          <label key={k} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginBottom: 6, cursor: "pointer" }}>
+            <input type="radio" checked={leadAction === k} onChange={() => setLeadAction(k)} /> {l}</label>
+        ))}
+        {leadAction === "reassign" && <select value={reassignTo} onChange={(e) => setReassignTo(e.target.value)} style={{ ...inp }}>
+          <option value="">Select agent…</option>{others.map((o) => <option key={o.id} value={o.id}>{o.full_name || o.email}</option>)}</select>}
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={doDeactivate} disabled={busy === "act" || (leadAction === "reassign" && !reassignTo)}
+            style={{ flex: 1, background: T.bad, color: "#fff", border: "none", borderRadius: 10, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>
+            {busy === "act" ? "Working…" : "Confirm deactivation"}</button>
+          <button onClick={() => setDeact(false)} style={{ ...miniBtn() }}>Cancel</button>
+        </div>
+      </div>
+    ) : <button onClick={reactivate} disabled={busy === "act"} style={{ width: "100%", background: T.okSoft, color: T.ok,
+      border: `1px solid ${T.ok}`, borderRadius: 10, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>
+      {busy === "act" ? "…" : "Reactivate user"}</button>}
+
+    {msg && <div style={{ color: msg.toLowerCase().includes("error") || msg.includes("must be") ? T.bad : T.ok, fontSize: 12.5, fontWeight: 600, marginTop: 12, textAlign: "center" }}>{msg}</div>}
+  </Modal>;
 }
