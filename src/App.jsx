@@ -473,17 +473,18 @@ export default function App() {
     hotdeals: <HotDeals user={user} go={go} />,
     aisources: <AiSources user={user} />,
   };
+  const authView = recovery || !authChecked || !user || (user && user.mustChangePw);
   return (
-    <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: T.bone, minHeight: "100dvh", display: "flex", color: T.ink,
+    <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: authView ? "#0a0710" : T.bone, minHeight: "100dvh", display: "flex", color: T.ink,
       transition: "background .25s ease" }}>
       <style>{THEME_CSS}</style>
       {recovery && <ResetPassword onDone={() => { setRecovery(false); setUser(null); try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {} }} />}
       {!recovery && !authChecked && (
-        <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: T.bone, zIndex: 100 }}>
+        <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: "#0a0710", zIndex: 100 }}>
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontFamily: DISPLAY, fontSize: 22, letterSpacing: ".005em", color: T.ink, fontWeight: 800, lineHeight: 1.1 }}>Amber Homes</div>
-            <div style={{ fontFamily: DISPLAY, fontSize: 10, letterSpacing: ".34em", color: T.gold, marginTop: 4, fontWeight: 700 }}>REAL ESTATE CRM</div>
-            <div style={{ marginTop: 16, fontSize: 12.5, color: T.muted }}>Restoring your session…</div>
+            <div style={{ fontFamily: DISPLAY, fontSize: 22, letterSpacing: ".005em", color: "#F4F2FF", fontWeight: 800, lineHeight: 1.1 }}>Amber Homes</div>
+            <div style={{ fontFamily: DISPLAY, fontSize: 10, letterSpacing: ".34em", color: "#b794ff", marginTop: 4, fontWeight: 700 }}>REAL ESTATE CRM</div>
+            <div style={{ marginTop: 16, fontSize: 12.5, color: "rgba(255,255,255,.55)" }}>Restoring your session…</div>
           </div>
         </div>
       )}
