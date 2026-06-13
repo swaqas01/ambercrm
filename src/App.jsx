@@ -132,13 +132,6 @@ const LOGIN_CSS = `
 .al-horizon{position:absolute;left:0;right:0;bottom:7%;height:1px;
   background:linear-gradient(90deg,transparent,rgba(180,130,250,.45) 30%,rgba(255,205,150,.28) 50%,rgba(180,130,250,.4) 70%,transparent);opacity:.5;}
 
-.al-brand{position:relative;z-index:2;text-align:center;margin:26px auto 4px;padding:0 18px;}
-.al-brand-frame{display:inline-flex;flex-direction:column;align-items:center;gap:2px;
-  border:1.5px solid rgba(206,164,90,.55);border-radius:6px;padding:10px 22px 8px;position:relative;}
-.al-brand-name{font-family:${DISPLAY};font-weight:700;font-size:26px;line-height:1;letter-spacing:.01em;
-  background:linear-gradient(180deg,#f4dca0,#c79a4a 70%,#a9802f);-webkit-background-clip:text;background-clip:text;color:transparent;}
-.al-brand-sub{font-size:9.5px;font-weight:600;letter-spacing:.42em;text-indent:.42em;color:#c79a4a;text-transform:uppercase;}
-
 .al-wrap{position:relative;z-index:2;flex:1;width:100%;max-width:480px;margin:0 auto;
   display:flex;flex-direction:column;justify-content:center;align-items:stretch;
   padding:14px 18px 22px;}
@@ -224,7 +217,6 @@ const LOGIN_CSS = `
 .al-foot-mobile{display:inline;}
 
 @media (min-width:980px){
-  .al-brand{position:absolute;top:32px;left:46px;margin:0;text-align:left;z-index:3;}
   .al-wrap{max-width:1180px;flex-direction:row;display:grid;grid-template-columns:1.05fr .95fr;
     gap:56px;align-items:center;min-height:100vh;padding:48px 46px;}
   .al-wrap-solo{display:flex;justify-content:center;align-items:center;max-width:560px;}
@@ -3993,13 +3985,6 @@ function LoginFlow({ onLogin }) {
         <div className="al-glow al-glowB" />
         <div className="al-arc" />
         <div className="al-horizon" />
-      </div>
-
-      <div className="al-brand">
-        <span className="al-brand-frame">
-          <span className="al-brand-name">Amber Homes</span>
-          <span className="al-brand-sub">Real Estate</span>
-        </span>
       </div>
 
       <div className="al-wrap">
