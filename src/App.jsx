@@ -23,6 +23,7 @@ const T = {
   goldTint: "var(--goldTint)", wm: "var(--wm)", shadow: "var(--shadow)", shadowLg: "var(--shadowLg)",
 };
 const THEME_CSS = `
+  html, body { background:#0a0710; }
   [data-amber] {
     --ink:#2E263D; --inkSoft:#4B465C; --muted:#6E6B7B; --faint:#A5A2B2;
     --bone:#F4F5FA; --paper:#FFFFFF; --hair:#EAEAEF; --hairSoft:#F3F3F8;
@@ -113,6 +114,8 @@ const UI = "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif";
 /* ===== Premium login / auth screen styles (dark + violet, responsive) ===== */
 const LOGIN_CSS = `
 .al-root{position:fixed;inset:0;z-index:100;overflow-y:auto;font-family:${UI};
+  min-height:100vh;min-height:100dvh;
+  padding-bottom:env(safe-area-inset-bottom);
   display:flex;flex-direction:column;
   background:radial-gradient(900px 520px at 16% 90%, rgba(124,77,255,.24), transparent 60%),
     radial-gradient(760px 520px at 86% 12%, rgba(150,90,240,.16), transparent 62%),
@@ -471,7 +474,7 @@ export default function App() {
     aisources: <AiSources user={user} />,
   };
   return (
-    <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: T.bone, minHeight: 600, display: "flex", color: T.ink,
+    <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: T.bone, minHeight: "100dvh", display: "flex", color: T.ink,
       transition: "background .25s ease" }}>
       <style>{THEME_CSS}</style>
       {recovery && <ResetPassword onDone={() => { setRecovery(false); setUser(null); try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {} }} />}
