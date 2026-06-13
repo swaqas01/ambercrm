@@ -9,7 +9,7 @@ import {
   Flame, Clock, MapPin, Eye, EyeOff, Lock, AlertTriangle, CheckCircle2,
   TrendingUp, Users, Wallet, Star, Calendar, Filter, Plus, ArrowUpRight,
   ArrowDownRight, CircleDot, Ban, Download, Globe, Smartphone, Sun, Moon, Unlock, Send, Bot, Fingerprint, KeyRound, LogOut,
-  Database, RefreshCw, Upload, Sparkle
+  Database, RefreshCw, Upload, Sparkle, Zap, ShieldCheck
 } from "lucide-react";
 
 /* ================================ TOKENS ================================= */
@@ -105,6 +105,148 @@ const THEME_CSS = `
 `;
 const DISPLAY = "'Plus Jakarta Sans', system-ui, sans-serif";
 const UI = "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif";
+
+/* ===== Premium login / auth screen styles (dark + violet, responsive) ===== */
+const LOGIN_CSS = `
+.al-root{position:fixed;inset:0;z-index:100;overflow-y:auto;font-family:${UI};
+  display:flex;flex-direction:column;
+  background:radial-gradient(900px 520px at 16% 90%, rgba(124,77,255,.24), transparent 60%),
+    radial-gradient(760px 520px at 86% 12%, rgba(150,90,240,.16), transparent 62%),
+    radial-gradient(1200px 800px at 50% 120%, rgba(170,120,250,.10), transparent 70%),
+    #0a0710;
+  -webkit-font-smoothing:antialiased;}
+.al-root *{box-sizing:border-box;}
+.al-bg{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0;}
+.al-stars{position:absolute;inset:0;opacity:.55;
+  background-image:
+    radial-gradient(1.5px 1.5px at 24px 36px, rgba(255,255,255,.55), transparent),
+    radial-gradient(1.4px 1.4px at 130px 90px, rgba(206,184,255,.5), transparent),
+    radial-gradient(1px 1px at 80px 160px, rgba(255,255,255,.45), transparent),
+    radial-gradient(1.2px 1.2px at 190px 40px, rgba(210,180,255,.5), transparent),
+    radial-gradient(1px 1px at 40px 120px, rgba(255,255,255,.4), transparent);
+  background-size:220px 220px;}
+.al-glow{position:absolute;border-radius:50%;filter:blur(70px);opacity:.6;}
+.al-glowA{width:560px;height:560px;left:-160px;bottom:-120px;background:radial-gradient(circle,rgba(138,86,245,.45),transparent 65%);}
+.al-glowB{width:520px;height:520px;right:-150px;top:-160px;background:radial-gradient(circle,rgba(120,80,230,.30),transparent 65%);}
+.al-arc{display:none;}
+.al-horizon{position:absolute;left:0;right:0;bottom:7%;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(180,130,250,.45) 30%,rgba(255,205,150,.28) 50%,rgba(180,130,250,.4) 70%,transparent);opacity:.5;}
+
+.al-brand{position:relative;z-index:2;text-align:center;margin:26px auto 4px;padding:0 18px;}
+.al-brand-frame{display:inline-flex;flex-direction:column;align-items:center;gap:2px;
+  border:1.5px solid rgba(206,164,90,.55);border-radius:6px;padding:10px 22px 8px;position:relative;}
+.al-brand-name{font-family:${DISPLAY};font-weight:700;font-size:26px;line-height:1;letter-spacing:.01em;
+  background:linear-gradient(180deg,#f4dca0,#c79a4a 70%,#a9802f);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.al-brand-sub{font-size:9.5px;font-weight:600;letter-spacing:.42em;text-indent:.42em;color:#c79a4a;text-transform:uppercase;}
+
+.al-wrap{position:relative;z-index:2;flex:1;width:100%;max-width:480px;margin:0 auto;
+  display:flex;flex-direction:column;justify-content:center;align-items:stretch;
+  padding:14px 18px 22px;}
+.al-left{text-align:center;}
+.al-pill{display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(170,130,240,.42);
+  color:#c4a5f7;background:rgba(138,86,245,.09);border-radius:999px;padding:6px 14px;
+  font-size:11.5px;font-weight:700;letter-spacing:.09em;margin-bottom:16px;}
+.al-pill svg{color:#c4a5f7;}
+.al-h1{margin:0 0 14px;font-family:${DISPLAY};font-weight:800;color:#fff;line-height:1.08;
+  font-size:38px;letter-spacing:-.01em;}
+.al-grad{background:linear-gradient(92deg,#e6c9fb,#ad8cf3 48%,#7d72f0);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.al-white{color:#fff;}
+.al-welcome-d{display:none;}
+.al-welcome-m{display:inline;}
+.al-br-m{display:inline;}
+.al-sub{margin:0 auto 22px;max-width:440px;font-size:14.5px;line-height:1.5;color:#a8a2c0;}
+.al-features{display:none;}
+.al-feat{display:flex;flex-direction:column;align-items:flex-start;}
+.al-feat-ic{color:#b18cf2;margin-bottom:9px;}
+.al-feat-t{font-size:13.5px;font-weight:700;color:#fff;margin-bottom:3px;}
+.al-feat-s{font-size:12px;color:#8f88ab;}
+
+.al-right{display:flex;justify-content:center;}
+.al-card{width:100%;max-width:480px;position:relative;
+  background:rgba(20,15,32,.62);border:1px solid rgba(170,140,235,.16);border-radius:26px;
+  box-shadow:0 30px 80px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.05);
+  -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);
+  padding:26px 22px 24px;}
+.al-lockcircle{width:62px;height:62px;border-radius:50%;margin:4px auto 18px;display:grid;place-items:center;
+  border:1.5px solid rgba(168,120,240,.5);
+  background:radial-gradient(circle,rgba(140,90,240,.18),rgba(140,90,240,.04) 70%);
+  box-shadow:0 0 30px rgba(140,90,240,.4),inset 0 0 14px rgba(140,90,240,.18);}
+.al-lockcircle svg{color:#c0a3f6;}
+.al-card-head{display:none;text-align:center;margin-bottom:18px;}
+.al-stage-head{display:block;text-align:center;margin-bottom:18px;}
+.al-card-title{font-size:21px;font-weight:800;color:#fff;letter-spacing:-.01em;}
+.al-card-desc{font-size:13px;color:#9d96b8;margin-top:6px;line-height:1.45;}
+.al-label{display:block;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#9b94b8;margin:0 0 7px;}
+.al-field{position:relative;display:flex;align-items:center;margin-bottom:16px;
+  background:rgba(255,255,255,.028);border:1px solid rgba(150,130,210,.2);border-radius:13px;
+  transition:border-color .15s,box-shadow .15s;}
+.al-field:focus-within{border-color:rgba(168,130,240,.7);box-shadow:0 0 0 3px rgba(140,90,240,.16);}
+.al-field-ic{color:#9a86d6;margin:0 0 0 14px;flex:none;}
+.al-input{flex:1;min-width:0;border:none;outline:none;background:transparent;color:#f1eefb;
+  font-family:${UI};font-size:14.5px;padding:14px 14px 14px 12px;}
+.al-input::placeholder{color:#6f6890;}
+.al-input-pw{padding-right:6px;}
+.al-eye{flex:none;border:none;background:none;cursor:pointer;color:#8a83a8;padding:0 14px;display:grid;place-items:center;}
+.al-eye:hover{color:#bdb4dd;}
+.al-otp{width:100%;text-align:center;font-size:26px;letter-spacing:16px;font-weight:700;color:#fff;
+  background:rgba(255,255,255,.03);border:1px solid rgba(150,130,210,.22);border-radius:13px;
+  padding:15px 10px;outline:none;font-family:${UI};margin-bottom:4px;}
+.al-otp:focus{border-color:rgba(168,130,240,.7);box-shadow:0 0 0 3px rgba(140,90,240,.16);}
+.al-forgot-row{text-align:right;margin:-4px 0 16px;}
+.al-forgot{background:none;border:none;cursor:pointer;color:#ab8df1;font-size:12.5px;font-weight:600;font-family:${UI};}
+.al-forgot:hover{color:#c4abf7;}
+.al-btn{width:100%;border:none;cursor:pointer;color:#fff;font-family:${UI};font-size:15px;font-weight:700;
+  border-radius:13px;padding:15px;letter-spacing:.01em;
+  background:linear-gradient(92deg,#b98ff4 0%,#8559f3 58%,#7a4ef0 100%);
+  box-shadow:0 12px 30px rgba(120,80,240,.42);transition:filter .15s,opacity .15s;}
+.al-btn:hover{filter:brightness(1.06);}
+.al-btn:disabled{opacity:.6;cursor:default;}
+.al-btn:focus-visible{outline:2px solid #c4abf7;outline-offset:2px;}
+.al-arrow{display:inline-block;margin-left:6px;}
+.al-err{color:#ff90a1;font-size:12.5px;font-weight:600;margin:0 0 12px;}
+.al-note{color:#83e3ae;font-size:12.5px;font-weight:600;margin:0 0 12px;}
+.al-twofa-row{display:flex;justify-content:space-between;align-items:center;margin-top:14px;}
+.al-link{background:none;border:none;cursor:pointer;color:#ab8df1;font-size:12px;font-weight:600;font-family:${UI};}
+.al-link:disabled{color:#5f5980;cursor:default;}
+.al-link-muted{background:none;border:none;cursor:pointer;color:#8a83a8;font-size:12px;font-family:${UI};}
+.al-link-muted:hover{color:#bdb4dd;}
+.al-card-secure{display:none;margin-top:20px;}
+.al-divider{display:flex;align-items:center;gap:12px;color:#6f6890;font-size:10.5px;font-weight:700;letter-spacing:.16em;margin-bottom:14px;}
+.al-divider::before,.al-divider::after{content:"";flex:1;height:1px;background:rgba(255,255,255,.1);}
+.al-secure{display:flex;align-items:flex-start;gap:10px;font-size:12px;color:#8a83a8;line-height:1.45;}
+.al-secure-ic{color:#9a86d6;flex:none;margin-top:1px;}
+.al-secure b{color:#c5bfdd;font-weight:600;}
+
+.al-foot{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;gap:9px;
+  text-align:center;padding:14px 22px 22px;font-size:12px;line-height:1.45;color:#8a83a8;}
+.al-foot-ic{color:#9a86d6;flex:none;}
+.al-foot-desktop{display:none;}
+.al-foot-mobile{display:inline;}
+
+@media (min-width:980px){
+  .al-brand{position:absolute;top:32px;left:46px;margin:0;text-align:left;z-index:3;}
+  .al-wrap{max-width:1180px;flex-direction:row;display:grid;grid-template-columns:1.05fr .95fr;
+    gap:56px;align-items:center;min-height:100vh;padding:48px 46px;}
+  .al-wrap-solo{display:flex;justify-content:center;align-items:center;max-width:560px;}
+  .al-left{text-align:left;}
+  .al-h1{font-size:60px;margin-bottom:18px;}
+  .al-sub{margin-left:0;font-size:15.5px;}
+  .al-welcome-d{display:inline;}
+  .al-welcome-m{display:none;}
+  .al-br-m{display:none;}
+  .al-features{display:flex;gap:0;margin-top:30px;}
+  .al-feat{padding:0 22px;}
+  .al-feat:first-child{padding-left:0;}
+  .al-feat + .al-feat{border-left:1px solid rgba(255,255,255,.1);}
+  .al-right{justify-content:flex-end;}
+  .al-card{max-width:470px;padding:32px 32px 28px;border-radius:24px;}
+  .al-card-head{display:block;}
+  .al-arc{display:block;position:absolute;left:-120px;bottom:-300px;width:620px;height:620px;
+    border-radius:50%;border:1px solid rgba(170,130,240,.16);}
+  .al-foot-desktop{display:inline;color:#b09bf2;}
+  .al-foot-mobile{display:none;}
+}
+`;
 const dubaiHour = () => { try { return parseInt(new Date().toLocaleString("en-US", { timeZone: "Asia/Dubai", hour: "2-digit", hour12: false }), 10) % 24; } catch (e) { return new Date().getHours(); } };
 const greetWord = (h) => h >= 5 && h < 12 ? "Good morning" : h >= 12 && h < 17 ? "Good afternoon" : h >= 17 && h < 22 ? "Good evening" : "Good night";
 const dubaiToday = () => { try { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return new Date().toISOString().slice(0,10); } };
@@ -3749,10 +3891,11 @@ function AskAmber({ narrow, user }) {
 function hdrBtn() { return { border: "none", background: "rgba(255,255,255,.14)", borderRadius: 9, width: 30, height: 30,
   display: "grid", placeItems: "center", cursor: "pointer" }; }
 
-function LoginFlow({ onLogin, dark, setDark }) {
-  const [stage, setStage] = useState("creds");   // creds | twofa | setpw
+function LoginFlow({ onLogin }) {
+  const [stage, setStage] = useState("creds");   // creds | twofa | setpw | forgot
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const [code, setCode] = useState("");
   const [npw, setNpw] = useState(""); const [npw2, setNpw2] = useState("");
   const [err, setErr] = useState(""); const [note, setNote] = useState("");
@@ -3830,97 +3973,141 @@ function LoginFlow({ onLogin, dark, setDark }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) await fetchProfileAndFinish(user.id); else { setErr("Please sign in again."); setBusy(false); setStage("creds"); }
   };
-
-  const inputS = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 11, padding: "12px 14px",
-    fontSize: 14, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box" };
-  const lab = { fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted };
-  const primaryBtn = { width: "100%", background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 11, padding: "13px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 };
+  const submitForgot = async () => {
+    setErr(""); setNote(""); const mail = email.trim().toLowerCase();
+    if (!mail.includes("@")) { setErr("Enter your work email to receive a reset link."); return; }
+    setBusy(true); setEmail(mail);
+    const { error } = await supabase.auth.resetPasswordForEmail(mail, { redirectTo: window.location.origin });
+    try { await supabase.from("auth_logs").insert({ email: mail, event: "forgot_requested", status: error ? "fail" : "ok" }); } catch (e) {}
+    setBusy(false);
+    if (error) setErr("Could not send the reset email. Please try again.");
+    else setNote("If that email exists, a reset link is on its way. Check your inbox.");
+  };
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "grid", placeItems: "center", padding: 18,
-      fontFamily: UI, overflowY: "auto",
-      background: "radial-gradient(1100px 600px at 78% -8%, rgba(196,154,74,.22), transparent 60%), linear-gradient(160deg, #0b1320 0%, #0e1828 42%, #111d2f 100%)" }}>
-      <div style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
-        <svg viewBox="0 0 1440 900" preserveAspectRatio="xMidYMax slice" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0.5 }}>
-          <defs>
-            <linearGradient id="tower" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#1b2a40" /><stop offset="100%" stopColor="#0b1320" /></linearGradient>
-            <linearGradient id="towerLit" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#243755" /><stop offset="100%" stopColor="#0d1626" /></linearGradient>
-          </defs>
-          <g>
-            <rect x="120" y="520" width="70" height="380" fill="url(#tower)" />
-            <rect x="210" y="430" width="60" height="470" fill="url(#towerLit)" />
-            <rect x="290" y="560" width="80" height="340" fill="url(#tower)" />
-            <polygon points="700,150 726,250 726,900 674,900 674,250" fill="url(#towerLit)" />
-            <rect x="660" y="250" width="80" height="650" fill="url(#towerLit)" opacity="0.5" />
-            <rect x="780" y="470" width="64" height="430" fill="url(#tower)" />
-            <rect x="858" y="380" width="72" height="520" fill="url(#towerLit)" />
-            <rect x="946" y="540" width="60" height="360" fill="url(#tower)" />
-            <rect x="1020" y="440" width="78" height="460" fill="url(#towerLit)" />
-            <rect x="1112" y="560" width="66" height="340" fill="url(#tower)" />
-            <rect x="1192" y="500" width="70" height="400" fill="url(#towerLit)" />
-            <rect x="40" y="600" width="64" height="300" fill="url(#tower)" />
-          </g>
-        </svg>
-        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(8,14,24,.2) 0%, rgba(8,14,24,.55) 100%)" }} />
+    <div className="al-root">
+      <style>{LOGIN_CSS}</style>
+      <div className="al-bg" aria-hidden="true">
+        <div className="al-stars" />
+        <div className="al-glow al-glowA" />
+        <div className="al-glow al-glowB" />
+        <div className="al-arc" />
+        <div className="al-horizon" />
       </div>
 
-      <button onClick={() => setDark(!dark)} style={{ position: "absolute", top: 16, right: 16,
-        border: "1px solid rgba(255,255,255,.18)", background: "rgba(255,255,255,.06)", borderRadius: 9, width: 36, height: 36,
-        display: "grid", placeItems: "center", cursor: "pointer", zIndex: 2 }}>
-        {dark ? <Sun size={16} color="#E6C46B" /> : <Moon size={16} color="#cdd6e4" />}</button>
+      <div className="al-brand">
+        <span className="al-brand-frame">
+          <span className="al-brand-name">Amber Homes</span>
+          <span className="al-brand-sub">Real Estate</span>
+        </span>
+      </div>
 
-      <div style={{ width: "100%", maxWidth: 410, position: "relative", zIndex: 2 }}>
-        <div style={{ textAlign: "center", marginBottom: 22 }}>
-          <div style={{ fontFamily: DISPLAY, fontSize: 27, letterSpacing: ".04em", color: "#fff", fontWeight: 500, lineHeight: 1.15 }}>Amber Homes Real Estate</div>
-          <div style={{ width: 38, height: 2, background: "linear-gradient(90deg, transparent, #C49A4A, transparent)", margin: "12px auto 0" }} />
+      <div className="al-wrap">
+        <div className="al-left">
+          <div className="al-pill"><Sparkle size={13} /> AI-POWERED CRM</div>
+          <h1 className="al-h1">
+            <span className="al-welcome-d">Welcome to</span>
+            <span className="al-welcome-m">Welcome back</span>
+            <br />
+            <span className="al-grad">Amber Homes</span><span className="al-br-m"><br /></span> <span className="al-white">AI CRM</span>
+          </h1>
+          <p className="al-sub">Smart relationships. Streamlined operations. AI-powered growth for modern real estate professionals.</p>
+          <div className="al-features">
+            <div className="al-feat"><Users size={20} className="al-feat-ic" /><div className="al-feat-t">Smart Contacts</div><div className="al-feat-s">AI-enriched insights</div></div>
+            <div className="al-feat"><Zap size={20} className="al-feat-ic" /><div className="al-feat-t">Automated Workflows</div><div className="al-feat-s">Save time, close more</div></div>
+            <div className="al-feat"><BarChart3 size={20} className="al-feat-ic" /><div className="al-feat-t">Real-time Analytics</div><div className="al-feat-s">Data that drives results</div></div>
+          </div>
         </div>
 
-        <div style={{ background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 18, boxShadow: "0 30px 80px rgba(0,0,0,.5)", padding: "28px 26px" }}>
-          {stage === "creds" && <>
-            <div style={{ fontSize: 18, fontWeight: 700, color: T.ink }}>Sign in to access your CRM dashboard.</div>
-            <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, marginBottom: 20 }}>Use your Amber Homes work email and password.</div>
-            <label style={{ display: "block", marginBottom: 12 }}><span style={lab}>Work email</span>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@amberhomes.ae" autoComplete="username" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }} style={{ ...inputS, marginTop: 6 }} /></label>
-            <label style={{ display: "block", marginBottom: 6 }}><span style={lab}>Password</span>
-              <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" autoComplete="current-password" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }} style={{ ...inputS, marginTop: 6 }} /></label>
-            <div style={{ textAlign: "right", marginBottom: 14 }}>
-              <button onClick={async () => { setErr(""); setNote(""); const mail = email.trim().toLowerCase(); if (!mail.includes("@")) { setErr("Enter your email first, then tap reset."); return; }
-                const { error } = await supabase.auth.resetPasswordForEmail(mail, { redirectTo: window.location.origin });
-                try { await supabase.from("auth_logs").insert({ email: mail, event: "forgot_requested", status: error ? "fail" : "ok" }); } catch (e) {}
-                if (error) setErr("Could not send the reset email. Please try again."); else setNote("If that email exists, a reset link has been sent. Check your inbox."); }}
-                style={{ background: "none", border: "none", color: T.gold, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>Forgot password?</button></div>
-            {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
-            {note && <div style={{ color: T.ok, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{note}</div>}
-            <button onClick={submitCreds} disabled={busy} style={primaryBtn}>{busy ? "Signing in…" : "Sign in"}</button>
-          </>}
+        <div className="al-right">
+          <div className="al-card">
+            <div className="al-lockcircle"><Lock size={24} /></div>
 
-          {stage === "twofa" && <>
-            <div style={{ fontSize: 18, fontWeight: 700, color: T.ink }}>Enter your verification code</div>
-            <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, marginBottom: 18 }}>{note || ("We emailed a 4-digit code to " + email + ".")}</div>
-            <input value={code} onChange={(e) => setCode(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))} placeholder="• • • •" inputMode="numeric" autoComplete="one-time-code" onKeyDown={(e) => { if (e.key === "Enter") submitCode(); }}
-              style={{ ...inputS, textAlign: "center", fontSize: 26, letterSpacing: 14, fontWeight: 700 }} />
-            {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, margin: "10px 0" }}>{err}</div>}
-            <button onClick={submitCode} disabled={busy} style={{ ...primaryBtn, marginTop: 14 }}>{busy ? "Verifying…" : "Verify & continue"}</button>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12 }}>
-              <button onClick={() => { setStage("creds"); setErr(""); setCode(""); }} style={{ background: "none", border: "none", color: T.muted, fontSize: 11.5, cursor: "pointer", fontFamily: UI }}>← Back</button>
-              <button onClick={resend} disabled={resendIn > 0} style={{ background: "none", border: "none", color: resendIn > 0 ? T.faint : T.gold, fontSize: 11.5, fontWeight: 600, cursor: resendIn > 0 ? "default" : "pointer", fontFamily: UI }}>{resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}</button>
-            </div>
-          </>}
+            {stage === "creds" && <>
+              <div className="al-card-head">
+                <div className="al-card-title">Sign in to your dashboard</div>
+                <div className="al-card-desc">Use your Amber Homes work email and password.</div>
+              </div>
+              <label className="al-label" htmlFor="al-email">Work email</label>
+              <div className="al-field">
+                <Mail size={16} className="al-field-ic" />
+                <input id="al-email" className="al-input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@amberhomes.ae" autoComplete="username" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }} />
+              </div>
+              <label className="al-label" htmlFor="al-pw">Password</label>
+              <div className="al-field">
+                <Lock size={16} className="al-field-ic" />
+                <input id="al-pw" className="al-input al-input-pw" type={showPw ? "text" : "password"} value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" autoComplete="current-password" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }} />
+                <button type="button" className="al-eye" onClick={() => setShowPw((s) => !s)} aria-label={showPw ? "Hide password" : "Show password"} tabIndex={-1}>{showPw ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+              </div>
+              <div className="al-forgot-row"><button type="button" className="al-forgot" onClick={() => { setErr(""); setNote(""); setStage("forgot"); }}>Forgot password?</button></div>
+              {err && <div className="al-err">{err}</div>}
+              {note && <div className="al-note">{note}</div>}
+              <button className="al-btn" onClick={submitCreds} disabled={busy}>{busy ? "Signing in…" : <>Sign in <span className="al-arrow">→</span></>}</button>
+              <div className="al-card-secure">
+                <div className="al-divider"><span>SECURE ACCESS</span></div>
+                <div className="al-secure"><Lock size={15} className="al-secure-ic" /><div><b>Your data is encrypted and secure.</b><br />Access is restricted to authorized users only.</div></div>
+              </div>
+            </>}
 
-          {stage === "setpw" && <>
-            <div style={{ fontSize: 18, fontWeight: 700, color: T.ink }}>Set your password</div>
-            <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, marginBottom: 18 }}>{note || "Please choose a new password to continue."}</div>
-            <input type="password" placeholder="New password (min 8 characters)" value={npw} onChange={(e) => setNpw(e.target.value)} style={{ ...inputS, marginBottom: 10 }} />
-            <input type="password" placeholder="Confirm new password" value={npw2} onChange={(e) => setNpw2(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitNewPw(); }} style={{ ...inputS, marginBottom: 10 }} />
-            {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
-            <button onClick={submitNewPw} disabled={busy} style={primaryBtn}>{busy ? "Saving…" : "Save & continue"}</button>
-          </>}
+            {stage === "twofa" && <>
+              <div className="al-stage-head">
+                <div className="al-card-title">Enter your verification code</div>
+                <div className="al-card-desc">{note || ("Enter the verification code sent to " + email + ".")}</div>
+              </div>
+              <input className="al-otp" value={code} onChange={(e) => setCode(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))} placeholder="• • • •" inputMode="numeric" autoComplete="one-time-code" onKeyDown={(e) => { if (e.key === "Enter") submitCode(); }} />
+              {err && <div className="al-err" style={{ marginTop: 12 }}>{err}</div>}
+              <button className="al-btn" style={{ marginTop: 14 }} onClick={submitCode} disabled={busy}>{busy ? "Verifying…" : "Verify & continue"}</button>
+              <div className="al-twofa-row">
+                <button type="button" className="al-link-muted" onClick={() => { setStage("creds"); setErr(""); setCode(""); }}>← Back</button>
+                <button type="button" className="al-link" onClick={resend} disabled={resendIn > 0}>{resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}</button>
+              </div>
+            </>}
+
+            {stage === "forgot" && <>
+              <div className="al-stage-head">
+                <div className="al-card-title">Reset your password</div>
+                <div className="al-card-desc">Enter your work email and we'll send you a secure reset link.</div>
+              </div>
+              <label className="al-label" htmlFor="al-fmail">Work email</label>
+              <div className="al-field">
+                <Mail size={16} className="al-field-ic" />
+                <input id="al-fmail" className="al-input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@amberhomes.ae" autoComplete="username" onKeyDown={(e) => { if (e.key === "Enter") submitForgot(); }} />
+              </div>
+              {err && <div className="al-err">{err}</div>}
+              {note && <div className="al-note">{note}</div>}
+              <button className="al-btn" onClick={submitForgot} disabled={busy}>{busy ? "Sending…" : "Send reset link"}</button>
+              <div className="al-twofa-row" style={{ justifyContent: "center" }}>
+                <button type="button" className="al-link-muted" onClick={() => { setStage("creds"); setErr(""); setNote(""); }}>← Back to sign in</button>
+              </div>
+            </>}
+
+            {stage === "setpw" && <>
+              <div className="al-stage-head">
+                <div className="al-card-title">Set your password</div>
+                <div className="al-card-desc">{note || "Please choose a new password to continue."}</div>
+              </div>
+              <label className="al-label">New password</label>
+              <div className="al-field">
+                <Lock size={16} className="al-field-ic" />
+                <input className="al-input al-input-pw" type={showPw ? "text" : "password"} value={npw} onChange={(e) => setNpw(e.target.value)} placeholder="At least 8 characters" />
+                <button type="button" className="al-eye" onClick={() => setShowPw((s) => !s)} aria-label="Toggle password" tabIndex={-1}>{showPw ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+              </div>
+              <label className="al-label">Confirm new password</label>
+              <div className="al-field">
+                <Lock size={16} className="al-field-ic" />
+                <input className="al-input" type={showPw ? "text" : "password"} value={npw2} onChange={(e) => setNpw2(e.target.value)} placeholder="Re-enter password" onKeyDown={(e) => { if (e.key === "Enter") submitNewPw(); }} />
+              </div>
+              {err && <div className="al-err">{err}</div>}
+              <button className="al-btn" onClick={submitNewPw} disabled={busy}>{busy ? "Saving…" : "Save & continue"}</button>
+            </>}
+          </div>
         </div>
+      </div>
 
-        <div style={{ marginTop: 16, textAlign: "center" }}>
-          <div style={{ fontSize: 11.5, color: "rgba(255,255,255,.62)", lineHeight: 1.5 }}>Your dashboard access is based on your assigned role.</div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,.4)", marginTop: 6 }}>Accounts are created by your Master Admin. Trouble signing in? Contact your administrator.</div>
-        </div>
+      <div className="al-foot">
+        <ShieldCheck size={15} className="al-foot-ic" />
+        <span className="al-foot-desktop">Your success is our foundation. Let's build extraordinary together.</span>
+        <span className="al-foot-mobile">Your data is encrypted and secure. Access is restricted to authorized users only.</span>
       </div>
     </div>
   );
@@ -4993,6 +5180,7 @@ function NotifBell({ go }) {
 /* ===================== FORCED FIRST-LOGIN PASSWORD CHANGE ================= */
 function ForcedPasswordChange({ onDone, signOut }) {
   const [pw, setPw] = useState(""); const [pw2, setPw2] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState("");
   const save = async () => {
     if (pw.length < 8) { setMsg("Use at least 8 characters."); return; }
@@ -5004,24 +5192,44 @@ function ForcedPasswordChange({ onDone, signOut }) {
       await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + (session?.access_token || "") }, body: JSON.stringify({ action: "after_password_change" }) }); } catch (e) {}
     setBusy(false); onDone();
   };
-  const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "11px 13px", fontSize: 14,
-    fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginBottom: 10 };
-  return <div style={{ position: "fixed", inset: 0, zIndex: 110, background: T.bone, display: "grid", placeItems: "center", padding: 18, fontFamily: UI }}>
-    <div style={{ width: "100%", maxWidth: 380, background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 18, boxShadow: T.shadowLg, padding: 26 }}>
-      <div style={{ fontWeight: 800, fontSize: 18 }}>Set your password</div>
-      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, marginBottom: 18 }}>For security, please choose a new password before continuing.</div>
-      <input type="password" placeholder="New password (min 8 characters)" value={pw} onChange={(e) => setPw(e.target.value)} style={inp} />
-      <input type="password" placeholder="Confirm password" value={pw2} onChange={(e) => setPw2(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={inp} />
-      {msg && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{msg}</div>}
-      <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
-        borderRadius: 11, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "Saving…" : "Save & continue"}</button>
-      <button onClick={signOut} style={{ width: "100%", marginTop: 8, background: "none", border: "none", color: T.muted, fontSize: 12, cursor: "pointer", fontFamily: UI }}>Sign out instead</button>
+  return (
+    <div className="al-root">
+      <style>{LOGIN_CSS}</style>
+      <div className="al-bg" aria-hidden="true"><div className="al-stars" /><div className="al-glow al-glowA" /><div className="al-glow al-glowB" /><div className="al-arc" /><div className="al-horizon" /></div>
+      <div className="al-wrap al-wrap-solo">
+        <div className="al-right">
+          <div className="al-card">
+            <div className="al-lockcircle"><Lock size={24} /></div>
+            <div className="al-stage-head">
+              <div className="al-card-title">Set your password</div>
+              <div className="al-card-desc">For your security, please choose a new password before continuing.</div>
+            </div>
+            <label className="al-label">New password</label>
+            <div className="al-field">
+              <Lock size={16} className="al-field-ic" />
+              <input className="al-input al-input-pw" type={showPw ? "text" : "password"} value={pw} onChange={(e) => setPw(e.target.value)} placeholder="At least 8 characters" />
+              <button type="button" className="al-eye" onClick={() => setShowPw((s) => !s)} aria-label="Toggle password" tabIndex={-1}>{showPw ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+            </div>
+            <label className="al-label">Confirm password</label>
+            <div className="al-field">
+              <Lock size={16} className="al-field-ic" />
+              <input className="al-input" type={showPw ? "text" : "password"} value={pw2} onChange={(e) => setPw2(e.target.value)} placeholder="Re-enter password" onKeyDown={(e) => { if (e.key === "Enter") save(); }} />
+            </div>
+            {msg && <div className="al-err">{msg}</div>}
+            <button className="al-btn" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save & continue"}</button>
+            <div className="al-twofa-row" style={{ justifyContent: "center" }}>
+              <button type="button" className="al-link-muted" onClick={signOut}>Sign out instead</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
-  </div>;
+  );
 }
 
 function ResetPassword({ onDone }) {
   const [pw, setPw] = useState(""); const [pw2, setPw2] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(""); const [done, setDone] = useState(false);
   const save = async () => {
     if (pw.length < 8) { setMsg("Use at least 8 characters."); return; }
@@ -5035,25 +5243,47 @@ function ResetPassword({ onDone }) {
     await supabase.auth.signOut();
     setBusy(false); setDone(true);
   };
-  const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "11px 13px", fontSize: 14,
-    fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginBottom: 10 };
-  return <div style={{ position: "fixed", inset: 0, zIndex: 115, background: "linear-gradient(160deg,#0b1320,#111d2f)", display: "grid", placeItems: "center", padding: 18, fontFamily: UI }}>
-    <div style={{ width: "100%", maxWidth: 390, background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 18, boxShadow: T.shadowLg, padding: 28 }}>
-      {done ? <>
-        <div style={{ fontWeight: 800, fontSize: 18, color: T.ok }}>Password updated</div>
-        <div style={{ fontSize: 13, color: T.muted, marginTop: 6, marginBottom: 18 }}>Your password has been changed. You can now sign in with your new password.</div>
-        <button onClick={onDone} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 11, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Go to sign in</button>
-      </> : <>
-        <div style={{ fontWeight: 800, fontSize: 19 }}>Create a new password</div>
-        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, marginBottom: 18 }}>Choose a new password for your Amber Homes account.</div>
-        <input type="password" placeholder="New password (min 8 characters)" value={pw} onChange={(e) => setPw(e.target.value)} style={inp} />
-        <input type="password" placeholder="Confirm new password" value={pw2} onChange={(e) => setPw2(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={inp} />
-        {msg && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{msg}</div>}
-        <button onClick={save} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 11, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "Saving…" : "Update password"}</button>
-        <button onClick={onDone} style={{ width: "100%", marginTop: 8, background: "none", border: "none", color: T.muted, fontSize: 12, cursor: "pointer", fontFamily: UI }}>Back to sign in</button>
-      </>}
+  return (
+    <div className="al-root">
+      <style>{LOGIN_CSS}</style>
+      <div className="al-bg" aria-hidden="true"><div className="al-stars" /><div className="al-glow al-glowA" /><div className="al-glow al-glowB" /><div className="al-arc" /><div className="al-horizon" /></div>
+      <div className="al-wrap al-wrap-solo">
+        <div className="al-right">
+          <div className="al-card">
+            <div className="al-lockcircle"><Lock size={24} /></div>
+            {done ? <>
+              <div className="al-stage-head">
+                <div className="al-card-title">Password updated</div>
+                <div className="al-card-desc">Your password has been changed. You can now sign in with your new password.</div>
+              </div>
+              <button className="al-btn" onClick={onDone}>Go to sign in</button>
+            </> : <>
+              <div className="al-stage-head">
+                <div className="al-card-title">Create a new password</div>
+                <div className="al-card-desc">Choose a new password for your Amber Homes account.</div>
+              </div>
+              <label className="al-label">New password</label>
+              <div className="al-field">
+                <Lock size={16} className="al-field-ic" />
+                <input className="al-input al-input-pw" type={showPw ? "text" : "password"} value={pw} onChange={(e) => setPw(e.target.value)} placeholder="At least 8 characters" />
+                <button type="button" className="al-eye" onClick={() => setShowPw((s) => !s)} aria-label="Toggle password" tabIndex={-1}>{showPw ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+              </div>
+              <label className="al-label">Confirm new password</label>
+              <div className="al-field">
+                <Lock size={16} className="al-field-ic" />
+                <input className="al-input" type={showPw ? "text" : "password"} value={pw2} onChange={(e) => setPw2(e.target.value)} placeholder="Re-enter password" onKeyDown={(e) => { if (e.key === "Enter") save(); }} />
+              </div>
+              {msg && <div className="al-err">{msg}</div>}
+              <button className="al-btn" onClick={save} disabled={busy}>{busy ? "Saving…" : "Update password"}</button>
+              <div className="al-twofa-row" style={{ justifyContent: "center" }}>
+                <button type="button" className="al-link-muted" onClick={onDone}>← Back to sign in</button>
+              </div>
+            </>}
+          </div>
+        </div>
+      </div>
     </div>
-  </div>;
+  );
 }
 
 function UsersAdmin({ user }) {
