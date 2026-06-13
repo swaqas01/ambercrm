@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { supabase, roleInfo } from "./supabase.js";
 import {
   LayoutDashboard, UserCircle, FileText, UserPlus, Kanban, BarChart3,
   ShieldAlert, Building2, Gauge, Briefcase, Coins, Settings, Menu, X,
@@ -202,7 +203,25 @@ export default function App() {
   const [screen, setScreen] = useState("admin");
   const [navOpen, setNavOpen] = useState(false);
   const [dark, setDark] = useState(false);
-  const [user, setUser] = useState(null); // {name, role, email}
+  const [user, setUser] = useState(null); // {name, role, email, roleLabel}
+  const [authChecked, setAuthChecked] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user && mounted) {
+        const { data: prof } = await supabase.from("profiles").select("full_name, role, active").eq("id", session.user.id).single();
+        if (prof && prof.active !== false) {
+          const ri = roleInfo(prof.role);
+          setUser({ name: prof.full_name || session.user.email, email: session.user.email, role: prof.role, roleLabel: ri.label });
+          setScreen(ri.home === "agent" ? "agent" : "admin");
+        }
+      }
+      if (mounted) setAuthChecked(true);
+    })();
+    return () => { mounted = false; };
+  }, []);
+  const signOut = async () => { await supabase.auth.signOut(); setUser(null); };
   const [accent, setAccent] = useState("gold");
   const ACCENTS = [["gold", "Violet", "#7C5CFA"], ["emerald", "Emerald", "#1F6B52"],
     ["sapphire", "Sapphire", "#2C4E78"], ["burgundy", "Burgundy", "#7C2D3E"]];
@@ -227,7 +246,7 @@ export default function App() {
     <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: T.bone, minHeight: 600, display: "flex", color: T.ink,
       transition: "background .25s ease" }}>
       <style>{THEME_CSS}</style>
-      {!user && <LoginFlow onLogin={(u) => { setUser(u); setScreen(u.role === "Agent" ? "agent" : "admin"); }} dark={dark} setDark={setDark} />}
+      {!user && <LoginFlow onLogin={(u) => { setUser(u); setScreen(u.home === "agent" ? "agent" : "admin"); }} dark={dark} setDark={setDark} />}
       {/* sidebar */}
       {user && (!narrow || navOpen) && (
         <aside style={{ width: 232, background: T.side, color: "#fff", flexShrink: 0, display: "flex",
@@ -255,8 +274,8 @@ export default function App() {
             color: "rgba(255,255,255,.4)", lineHeight: 1.5 }}>
             Clickable prototype · mock data<br />
             <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
-              <span>Signed in: <span style={{ color: T.goldBright }}>{user.name.split(" ")[0]} · {user.role}</span></span>
-              <button onClick={() => setUser(null)} title="Sign out" style={{ background: "none", border: "none",
+              <span>Signed in: <span style={{ color: T.goldBright }}>{user.name.split(" ")[0]} · {user.roleLabel}</span></span>
+              <button onClick={signOut} title="Sign out" style={{ background: "none", border: "none",
                 color: "rgba(255,255,255,.45)", cursor: "pointer", padding: 2 }}><LogOut size={13} /></button>
             </span>
           </div>
@@ -1223,44 +1242,28 @@ function AiChat({ narrow }) {
 
 /* ============================== LOGIN FLOW =============================== */
 function LoginFlow({ onLogin, dark, setDark }) {
-  const [step, setStep] = useState("creds");      // creds | otp
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
-  const [code, setCode] = useState(["", "", "", ""]);
   const [err, setErr] = useState("");
-  const [pending, setPending] = useState(null);   // user awaiting 2FA
   const [busy, setBusy] = useState(false);
-  const DEMO = [
-    { email: "saad@amberhomes.ae", name: "Saad Waqas", role: "Owner" },
-    { email: "ambreen@amberhomes.ae", name: "Ambreen Qureshi", role: "Manager" },
-    { email: "derya@amberhomes.ae", name: "Derya Altun", role: "Agent" },
-  ];
-  const mask = (e) => { const [a, b] = e.split("@"); return a[0] + "•••" + a.slice(-1) + "@" + b; };
 
-  const submitCreds = (demoUser) => {
+  const submitCreds = async () => {
     setErr("");
-    const u = demoUser || DEMO.find((d) => d.email.toLowerCase() === email.trim().toLowerCase())
-      || (email.includes("@") ? { email: email.trim(), name: email.split("@")[0], role: "Agent" } : null);
-    if (!u) { setErr("Enter your work email — your email is your username."); return; }
-    if (!demoUser && pw.length < 4) { setErr("Enter your password."); return; }
-    setPending(u); setStep("otp"); setCode(["", "", "", ""]);
-  };
-  const setDigit = (i, v) => {
-    if (!/^\d?$/.test(v)) return;
-    const c = [...code]; c[i] = v; setCode(c);
-    if (v && i < 3) { const n = document.getElementById("otp" + (i + 1)); if (n) n.focus(); }
-    if (c.every((d) => d !== "")) verify(c);
-  };
-  const verify = (c) => {
-    setBusy(true); setErr("");
-    setTimeout(() => { setBusy(false);
-      if ((c || code).join("").length === 4) onLogin(pending);
-      else setErr("That code didn't match. A new one has been sent.");
-    }, 450);
-  };
-  const passkey = () => {
-    setBusy(true); setErr("");
-    setTimeout(() => { setBusy(false); onLogin(pending || DEMO[0]); }, 700);
+    const mail = email.trim().toLowerCase();
+    if (!mail.includes("@")) { setErr("Enter your work email — your email is your username."); return; }
+    if (pw.length < 4) { setErr("Enter your password."); return; }
+    setBusy(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: mail, password: pw });
+      if (error) { setBusy(false); setErr("Email or password is incorrect."); return; }
+      const { data: prof } = await supabase.from("profiles")
+        .select("full_name, role, active").eq("id", data.user.id).single();
+      if (!prof) { setBusy(false); setErr("No profile found for this account. Contact your admin."); return; }
+      if (prof.active === false) { setBusy(false); setErr("This account has been deactivated."); return; }
+      const ri = roleInfo(prof.role);
+      setBusy(false);
+      onLogin({ name: prof.full_name || data.user.email, email: data.user.email, role: prof.role, roleLabel: ri.label, home: ri.home });
+    } catch (e) { setBusy(false); setErr("Could not reach the server. Check your connection."); }
   };
 
   const inputS = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 11, padding: "12px 14px",
@@ -1285,87 +1288,36 @@ function LoginFlow({ onLogin, dark, setDark }) {
         </div>
 
         <div style={{ background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 18, boxShadow: T.shadowLg, padding: "26px 24px" }}>
-          {step === "creds" ? (<>
-            <div style={{ fontSize: 17, fontWeight: 600, color: T.ink }}>Sign in</div>
-            <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, marginBottom: 18 }}>
-              Your work email is your username. One login for every role — your dashboard is decided by your account.</div>
-            <label style={{ display: "block", marginBottom: 12 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>Email (username)</span>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@amberhomes.ae"
-                autoComplete="username" style={{ ...inputS, marginTop: 6 }} />
-            </label>
-            <label style={{ display: "block", marginBottom: 6 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>Password</span>
-              <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••"
-                autoComplete="current-password" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }}
-                style={{ ...inputS, marginTop: 6 }} />
-            </label>
-            <div style={{ textAlign: "right", marginBottom: 14 }}>
-              <button style={{ background: "none", border: "none", color: T.gold, fontSize: 11.5, fontWeight: 600,
-                cursor: "pointer", fontFamily: UI }}>Forgot password?</button></div>
-            {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
-            <button onClick={() => submitCreds()} style={{ width: "100%", background: T.btnBg, color: T.btnFg,
-              border: "none", borderRadius: 11, padding: "13px", fontSize: 14, fontWeight: 600, cursor: "pointer",
-              fontFamily: UI }}>Continue</button>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0" }}>
-              <div style={{ flex: 1, height: 1, background: T.hairSoft }} />
-              <span style={{ fontSize: 10.5, color: T.faint, letterSpacing: ".08em" }}>OR</span>
-              <div style={{ flex: 1, height: 1, background: T.hairSoft }} />
-            </div>
-            <button onClick={passkey} style={{ width: "100%", background: "transparent", color: T.ink,
-              border: `1px solid ${T.goldEdge}`, borderRadius: 11, padding: "12px", fontSize: 13.5, fontWeight: 600,
-              cursor: "pointer", fontFamily: UI, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <Fingerprint size={17} color={T.gold} /> {busy ? "Waiting for Face ID / Touch ID…" : "Sign in with a passkey"}</button>
-            <div style={{ fontSize: 10.5, color: T.faint, textAlign: "center", marginTop: 8, lineHeight: 1.5 }}>
-              A passkey uses your device's Face ID, fingerprint, or PIN. No password, no code — and it can't be phished.</div>
-          </>) : (<>
-            <button onClick={() => setStep("creds")} style={{ background: "none", border: "none", color: T.muted,
-              fontSize: 12, cursor: "pointer", fontFamily: UI, padding: 0, marginBottom: 12 }}>← Back</button>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 38, height: 38, borderRadius: 11, background: T.goldSoft, display: "grid", placeItems: "center" }}>
-                <Mail size={17} color={T.gold} /></div>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 600, color: T.ink }}>Check your email</div>
-                <div style={{ fontSize: 12, color: T.muted }}>We sent a 4-digit code to <b style={{ color: T.ink }}>{mask(pending.email)}</b></div>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "center", margin: "22px 0 6px" }}>
-              {code.map((d, i) => (
-                <input key={i} id={"otp" + i} value={d} onChange={(e) => setDigit(i, e.target.value)}
-                  inputMode="numeric" maxLength={1} autoFocus={i === 0}
-                  style={{ width: 54, height: 60, textAlign: "center", fontSize: 24, fontFamily: DISPLAY,
-                    border: `1.5px solid ${d ? T.gold : T.hair}`, borderRadius: 12, outline: "none",
-                    color: T.ink, background: T.bone }} />
-              ))}
-            </div>
-            <div style={{ textAlign: "center", fontSize: 11.5, color: T.muted, marginBottom: 14 }}>
-              Code expires in 5 minutes · <button style={{ background: "none", border: "none", color: T.gold,
-                fontWeight: 600, cursor: "pointer", fontFamily: UI, fontSize: 11.5, padding: 0 }}>Resend</button></div>
-            {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10, textAlign: "center" }}>{err}</div>}
-            <button onClick={() => verify()} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg,
-              border: "none", borderRadius: 11, padding: "13px", fontSize: 14, fontWeight: 600, cursor: "pointer",
-              fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "Verifying…" : "Verify & sign in"}</button>
-            <button onClick={passkey} style={{ width: "100%", marginTop: 10, background: "transparent", color: T.ink,
-              border: `1px solid ${T.goldEdge}`, borderRadius: 11, padding: "11px", fontSize: 13, fontWeight: 600,
-              cursor: "pointer", fontFamily: UI, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
-              <KeyRound size={15} color={T.gold} /> Use passkey instead</button>
-          </>)}
+          <div style={{ fontSize: 17, fontWeight: 700, color: T.ink }}>Sign in</div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, marginBottom: 18 }}>
+            Your work email is your username. Your dashboard is decided by your account.</div>
+          <label style={{ display: "block", marginBottom: 12 }}>
+            <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>Email (username)</span>
+            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@amberhomes.ae"
+              autoComplete="username" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }} style={{ ...inputS, marginTop: 6 }} />
+          </label>
+          <label style={{ display: "block", marginBottom: 6 }}>
+            <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted }}>Password</span>
+            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••"
+              autoComplete="current-password" onKeyDown={(e) => { if (e.key === "Enter") submitCreds(); }}
+              style={{ ...inputS, marginTop: 6 }} />
+          </label>
+          <div style={{ textAlign: "right", marginBottom: 14 }}>
+            <button onClick={async () => { if (!email.includes("@")) { setErr("Enter your email first, then tap reset."); return; }
+              const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase());
+              setErr(error ? "Could not send reset email." : "Password reset link sent to your email."); }}
+              style={{ background: "none", border: "none", color: T.gold, fontSize: 11.5, fontWeight: 600,
+              cursor: "pointer", fontFamily: UI }}>Forgot password?</button></div>
+          {err && <div style={{ color: err.includes("sent") ? T.ok : T.bad, fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
+          <button onClick={submitCreds} disabled={busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg,
+            border: "none", borderRadius: 11, padding: "13px", fontSize: 14, fontWeight: 700, cursor: "pointer",
+            fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "Signing in…" : "Sign in"}</button>
         </div>
 
-        {/* demo quick logins */}
         <div style={{ marginTop: 16, textAlign: "center" }}>
-          <div style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: T.faint, fontWeight: 700, marginBottom: 8 }}>
-            Prototype demo — sign in as</div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
-            {DEMO.map((d) => (
-              <button key={d.email} onClick={() => submitCreds(d)} style={{ border: `1px solid ${T.hair}`,
-                background: T.paper, color: T.inkSoft, borderRadius: 9, padding: "7px 13px", fontSize: 12,
-                fontWeight: 600, cursor: "pointer", fontFamily: UI }}>
-                {d.name.split(" ")[0]} · <span style={{ color: T.gold }}>{d.role}</span></button>
-            ))}
-          </div>
-          <div style={{ fontSize: 10.5, color: T.faint, marginTop: 10 }}>In the demo, any 4 digits work as the code.</div>
-          <div style={{ fontSize: 9.5, color: T.faint, marginTop: 6, opacity: .7 }}>Live · design B (violet) · build 2026-06-13b</div>
+          <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.5 }}>
+            Accounts are created by your Master Admin.<br />Trouble signing in? Contact your administrator.</div>
+          <div style={{ fontSize: 9.5, color: T.faint, marginTop: 8, opacity: .7 }}>Live · real login (Supabase) · build 2026-06-13c</div>
         </div>
       </div>
     </div>
