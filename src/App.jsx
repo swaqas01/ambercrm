@@ -2163,7 +2163,7 @@ function LiveLeads({ user, filter, go, openLead }) {
         <div style={{ fontWeight: 700, fontSize: 15 }}>{isAgent ? "No leads assigned yet" : "No leads yet"}</div>
         <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, maxWidth: 360, marginInline: "auto", lineHeight: 1.5 }}>
           {isAgent ? "When your manager assigns leads to you — or you add your own with the button above — they'll appear here."
-                   : "Import a CSV or use Add lead above to get started."}</div>
+                   : "Import an Excel or CSV file, or use Add lead above to get started."}</div>
       </div>
     ) : filtered.length === 0 ? (
       <div style={{ ...card, padding: 36, marginTop: 14, textAlign: "center", color: T.muted, fontSize: 13 }}>No leads match this filter.</div>
@@ -2372,28 +2372,64 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
   </Modal>;
 }
 
-/* ---- Import file (CSV) → Supabase ---- */
+/* ---- Import file (CSV or Excel) → Supabase ---- */
 function ImportModal({ onClose, onDone, me }) {
   const [rows, setRows] = useState(null); const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(""); const [done, setDone] = useState(0);
-  const parseCsv = (text) => {
+  const [err, setErr] = useState(""); const [done, setDone] = useState(0); const [fileName, setFileName] = useState("");
+
+  // Find a value in a header-keyed row object by fuzzy column-name match (case-insensitive).
+  const pickFrom = (obj, names) => {
+    const keys = Object.keys(obj);
+    for (const n of names) {
+      const k = keys.find((key) => key.toLowerCase().trim().includes(n));
+      if (k && obj[k] != null && String(obj[k]).trim()) return String(obj[k]).trim();
+    }
+    return null;
+  };
+  // Map any header-keyed row (from CSV or Excel) to our lead fields.
+  const mapRow = (obj) => ({
+    client_name: pickFrom(obj, ["customer", "name", "client"]) || "Unknown",
+    phone: pickFrom(obj, ["mobile", "phone", "whatsapp", "contact"]),
+    email: pickFrom(obj, ["email", "mail"]),
+    project: pickFrom(obj, ["property type", "project", "property"]),
+    area: pickFrom(obj, ["location", "area", "community"]),
+    assigned_agent_name: pickFrom(obj, ["agent", "assigned"]),
+  });
+
+  // CSV → array of header-keyed objects (quote-aware).
+  const parseCsvToObjects = (text) => {
     const lines = text.split(/\r?\n/).filter((l) => l.trim());
     if (!lines.length) return [];
     const split = (l) => { const out = []; let cur = "", inq = false;
       for (let i = 0; i < l.length; i++) { const c = l[i];
         if (c === '"') inq = !inq; else if (c === "," && !inq) { out.push(cur); cur = ""; } else cur += c; }
       out.push(cur); return out.map((s) => s.trim().replace(/^"|"$/g, "")); };
-    const hdr = split(lines[0]).map((h) => h.toLowerCase());
-    const pick = (cells, names) => { for (const n of names) { const idx = hdr.findIndex((h) => h.includes(n)); if (idx >= 0 && cells[idx]) return cells[idx]; } return null; };
-    return lines.slice(1).map((l) => { const c = split(l);
-      return { client_name: pick(c, ["customer", "name", "client"]) || "Unknown",
-        phone: pick(c, ["mobile", "phone", "whatsapp"]), email: pick(c, ["email"]),
-        project: pick(c, ["property type", "project"]), area: pick(c, ["location", "area"]),
-        assigned_agent_name: pick(c, ["agent"]) }; });
+    const hdr = split(lines[0]);
+    return lines.slice(1).map((l) => { const c = split(l); const o = {}; hdr.forEach((h, i) => { o[h] = c[i]; }); return o; });
   };
-  const onFile = (e) => { const file = e.target.files[0]; if (!file) return;
-    const r = new FileReader(); r.onload = () => { try { setRows(parseCsv(String(r.result))); setErr(""); }
-      catch (x) { setErr("Couldn't read that file. Use a .csv export."); } }; r.readAsText(file); };
+
+  const onFile = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    setErr(""); setRows(null); setFileName(file.name);
+    const name = file.name.toLowerCase();
+    try {
+      let records;
+      if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".xlsm")) {
+        const XLSX = await import("xlsx");                 // loaded only when an Excel file is chosen
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];            // first sheet
+        records = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      } else if (name.endsWith(".csv") || name.endsWith(".txt")) {
+        records = parseCsvToObjects(await file.text());
+      } else {
+        setErr("Unsupported file. Upload a .xlsx, .xls or .csv file."); return;
+      }
+      const mapped = records.map(mapRow).filter((r) => (r.client_name && r.client_name !== "Unknown") || r.phone || r.email);
+      if (!mapped.length) { setErr("No rows found. Make sure the first row has column headers (name, phone, email, etc.)."); return; }
+      setRows(mapped);
+    } catch (x) { setErr("Couldn't read that file. Use a .xlsx or .csv export with a header row."); }
+  };
+
   const run = async () => {
     if (!rows || !rows.length) return; setBusy(true); setErr(""); let n = 0;
     for (let i = 0; i < rows.length; i += 50) {
@@ -2411,11 +2447,11 @@ function ImportModal({ onClose, onDone, me }) {
   };
   return <Modal title="Import leads from file" onClose={onClose}>
     <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>
-      Upload a <b>.csv</b> file. Columns are auto-detected (customer/name, mobile/phone, email, property type/project, location/area, agent).
-      For Excel, use File → Save As → CSV first.</div>
-    <input type="file" accept=".csv,text/csv" onChange={onFile} style={{ fontSize: 13, marginBottom: 12 }} />
+      Upload an <b>Excel (.xlsx)</b> or <b>.csv</b> file. The first row must be column headers — they're auto-detected
+      (customer/name, mobile/phone, email, property type/project, location/area, agent). For Excel, the first sheet is used.</div>
+    <input type="file" accept=".xlsx,.xls,.xlsm,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={onFile} style={{ fontSize: 13, marginBottom: 12 }} />
     {rows && <div style={{ ...card, padding: 12, marginBottom: 12, fontSize: 12.5 }}>
-      Found <b>{rows.length}</b> rows. First: {rows[0]?.client_name} · {rows[0]?.project || "—"}</div>}
+      Found <b>{rows.length}</b> rows{fileName ? ` in ${fileName}` : ""}. First: {rows[0]?.client_name} · {rows[0]?.project || "—"}</div>}
     {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 8 }}>{err}</div>}
     {busy && <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 8 }}>Importing… {done} saved</div>}
     <button onClick={run} disabled={!rows || busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
