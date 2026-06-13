@@ -23,7 +23,8 @@ const T = {
   goldTint: "var(--goldTint)", wm: "var(--wm)", shadow: "var(--shadow)", shadowLg: "var(--shadowLg)",
 };
 const THEME_CSS = `
-  html, body { background:#0a0710; }
+  html, body { background:#130a26; }
+  [data-amber] button { font-family:'Manrope', system-ui, -apple-system, sans-serif; font-weight:600; }
   [data-amber] {
     --ink:#2E263D; --inkSoft:#4B465C; --muted:#6E6B7B; --faint:#A5A2B2;
     --bone:#F4F5FA; --paper:#FFFFFF; --hair:#EAEAEF; --hairSoft:#F3F3F8;
@@ -108,19 +109,20 @@ const THEME_CSS = `
     --shadowLg:0 2px 4px rgba(0,0,0,.4), 0 16px 40px rgba(0,0,0,.45);
   }
 `;
-const DISPLAY = "'Plus Jakarta Sans', system-ui, sans-serif";
-const UI = "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif";
+const DISPLAY = "'Cormorant Garamond', Georgia, 'Times New Roman', serif";
+const UI = "'Manrope', system-ui, -apple-system, sans-serif";
 
 /* ===== Premium login / auth screen styles (dark + violet, responsive) ===== */
 const LOGIN_CSS = `
 .al-root{position:fixed;inset:0;z-index:100;overflow-y:auto;font-family:${UI};
   min-height:100vh;min-height:100dvh;
+  padding-top:env(safe-area-inset-top);
   padding-bottom:env(safe-area-inset-bottom);
   display:flex;flex-direction:column;
-  background:radial-gradient(900px 520px at 16% 90%, rgba(124,77,255,.24), transparent 60%),
-    radial-gradient(760px 520px at 86% 12%, rgba(150,90,240,.16), transparent 62%),
-    radial-gradient(1200px 800px at 50% 120%, rgba(170,120,250,.10), transparent 70%),
-    #0a0710;
+  background:radial-gradient(820px 520px at 18% 88%, rgba(132,86,250,.20), transparent 60%),
+    radial-gradient(720px 480px at 86% 14%, rgba(150,95,240,.15), transparent 62%),
+    radial-gradient(1100px 720px at 50% 118%, rgba(150,100,245,.14), transparent 66%),
+    linear-gradient(180deg, #1c1138 0%, #170d2e 50%, #130a26 100%);
   -webkit-font-smoothing:antialiased;}
 .al-root *{box-sizing:border-box;}
 .al-bg{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0;}
@@ -147,8 +149,8 @@ const LOGIN_CSS = `
   color:#c4a5f7;background:rgba(138,86,245,.09);border-radius:999px;padding:6px 14px;
   font-size:11.5px;font-weight:700;letter-spacing:.09em;margin-bottom:16px;}
 .al-pill svg{color:#c4a5f7;}
-.al-h1{margin:0 0 14px;font-family:${DISPLAY};font-weight:800;color:#fff;line-height:1.08;
-  font-size:38px;letter-spacing:-.01em;}
+.al-h1{margin:0 0 14px;font-family:${DISPLAY};font-weight:600;color:#fff;line-height:1.06;
+  font-size:44px;letter-spacing:0;}
 .al-grad{background:linear-gradient(92deg,#e6c9fb,#ad8cf3 48%,#7d72f0);-webkit-background-clip:text;background-clip:text;color:transparent;}
 .al-white{color:#fff;}
 .al-welcome-d{display:none;}
@@ -174,7 +176,7 @@ const LOGIN_CSS = `
 .al-lockcircle svg{color:#c0a3f6;}
 .al-card-head{display:none;text-align:center;margin-bottom:18px;}
 .al-stage-head{display:block;text-align:center;margin-bottom:18px;}
-.al-card-title{font-size:21px;font-weight:800;color:#fff;letter-spacing:-.01em;}
+.al-card-title{font-size:25px;font-weight:600;color:#fff;letter-spacing:0;font-family:${DISPLAY};}
 .al-card-desc{font-size:13px;color:#9d96b8;margin-top:6px;line-height:1.45;}
 .al-label{display:block;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#9b94b8;margin:0 0 7px;}
 .al-field{position:relative;display:flex;align-items:center;margin-bottom:16px;
@@ -195,7 +197,7 @@ const LOGIN_CSS = `
 .al-forgot-row{text-align:right;margin:-4px 0 16px;}
 .al-forgot{background:none;border:none;cursor:pointer;color:#ab8df1;font-size:12.5px;font-weight:600;font-family:${UI};}
 .al-forgot:hover{color:#c4abf7;}
-.al-btn{width:100%;border:none;cursor:pointer;color:#fff;font-family:${UI};font-size:15px;font-weight:700;
+.al-btn{width:100%;border:none;cursor:pointer;color:#fff;font-family:${UI};font-size:15px;font-weight:600;
   border-radius:13px;padding:15px;letter-spacing:.01em;
   background:linear-gradient(92deg,#b98ff4 0%,#8559f3 58%,#7a4ef0 100%);
   box-shadow:0 12px 30px rgba(120,80,240,.42);transition:filter .15s,opacity .15s;}
@@ -228,7 +230,7 @@ const LOGIN_CSS = `
     gap:56px;align-items:center;min-height:100vh;padding:48px 46px;}
   .al-wrap-solo{display:flex;justify-content:center;align-items:center;max-width:560px;}
   .al-left{text-align:left;}
-  .al-h1{font-size:60px;margin-bottom:18px;}
+  .al-h1{font-size:68px;margin-bottom:18px;letter-spacing:0;}
   .al-sub{margin-left:0;font-size:15.5px;}
   .al-welcome-d{display:inline;}
   .al-welcome-m{display:none;}
@@ -475,12 +477,12 @@ export default function App() {
   };
   const authView = recovery || !authChecked || !user || (user && user.mustChangePw);
   return (
-    <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: authView ? "#0a0710" : T.bone, minHeight: "100dvh", display: "flex", color: T.ink,
+    <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: authView ? "#130a26" : T.bone, minHeight: "100dvh", display: "flex", color: T.ink,
       transition: "background .25s ease" }}>
       <style>{THEME_CSS}</style>
       {recovery && <ResetPassword onDone={() => { setRecovery(false); setUser(null); try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {} }} />}
       {!recovery && !authChecked && (
-        <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: "#0a0710", zIndex: 100 }}>
+        <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: "#130a26", zIndex: 100 }}>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontFamily: DISPLAY, fontSize: 22, letterSpacing: ".005em", color: "#F4F2FF", fontWeight: 800, lineHeight: 1.1 }}>Amber Homes</div>
             <div style={{ fontFamily: DISPLAY, fontSize: 10, letterSpacing: ".34em", color: "#b794ff", marginTop: 4, fontWeight: 700 }}>REAL ESTATE CRM</div>
