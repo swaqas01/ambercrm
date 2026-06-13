@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall } from "./supabase.js";
-import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, logAi, fetchKnowledge, pickKnowledge } from "./mentors.js";
+import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, categorize, logAi, fetchKnowledge, pickKnowledge } from "./mentors.js";
 import {
   BookOpen, Pencil, Trash2, Save, Check,
   LayoutDashboard, UserCircle, FileText, UserPlus, Kanban, BarChart3,
@@ -209,7 +209,9 @@ const NAV = [
   ["score", "Investment Score", Gauge],
   ["careers", "Careers / Hiring", Briefcase],
   ["commission", "Commissions", Coins],
+  ["deals", "Deals", Coins],
   ["projects", "Projects", Building2],
+  ["ailogs", "Ask Amber Logs", Sparkle],
   ["kb", "AI Knowledge Base", BookOpen],
   ["settings", "Settings & Permissions", Settings],
 ];
@@ -266,6 +268,8 @@ export default function App() {
   const [detailId, setDetailId] = useState(null);
   const go = (s, f = null) => { setScreen(s); setFilter(f); setNavOpen(false); };
   const openLead = (id) => { setDetailId(id); setScreen("lead"); setFilter(null); setNavOpen(false); };
+  const [dealDetailId, setDealDetailId] = useState(null);
+  const openDeal = (id) => { setDealDetailId(id); setScreen("dealdetail"); setNavOpen(false); };
   // role guard — agents may only open their own surfaces
   useEffect(() => {
     if (user && !canOpen(user.role, screen)) {
@@ -273,9 +277,9 @@ export default function App() {
     }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} />, lead: <LeadDetail leadId={detailId} user={user} go={go} />, open: <OpenLeads />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} />, lead: <LeadDetail leadId={detailId} user={user} go={go} />, open: <OpenLeads />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
     assign: <Assignment />, pipeline: <Pipeline go={go} />, performance: <Performance />,
-    security: <SecurityLog />, matching: <Matching go={go} />, score: <ScorePage />,
+    security: <SecurityLog go={go} />, matching: <Matching go={go} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
   };
   return (
@@ -420,6 +424,8 @@ function AdminDash({ go }) {
   const [acts, setActs] = useState([]);
   const [profs, setProfs] = useState([]);
   const [err, setErr] = useState("");
+  const [deals, setDeals] = useState(null);
+  useEffect(() => { (async () => { const { data } = await supabase.from("deals").select("status,deal_type,project,agent_id,property_value,gross_commission,net_commission,final_net,agent_commission,submitted_at,decided_at,created_at,accounts_status,deleted").neq("status", "cancelled").limit(5000); setDeals(data || []); })(); }, []);
   useEffect(() => {
     (async () => {
       try {
@@ -506,6 +512,19 @@ function AdminDash({ go }) {
   );
   const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(135px,1fr))", gap: 10 };
 
+  const D = (deals || []).filter((x) => !x.deleted);
+  const dApproved = D.filter((d) => d.status === "approved");
+  const dPending = D.filter((d) => ["submitted", "pending_review"].includes(d.status));
+  const apprMonth = dApproved.filter((d) => inMonth(d.decided_at));
+  const apprQ = dApproved.filter((d) => inQuarter(d.decided_at));
+  const apprYear = dApproved.filter((d) => inYear(d.decided_at));
+  const subToday = D.filter((d) => (d.submitted_at && inToday(d.submitted_at)) || (d.status !== "draft" && inToday(d.created_at)));
+  const sumD = (arr, k) => arr.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const byType = (t) => dApproved.filter((d) => d.deal_type === t).length;
+  const projMap = {}; dApproved.forEach((d) => { if (d.project) projMap[d.project] = (projMap[d.project] || 0) + 1; });
+  const topProjects = Object.entries(projMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const convDeals = D.length ? Math.round(dApproved.length / D.length * 100) : 0;
+
   return <div>
     <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 14 }}>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok,
@@ -513,6 +532,34 @@ function AdminDash({ go }) {
         <span style={{ width: 7, height: 7, borderRadius: 7, background: T.ok }} /> LIVE DATA</span>
       <span style={{ fontSize: 12.5, color: T.muted }}>{L.length} leads · {acts.length} activity events</span>
     </div>
+
+    {deals !== null && <div style={{ marginBottom: 18 }}>
+      <SectionTitle right={dPending.length ? <button onClick={() => go("deals")} style={{ background: "none", border: "none", color: T.gold, fontWeight: 700, cursor: "pointer", fontFamily: UI, fontSize: 12.5 }}>{dPending.length} pending →</button> : null}>Deal analytics</SectionTitle>
+      <div style={grid}>
+        <Stat label="Submitted today" value={subToday.length} onClick={() => go("deals")} />
+        <Stat label="Pending approval" value={dPending.length} tone={dPending.length ? "gold" : null} onClick={() => go("deals")} />
+        <Stat label="Approved · month" value={apprMonth.length} tone="ok" />
+        <Stat label="Approved · quarter" value={apprQ.length} />
+        <Stat label="Approved · year" value={apprYear.length} />
+      </div>
+      <div style={{ ...grid, marginTop: 10 }}>
+        <Stat label="Value · month" value={money(sumD(apprMonth, "property_value"))} />
+        <Stat label="Value · quarter" value={money(sumD(apprQ, "property_value"))} />
+        <Stat label="Value · year" value={money(sumD(apprYear, "property_value"))} />
+        <Stat label="Gross comm · month" value={money(sumD(apprMonth, "gross_commission"))} />
+      </div>
+      <div style={{ ...grid, marginTop: 10 }}>
+        <Stat label="Net to Amber · month" value={money(sumD(apprMonth, "final_net"))} tone="gold" />
+        <Stat label="Agent payable · month" value={money(sumD(apprMonth, "agent_commission"))} />
+        <Stat label="Sales / Rental" value={byType("Sales") + " / " + byType("Rental")} sub="approved" />
+        <Stat label="Approved conversion" value={convDeals + "%"} sub="approved / all deals" />
+      </div>
+      {topProjects.length > 0 && <div style={{ ...card, padding: 14, marginTop: 10 }}>
+        <SectionMini>Approved deals by project</SectionMini>
+        {topProjects.map(([p, n]) => <div key={p} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 12.5, borderBottom: `1px solid ${T.hairSoft}` }}><span style={{ color: T.inkSoft }}>{p}</span><b>{n}</b></div>)}
+      </div>}
+      <div style={{ fontSize: 11, color: T.faint, marginTop: 8 }}>Only approved deals count as final closed deals; pending deals are shown separately and excluded from totals.</div>
+    </div>}
 
     <SectionTitle>Leads</SectionTitle>
     <div style={grid}>
@@ -707,7 +754,7 @@ function AgentDash({ go, user, openLead }) {
       else {
         const reply = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
         setPlanText(reply || "Please try again.");
-        logAi({ user, mentor, question: "[Plan my day] " + snap, responseSum: reply, model: data.model, status: "success" });
+        logAi({ user, mentor, question: "[Plan my day] " + snap, responseSum: reply, fullResponse: reply, category: "follow_up", model: data.model, status: "success", tokensIn: data.usage && data.usage.input_tokens, tokensOut: data.usage && data.usage.output_tokens });
       }
     } catch (e) { setPlanErr("Plan My Day is temporarily unavailable. Please try again."); }
     finally { setPlanBusy(false); }
@@ -746,6 +793,9 @@ function AgentDash({ go, user, openLead }) {
         <button onClick={() => go("projects")} style={{ flex: "1 1 160px", background: T.paper, color: T.ink, border: `1px solid ${T.hair}`,
           borderRadius: 14, padding: "14px 18px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
           display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Building2 size={16} color={T.gold} /> Project knowledge</button>
+        <button onClick={() => go("deals")} style={{ flex: "1 1 160px", background: T.paper, color: T.ink, border: `1px solid ${T.hair}`,
+          borderRadius: 14, padding: "14px 18px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Coins size={16} color={T.gold} /> My closed deals</button>
       </div>
 
       {/* target ring + this-month gradient card */}
@@ -868,6 +918,7 @@ function FocusList({ title, items, go, onClose }) {
 /* ============================= 3 LEAD DETAIL ============================= */
 function LeadDetail({ leadId, user, go }) {
   const [lead, setLead] = useState(null);
+  const [showDeal, setShowDeal] = useState(false);
   const [comments, setComments] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [agents, setAgents] = useState([]);
@@ -1076,7 +1127,10 @@ function LeadDetail({ leadId, user, go }) {
       <Btn icon={Calendar} label="Schedule" onClick={() => { setSchedDate(lead.next_followup || ""); setSched(true); }} />
       {canReassign && <Btn icon={UserPlus} label="Change Agent" tone="gold" onClick={() => { setReTo(lead.assigned_agent || ""); setReReason(""); setErr2(""); setReOpen(true); }} />}
       {canEdit && <Btn icon={editing ? X : Pencil} label={editing ? "Cancel" : "Edit details"} tone="gold" onClick={() => editing ? setEditing(false) : startEdit()} />}
+      {canEdit && lead.status !== "Closed Won" && <Btn icon={Coins} label="Close deal" tone="ok" onClick={() => setShowDeal(true)} />}
     </div>
+
+    {showDeal && <DealSubmit lead={lead} user={user} onClose={() => setShowDeal(false)} onDone={() => { setShowDeal(false); go("deals"); }} />}
 
     {editing && <div style={{ ...card, padding: "12px 16px", marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: T.goldSoft, borderColor: T.goldEdge }}>
       <span style={{ fontSize: 12.5, color: T.ink, fontWeight: 600 }}>Editing mode — {canEditAll ? "you can edit all fields" : "you can edit your lead's details"}. Changes are logged.</span>
@@ -1337,8 +1391,41 @@ function Performance() {
 }
 
 /* ========================= 7 SUSPICIOUS ACTIVITY ========================= */
-function SecurityLog() {
+function SecurityLog({ go }) {
+  const [ai, setAi] = useState(null);
+  useEffect(() => {
+    (async () => {
+      const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const { data } = await supabase.from("ai_logs").select("user_name, status, inappropriate, non_work, flagged, denied_reason, created_at").gte("created_at", since).limit(2000);
+      const rows = data || [];
+      const byUser = {}; rows.forEach((r) => { if (r.flagged) byUser[r.user_name] = (byUser[r.user_name] || 0) + 1; });
+      setAi({
+        inappropriate: rows.filter((r) => r.inappropriate).length,
+        nonwork: rows.filter((r) => r.non_work).length,
+        refused: rows.filter((r) => r.status === "refused").length,
+        errors: rows.filter((r) => r.status === "error").length,
+        denied: rows.filter((r) => r.denied_reason).length,
+        repeatUsers: Object.entries(byUser).filter(([, n]) => n >= 3).map(([u]) => u),
+      });
+    })();
+  }, []);
   return <div>
+    <div style={{ ...card, padding: 16, marginBottom: 14, borderColor: ai && (ai.inappropriate || ai.nonwork) ? T.badSoft : T.hair }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 8 }}><Sparkle size={16} color={T.gold} /> Ask Amber misuse — last 24h</div>
+        {go && <button onClick={() => go("ailogs")} style={{ ...miniBtn(), padding: "6px 11px", fontSize: 11.5 }}>Open Ask Amber Logs <ChevronRight size={12} /></button>}
+      </div>
+      {ai === null ? <div style={{ color: T.muted, fontSize: 12.5 }}>Loading AI activity…</div> : <>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10 }}>
+          <Kpi label="Inappropriate Qs" value={ai.inappropriate} tone={ai.inappropriate ? "bad" : null} />
+          <Kpi label="Non-work Qs" value={ai.nonwork} tone={ai.nonwork ? "warn" : null} />
+          <Kpi label="Permission-denied" value={ai.denied} />
+          <Kpi label="AI errors" value={ai.errors} />
+        </div>
+        {ai.repeatUsers.length > 0 && <div style={{ marginTop: 12, background: T.badSoft, borderRadius: 10, padding: "10px 13px", fontSize: 12.5, color: T.bad, fontWeight: 600 }}>
+          <AlertTriangle size={13} style={{ verticalAlign: "-2px", marginRight: 5 }} /> Flagged for repeated misuse (3+ in 24h): {ai.repeatUsers.join(", ")}</div>}
+      </>}
+    </div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
       <Kpi label="Open alerts" value="3" sub="1 high severity" trend="down" />
       <Kpi label="Honeypot triggers" value="1" sub="this month" />
@@ -2204,6 +2291,693 @@ function Projects({ user, go }) {
   );
 }
 
+/* ===================== ASK AMBER LOGS (Master Admin) ===================== */
+const AILOG_CATS = [["crm", "CRM"], ["dubai_re", "Dubai RE"], ["sales", "Sales"], ["follow_up", "Follow-up"], ["project", "Project"], ["drafting", "Drafting"], ["inappropriate", "Inappropriate"], ["non_work", "Non-work"], ["personal", "Personal"], ["sexual", "Sexual"], ["other", "Other"]];
+const aiCatLabel = (c) => (AILOG_CATS.find((x) => x[0] === c) || [c, c || "—"])[1];
+
+function AiLogs({ user }) {
+  const [logs, setLogs] = useState(null);
+  const [q, setQ] = useState("");
+  const [userF, setUserF] = useState("");
+  const [mentorF, setMentorF] = useState("");
+  const [statusF, setStatusF] = useState("");
+  const [flagF, setFlagF] = useState("");
+  const [catF, setCatF] = useState("");
+  const [range, setRange] = useState("30");
+  const [expand, setExpand] = useState({});
+
+  const load = async () => {
+    setLogs(null);
+    const { data, error } = await supabase.from("ai_logs").select("*").order("created_at", { ascending: false }).limit(800);
+    setLogs(error ? [] : (data || []));
+  };
+  useEffect(() => { load(); }, []);
+
+  const all = logs || [];
+  const users = [...new Set(all.map((l) => l.user_name).filter(Boolean))].sort();
+  const now = Date.now();
+  const cutoff = range === "all" ? 0 : now - Number(range) * 24 * 3600 * 1000;
+  const filtered = all.filter((l) => {
+    if (cutoff && new Date(l.created_at).getTime() < cutoff) return false;
+    if (userF && l.user_name !== userF) return false;
+    if (mentorF && l.mentor_id !== mentorF) return false;
+    if (statusF && l.status !== statusF) return false;
+    if (catF && l.category !== catF) return false;
+    if (flagF === "flagged" && !l.flagged) return false;
+    if (flagF === "inappropriate" && !l.inappropriate) return false;
+    if (flagF === "non_work" && !l.non_work) return false;
+    if (flagF === "clean" && l.flagged) return false;
+    if (q) { const s = q.toLowerCase(); if (![l.question, l.user_name, l.user_email].some((v) => (v || "").toLowerCase().includes(s))) return false; }
+    return true;
+  });
+
+  const flaggedCount = filtered.filter((l) => l.flagged).length;
+  const when = (t) => new Date(t).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  const stTone = (s) => s === "refused" ? "bad" : s === "error" ? "warn" : "ok";
+  const stLabel = (s) => s === "success" ? "Answered" : s === "refused" ? "Refused" : s === "error" ? "Error" : s;
+
+  const exportCsv = () => {
+    const head = ["When", "User", "Email", "Role", "Mentor", "Status", "Category", "Inappropriate", "NonWork", "Model", "TokensIn", "TokensOut", "Question", "Response"];
+    const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+    const rows = filtered.map((l) => [when(l.created_at), l.user_name, l.user_email, l.user_role, l.mentor_name, stLabel(l.status), aiCatLabel(l.category), l.inappropriate ? "yes" : "no", l.non_work ? "yes" : "no", l.model, l.tokens_in, l.tokens_out, l.question, l.full_response || l.response_sum].map(esc).join(","));
+    const csv = head.map(esc).join(",") + "\n" + rows.join("\n");
+    const blob = new Blob([csv], { type: "text/csv" }); const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "ask-amber-logs.csv"; a.click(); URL.revokeObjectURL(url);
+  };
+
+  const sel = { padding: "8px 10px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontSize: 12.5, fontFamily: UI };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+        <div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 10 }}><Sparkle size={21} color={T.gold} /> Ask Amber Logs</div>
+          <div style={{ color: T.muted, fontSize: 13, marginTop: 4 }}>Every Ask Amber question across the team — who asked what, and anything flagged as non-work.</div>
+        </div>
+        <button onClick={exportCsv} disabled={!filtered.length} style={{ ...miniBtn(), opacity: filtered.length ? 1 : .5 }}><Download size={13} /> Export CSV</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 14 }}>
+        <Kpi label="Questions (range)" value={filtered.length} />
+        <Kpi label="Flagged (range)" value={flaggedCount} tone={flaggedCount ? "bad" : null} />
+        <Kpi label="Refused" value={filtered.filter((l) => l.status === "refused").length} />
+        <Kpi label="Errors" value={filtered.filter((l) => l.status === "error").length} />
+      </div>
+
+      <div style={{ ...card, padding: 12, marginBottom: 14, display: "flex", gap: 9, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 200px" }}>
+          <Search size={15} color={T.faint} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)" }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search question, name, email…" style={{ ...sel, paddingLeft: 33, width: "100%", boxSizing: "border-box" }} />
+        </div>
+        <select value={range} onChange={(e) => setRange(e.target.value)} style={sel}><option value="1">Today</option><option value="7">7 days</option><option value="30">30 days</option><option value="all">All time</option></select>
+        <select value={userF} onChange={(e) => setUserF(e.target.value)} style={sel}><option value="">All users</option>{users.map((u) => <option key={u}>{u}</option>)}</select>
+        <select value={mentorF} onChange={(e) => setMentorF(e.target.value)} style={sel}><option value="">All mentors</option><option value="ambreen_ai">Ambreen AI</option><option value="saad_ai">Saad AI</option><option value="ibrahim_ai">Ibrahim AI</option></select>
+        <select value={statusF} onChange={(e) => setStatusF(e.target.value)} style={sel}><option value="">Any status</option><option value="success">Answered</option><option value="refused">Refused</option><option value="error">Error</option></select>
+        <select value={flagF} onChange={(e) => setFlagF(e.target.value)} style={sel}><option value="">All</option><option value="flagged">Flagged</option><option value="inappropriate">Inappropriate</option><option value="non_work">Non-work</option><option value="clean">Clean only</option></select>
+        <select value={catF} onChange={(e) => setCatF(e.target.value)} style={sel}><option value="">All categories</option>{AILOG_CATS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+      </div>
+
+      {logs === null ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading logs…</div>
+        : filtered.length === 0 ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>No questions match these filters.</div>
+        : <div style={{ display: "grid", gap: 10 }}>
+          {filtered.map((l) => {
+            const open = expand[l.id];
+            return (
+              <div key={l.id} style={{ ...card, padding: 14, borderColor: l.flagged ? T.badSoft : T.hair }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <Av name={l.user_name || "User"} size={28} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{l.user_name || "User"} <span style={{ fontWeight: 500, color: T.faint, fontSize: 11 }}>· {roleLabel(l.user_role)}</span></div>
+                    <div style={{ fontSize: 11, color: T.muted }}>{l.user_email || "—"}</div>
+                  </div>
+                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <Chip tone="info">{l.mentor_name || l.mentor_id}</Chip>
+                    <Chip tone={stTone(l.status)}>{stLabel(l.status)}</Chip>
+                    {l.category && <Chip tone={l.inappropriate || l.non_work ? "bad" : "gold"}>{aiCatLabel(l.category)}</Chip>}
+                    <span style={{ fontSize: 10.5, color: T.faint }}>{when(l.created_at)}</span>
+                  </div>
+                </div>
+                <div style={{ fontSize: 13, color: T.ink, marginTop: 9, lineHeight: 1.5 }}><b style={{ color: T.muted, fontWeight: 600 }}>Q:</b> {l.question}</div>
+                {open && <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${T.hairSoft}` }}>
+                  <div style={{ fontSize: 12.5, color: T.inkSoft, lineHeight: 1.55, whiteSpace: "pre-wrap" }}><b style={{ color: T.muted, fontWeight: 600 }}>A:</b> {l.full_response || l.response_sum || (l.status === "refused" ? "[Refused — " + (l.refusal_reason || "non-work") + "]" : "—")}</div>
+                  <div style={{ fontSize: 10.5, color: T.faint, marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    {l.model && <span>Model: {l.model}</span>}
+                    {(l.tokens_in || l.tokens_out) && <span>Tokens: {l.tokens_in || 0} in / {l.tokens_out || 0} out</span>}
+                    {l.flagged && <span style={{ color: T.bad }}>Flagged: {l.flag_category}</span>}
+                    {l.device && <span title={l.device}>Device: {(l.device || "").slice(0, 40)}…</span>}
+                  </div>
+                </div>}
+                <button onClick={() => setExpand((s) => ({ ...s, [l.id]: !s[l.id] }))} style={{ marginTop: 6, background: "none", border: "none", color: T.gold, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>{open ? "Hide details" : "Show response & details"}</button>
+              </div>
+            );
+          })}
+        </div>}
+      <div style={{ fontSize: 11, color: T.faint, marginTop: 12 }}>Newest first · up to 800 recent questions. Flagged rows are highlighted. IP capture requires server-side logging (not enabled); device is the browser agent string.</div>
+    </div>
+  );
+}
+
+/* ============================ DEALS MODULE =============================== */
+const DEAL_STATUS = [["draft", "Draft", "muted"], ["submitted", "Submitted", "info"], ["pending_review", "Pending review", "warn"], ["approved", "Approved", "ok"], ["rejected", "Rejected", "bad"], ["needs_correction", "Needs correction", "warn"], ["cancelled", "Cancelled", "muted"]];
+const dealStatusMeta = (s) => DEAL_STATUS.find((x) => x[0] === s) || [s, s, "muted"];
+const DOC_TYPES = [["kyc", "KYC form"], ["passport", "Passport copy"], ["emirates_id", "Emirates ID"], ["booking_form", "Booking form"], ["spa_contract", "SPA / Contract"], ["tenancy_contract", "Tenancy contract"], ["payment_proof", "Payment proof"], ["buyer_form", "Buyer form"], ["seller_form", "Seller form"], ["landlord_form", "Landlord form"], ["tenant_form", "Tenant form"], ["commission_agreement", "Commission agreement"], ["agency_agreement", "Agency agreement"], ["other", "Other"]];
+const docTypeLabel = (t) => (DOC_TYPES.find((x) => x[0] === t) || [t, t])[1];
+const numv = (v) => { const n = parseFloat(String(v == null ? "" : v).replace(/[^0-9.]/g, "")); return isNaN(n) ? 0 : n; };
+const aed = (n) => "AED " + Math.round(numv(n)).toLocaleString();
+const dealNoFmt = (d) => "D" + String(d.deal_no || 0).padStart(3, "0");
+
+// Commission math, shared by form + detail.
+function calcDeal(f, agentPct) {
+  const pv = numv(f.property_value), cp = numv(f.commission_pct);
+  const gross = pv * cp / 100;
+  const vat = f.vat_applies ? gross * 0.05 : 0;
+  const ext = numv(f.external_split) + numv(f.referral_fee) + numv(f.other_deductions);
+  const net = Math.max(0, gross - ext);
+  const apct = numv(agentPct);
+  const agentComm = net * apct / 100;
+  const amberNet = net - agentComm;
+  return { gross, vat, ext, net, apct, agentComm, amberNet };
+}
+
+const dInp = { width: "100%", padding: "9px 11px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontSize: 13, fontFamily: UI, boxSizing: "border-box" };
+const dLbl = { fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 5, display: "block" };
+
+function DealSubmit({ lead, user, existing, onClose, onDone }) {
+  const [step, setStep] = useState(1);
+  const [dealId, setDealId] = useState(existing ? existing.id : null);
+  const [docs, setDocs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState("");
+  const [err, setErr] = useState("");
+  const [profilePct, setProfilePct] = useState({ sales: null, rental: null });
+  const [f, setF] = useState(existing ? {
+    deal_type: existing.deal_type || "Sales", transaction_side: existing.transaction_side || "", area: existing.area || "", project: existing.project || "",
+    developer: existing.developer || "", property_type: existing.property_type || "", unit_no: existing.unit_no || "", bedrooms: existing.bedrooms || "",
+    property_value: existing.property_value || "", ready_offplan: existing.ready_offplan || "", commission_pct: existing.commission_pct || "2",
+    vat_applies: !!existing.vat_amount, external_split: existing.external_split || "", referral_fee: existing.referral_fee || "", other_deductions: existing.other_deductions || "",
+    sole_agent: existing.sole_agent !== false, participants: existing.participants || [],
+  } : {
+    deal_type: "Sales", transaction_side: "", area: lead.area || "", project: lead.project || "", developer: lead.developer || "",
+    property_type: lead.property_type || "", unit_no: "", bedrooms: "", property_value: lead.deal_value || "", ready_offplan: lead.ready_offplan || "",
+    commission_pct: "2", vat_applies: false, external_split: "", referral_fee: "", other_deductions: "", sole_agent: true, participants: [],
+  });
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+
+  useEffect(() => { (async () => {
+    const { data } = await supabase.from("profiles").select("sales_commission_pct, rental_commission_pct").eq("id", user.id).single();
+    if (data) setProfilePct({ sales: data.sales_commission_pct, rental: data.rental_commission_pct });
+  })(); }, []);
+  useEffect(() => { if (dealId) loadDocs(dealId); }, [dealId]);
+  const loadDocs = async (id) => { const { data } = await supabase.from("deal_documents").select("*").eq("deal_id", id).order("created_at", { ascending: true }); setDocs(data || []); };
+
+  const agentPct = f.deal_type === "Rental" ? profilePct.rental : profilePct.sales;
+  const c = calcDeal(f, agentPct);
+
+  const buildRow = (status) => ({
+    lead_id: lead.id, agent_id: user.id, created_by: user.id, client_name: lead.client_name, lead_source: lead.source || null,
+    deal_type: f.deal_type, transaction_side: f.transaction_side || null, area: f.area || null, project: f.project || null, developer: f.developer || null,
+    property_type: f.property_type || null, unit_no: f.unit_no || null, bedrooms: f.bedrooms || null, property_value: numv(f.property_value) || null,
+    ready_offplan: f.ready_offplan || null, commission_pct: numv(f.commission_pct) || null, gross_commission: c.gross || null, vat_amount: c.vat || null,
+    net_commission: c.net || null, agent_commission_pct: agentPct == null ? null : numv(agentPct), agent_commission: c.agentComm || null,
+    company_share: c.amberNet || null, external_split: numv(f.external_split) || null, referral_fee: numv(f.referral_fee) || null,
+    other_deductions: numv(f.other_deductions) || null, final_net: c.amberNet || null, sole_agent: !!f.sole_agent, participants: f.participants || [],
+    status, updated_at: new Date().toISOString(),
+  });
+
+  const ensureDraft = async () => {
+    if (dealId) { await supabase.from("deals").update(buildRow("draft")).eq("id", dealId); return dealId; }
+    const { data, error } = await supabase.from("deals").insert(buildRow("draft")).select("id").single();
+    if (error) throw error;
+    setDealId(data.id);
+    await supabase.from("deal_activity").insert({ deal_id: data.id, actor_id: user.id, action: "deal_created", detail: {} });
+    await supabase.from("admin_audit").insert({ action: "deal_draft_created", performed_by: user.id, detail: lead.client_name });
+    return data.id;
+  };
+
+  const goStep = async (n) => {
+    setErr("");
+    if (n === 4 && !dealId) { // need a deal id to attach documents
+      setBusy(true);
+      try { await ensureDraft(); } catch (e) { setErr("Could not start the deal: " + (e.message || "")); setBusy(false); return; }
+      setBusy(false);
+    }
+    setStep(n);
+  };
+
+  const safeName = (s) => String(s).replace(/[^a-zA-Z0-9._-]/g, "_");
+  const uploadDoc = async (docType, file) => {
+    if (!file) return; setUploading(docType); setErr("");
+    try {
+      const id = await ensureDraft();
+      const path = id + "/" + docType + "-" + Date.now() + "-" + safeName(file.name);
+      const { error } = await supabase.storage.from("deal-docs").upload(path, file, { upsert: false });
+      if (error) throw error;
+      await supabase.from("deal_documents").insert({ deal_id: id, doc_type: docType, file_name: file.name, storage_path: path, uploaded_by: user.id });
+      await supabase.from("deal_activity").insert({ deal_id: id, actor_id: user.id, action: "document_uploaded", detail: { doc: docTypeLabel(docType), file: file.name } });
+      loadDocs(id);
+    } catch (e) { setErr("Upload failed: " + (e.message || "") + " — If this persists, ask Master Admin to create a PRIVATE Storage bucket named 'deal-docs'."); }
+    finally { setUploading(""); }
+  };
+  const delDoc = async (d) => {
+    if (d.storage_path) { try { await supabase.storage.from("deal-docs").remove([d.storage_path]); } catch (e) {} }
+    await supabase.from("deal_documents").delete().eq("id", d.id);
+    loadDocs(dealId);
+  };
+
+  const has = (type) => docs.some((d) => d.doc_type === type);
+  const missingDocs = () => {
+    const m = []; const isDirect = f.transaction_side === "Direct";
+    if (!has("kyc")) m.push("Please upload KYC form before submitting.");
+    if (!has("passport") && !has("emirates_id")) m.push("Please upload Passport or Emirates ID before submitting.");
+    if (isDirect) { if (!has("booking_form")) m.push("Please upload Booking Form before submitting."); }
+    else if (f.deal_type === "Sales") { if (!has("booking_form") && !has("spa_contract")) m.push("Please upload Booking Form or Contract (SPA) before submitting."); }
+    else if (f.deal_type === "Rental") { if (!has("tenancy_contract") && !has("booking_form")) m.push("Please upload Tenancy Contract or Booking Form before submitting."); }
+    return m;
+  };
+
+  const submit = async () => {
+    setBusy(true); setErr("");
+    try {
+      const id = await ensureDraft();
+      const miss = missingDocs();
+      if (miss.length) { setErr(miss[0]); setStep(4); setBusy(false); return; }
+      if (!numv(f.property_value)) { setErr("Please enter the property / transaction value."); setStep(1); setBusy(false); return; }
+      const row = buildRow("submitted"); row.submitted_at = new Date().toISOString();
+      const { error } = await supabase.from("deals").update(row).eq("id", id);
+      if (error) throw error;
+      await supabase.from("deal_activity").insert({ deal_id: id, actor_id: user.id, action: "submitted", detail: { value: numv(f.property_value) } });
+      await supabase.from("notifications").insert({ user_id: null, kind: "deal", title: "New deal submitted for approval", body: `${user.name} submitted a ${f.deal_type} deal for ${lead.client_name} (${aed(f.property_value)}).`, link_screen: "deals" });
+      await supabase.from("admin_audit").insert({ action: "deal_submitted", performed_by: user.id, new_value: { value: numv(f.property_value), type: f.deal_type }, detail: lead.client_name });
+      onDone && onDone();
+    } catch (e) { setErr("Submit failed: " + (e.message || "")); }
+    finally { setBusy(false); }
+  };
+
+  const addPart = () => setF((s) => ({ ...s, sole_agent: false, participants: [...s.participants, { name: "", internal: true, role: "Co-agent", split_pct: "", split_amount: "", notes: "" }] }));
+  const setPart = (i, k, v) => setF((s) => { const p = [...s.participants]; p[i] = { ...p[i], [k]: v }; return { ...s, participants: p }; });
+  const rmPart = (i) => setF((s) => { const p = s.participants.filter((_, j) => j !== i); return { ...s, participants: p, sole_agent: p.length === 0 }; });
+
+  const STEPS = ["Property", "Client", "Commission", "Documents", "Review"];
+  const Stepper = () => <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+    {STEPS.map((s, i) => <button key={s} onClick={() => goStep(i + 1)} style={{ flex: "1 1 auto", minWidth: 64, padding: "7px 6px", borderRadius: 8, border: `1px solid ${step === i + 1 ? T.gold : T.hair}`, background: step === i + 1 ? T.goldSoft : (step > i + 1 ? T.okSoft : T.paper), color: step === i + 1 ? T.gold : (step > i + 1 ? T.ok : T.muted), fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>{i + 1}. {s}</button>)}
+  </div>;
+  const Money = ({ k, v, strong }) => <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13 }}>
+    <span style={{ color: T.muted }}>{k}</span><span style={{ fontWeight: strong ? 800 : 600, color: strong ? T.gold : T.ink }}>{v}</span></div>;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,15,25,.55)", zIndex: 90, display: "grid", placeItems: "center", padding: 16 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: "min(680px, 96vw)", maxHeight: "94vh", overflowY: "auto", padding: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: DISPLAY, fontSize: 19, fontWeight: 800, color: T.ink }}>Close deal — {lead.client_name}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", padding: 4 }}><X size={18} /></button>
+        </div>
+        <div style={{ fontSize: 12, color: T.muted, marginBottom: 14 }}>Submitting sends this for Admin approval — it won't be a final closed deal until approved.</div>
+        <Stepper />
+
+        {step === 1 && <div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            {["Sales", "Rental"].map((t) => <button key={t} onClick={() => set("deal_type", t)} style={{ flex: 1, padding: "11px", borderRadius: 10, border: `1px solid ${f.deal_type === t ? T.gold : T.hair}`, background: f.deal_type === t ? T.goldSoft : T.paper, color: f.deal_type === t ? T.gold : T.ink, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>{t} deal</button>)}
+          </div>
+          <div style={{ marginBottom: 12 }}><label style={dLbl}>Transaction side</label>
+            <select value={f.transaction_side} onChange={(e) => set("transaction_side", e.target.value)} style={dInp}><option value="">—</option>{["Buyer", "Seller", "Landlord", "Tenant", "Direct", "Co-broker"].map((o) => <option key={o}>{o}</option>)}</select></div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+            <div style={{ flex: "1 1 180px" }}><label style={dLbl}>Location / area *</label><input value={f.area} onChange={(e) => set("area", e.target.value)} style={dInp} /></div>
+            <div style={{ flex: "1 1 180px" }}><label style={dLbl}>Project *</label><input value={f.project} onChange={(e) => set("project", e.target.value)} style={dInp} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+            <div style={{ flex: "1 1 180px" }}><label style={dLbl}>Developer</label><input value={f.developer} onChange={(e) => set("developer", e.target.value)} style={dInp} /></div>
+            <div style={{ flex: "1 1 140px" }}><label style={dLbl}>Property type *</label><select value={f.property_type} onChange={(e) => set("property_type", e.target.value)} style={dInp}><option value="">—</option>{["Apartment", "Villa", "Townhouse", "Penthouse", "Plot", "Commercial", "Other"].map((o) => <option key={o}>{o}</option>)}</select></div>
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+            <div style={{ flex: "1 1 120px" }}><label style={dLbl}>Unit no.</label><input value={f.unit_no} onChange={(e) => set("unit_no", e.target.value)} style={dInp} /></div>
+            <div style={{ flex: "1 1 120px" }}><label style={dLbl}>Bedrooms</label><input value={f.bedrooms} onChange={(e) => set("bedrooms", e.target.value)} style={dInp} /></div>
+            <div style={{ flex: "1 1 120px" }}><label style={dLbl}>Ready / Off-plan</label><select value={f.ready_offplan} onChange={(e) => set("ready_offplan", e.target.value)} style={dInp}><option value="">—</option><option>Ready</option><option>Off-plan</option></select></div>
+          </div>
+          <div style={{ marginBottom: 4 }}><label style={dLbl}>Property / transaction value (AED) *</label><input value={f.property_value} onChange={(e) => set("property_value", e.target.value)} style={dInp} placeholder="e.g. 2800000" /></div>
+        </div>}
+
+        {step === 2 && <div>
+          <div style={{ ...card, padding: 14, background: T.bone }}>
+            <Money k="Client" v={lead.client_name} />
+            <Money k="Lead ID" v={lead.lead_no ? "L" + String(lead.lead_no).padStart(3, "0") : (lead.lead_code || "—")} />
+            <Money k="Assigned agent" v={user.name} />
+            <Money k="Lead source" v={lead.source || "—"} />
+            <Money k="Current status" v={lead.is_open ? "Open" : (lead.status || "—")} />
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <label style={{ ...dLbl, marginBottom: 0 }}>Other agents involved?</label>
+              <button onClick={addPart} style={{ ...miniBtn(), padding: "6px 11px", fontSize: 11.5 }}><Plus size={12} /> Add participant</button>
+            </div>
+            {f.participants.length === 0 ? <div style={{ fontSize: 12.5, color: T.muted, padding: "8px 0" }}>None — you are the sole closing agent.</div> :
+              f.participants.map((p, i) => <div key={i} style={{ ...card, padding: 12, marginBottom: 8 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                  <input value={p.name} onChange={(e) => setPart(i, "name", e.target.value)} placeholder="Agent / broker name" style={{ ...dInp, flex: "1 1 150px" }} />
+                  <select value={p.internal ? "internal" : "external"} onChange={(e) => setPart(i, "internal", e.target.value === "internal")} style={{ ...dInp, width: "auto" }}><option value="internal">Internal</option><option value="external">External</option></select>
+                  <button onClick={() => rmPart(i)} style={{ background: "none", border: "none", color: T.bad, cursor: "pointer", padding: 6 }}><Trash2 size={14} /></button>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <input value={p.role} onChange={(e) => setPart(i, "role", e.target.value)} placeholder="Role" style={{ ...dInp, flex: "1 1 110px" }} />
+                  <input value={p.split_pct} onChange={(e) => setPart(i, "split_pct", e.target.value)} placeholder="Split %" style={{ ...dInp, flex: "1 1 80px" }} />
+                  <input value={p.split_amount} onChange={(e) => setPart(i, "split_amount", e.target.value)} placeholder="Split AED" style={{ ...dInp, flex: "1 1 100px" }} />
+                </div>
+              </div>)}
+          </div>
+        </div>}
+
+        {step === 3 && <div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+            <div style={{ flex: "1 1 150px" }}><label style={dLbl}>Property value (AED)</label><input value={f.property_value} onChange={(e) => set("property_value", e.target.value)} style={dInp} /></div>
+            <div style={{ flex: "1 1 120px" }}><label style={dLbl}>Commission %</label><input value={f.commission_pct} onChange={(e) => set("commission_pct", e.target.value)} style={dInp} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+            <div style={{ flex: "1 1 120px" }}><label style={dLbl}>External / co-broker split (AED)</label><input value={f.external_split} onChange={(e) => set("external_split", e.target.value)} style={dInp} /></div>
+            <div style={{ flex: "1 1 110px" }}><label style={dLbl}>Referral fee (AED)</label><input value={f.referral_fee} onChange={(e) => set("referral_fee", e.target.value)} style={dInp} /></div>
+            <div style={{ flex: "1 1 110px" }}><label style={dLbl}>Other deductions (AED)</label><input value={f.other_deductions} onChange={(e) => set("other_deductions", e.target.value)} style={dInp} /></div>
+          </div>
+          <button onClick={() => set("vat_applies", !f.vat_applies)} style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 9, border: `1px solid ${f.vat_applies ? T.gold : T.hair}`, background: f.vat_applies ? T.goldSoft : T.paper, color: f.vat_applies ? T.gold : T.muted, cursor: "pointer", fontSize: 12.5, fontWeight: 600, fontFamily: UI }}>VAT applies (5%): {f.vat_applies ? "Yes" : "No"}</button>
+          <div style={{ ...card, padding: 14, background: T.bone }}>
+            <Money k="Gross commission" v={aed(c.gross)} />
+            {f.vat_applies && <Money k="VAT (5%, informational)" v={aed(c.vat)} />}
+            <Money k="Less external / deductions" v={"− " + aed(c.ext)} />
+            <Money k="Net commission to Amber Homes" v={aed(c.net)} />
+            <Money k={"Your commission (" + (agentPct == null ? "set by admin" : agentPct + "%") + ")"} v={agentPct == null ? "—" : aed(c.agentComm)} />
+            <Money k="Final net to Amber Homes" v={aed(c.amberNet)} strong />
+          </div>
+          <div style={{ fontSize: 11, color: T.faint, marginTop: 8, lineHeight: 1.5 }}>Your commission % is set by Admin on your profile{agentPct == null ? " (not set yet — Admin will confirm on approval)" : ""}. You can't change it here; Admin can adjust the final commission during review.</div>
+        </div>}
+
+        {step === 4 && <div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12 }}>Upload required documents. Stored privately — only you and Admin can open them.</div>
+          {!dealId ? <div style={{ ...card, padding: 16, textAlign: "center", color: T.muted }}>Preparing upload…</div> : <>
+            {docs.length > 0 && <div style={{ ...card, padding: 12, marginBottom: 12 }}>
+              {docs.map((d) => <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 12.5 }}>
+                <FileText size={14} color={T.gold} /><span style={{ fontWeight: 600 }}>{docTypeLabel(d.doc_type)}</span><span style={{ color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.file_name}</span>
+                <button onClick={() => delDoc(d)} style={{ marginLeft: "auto", background: "none", border: "none", color: T.bad, cursor: "pointer", padding: 2 }}><Trash2 size={13} /></button>
+              </div>)}
+            </div>}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 8 }}>
+              {DOC_TYPES.map(([v, l]) => <label key={v} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 11px", borderRadius: 9, border: `1px dashed ${has(v) ? T.ok : T.hair}`, background: has(v) ? T.okSoft : T.paper, color: has(v) ? T.ok : T.inkSoft, cursor: uploading ? "default" : "pointer", fontSize: 11.5, fontWeight: 600 }}>
+                {has(v) ? <Check size={13} /> : <Upload size={13} />} {uploading === v ? "Uploading…" : l}
+                <input type="file" disabled={!!uploading} onChange={(e) => { if (e.target.files[0]) uploadDoc(v, e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
+              </label>)}
+            </div>
+            <div style={{ fontSize: 11.5, color: T.faint, marginTop: 12, lineHeight: 1.5 }}>Required: KYC + (Passport or Emirates ID) + {f.transaction_side === "Direct" ? "Booking form" : f.deal_type === "Sales" ? "Booking form or SPA/Contract" : "Tenancy contract or Booking form"}.</div>
+          </>}
+        </div>}
+
+        {step === 5 && <div>
+          <div style={{ ...card, padding: 14, marginBottom: 12 }}>
+            <Money k="Deal type" v={f.deal_type + (f.transaction_side ? " · " + f.transaction_side : "")} />
+            <Money k="Property" v={[f.project, f.area, f.property_type].filter(Boolean).join(" · ") || "—"} />
+            <Money k="Value" v={aed(f.property_value)} />
+            <Money k="Gross commission" v={aed(c.gross)} />
+            <Money k="Net to Amber Homes" v={aed(c.net)} />
+            <Money k="Your commission" v={agentPct == null ? "set by admin" : aed(c.agentComm)} />
+            <Money k="Documents uploaded" v={docs.length + " file" + (docs.length === 1 ? "" : "s")} />
+          </div>
+          {missingDocs().length > 0 && <div style={{ ...card, padding: 12, marginBottom: 12, borderColor: T.badSoft, color: T.bad, fontSize: 12.5 }}>{missingDocs()[0]}</div>}
+        </div>}
+
+        {err && <div style={{ background: T.badSoft, color: T.bad, padding: "9px 12px", borderRadius: 9, fontSize: 12.5, margin: "12px 0" }}>{err}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "space-between", marginTop: 16, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            {step > 1 && <button onClick={() => goStep(step - 1)} style={{ padding: "10px 16px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, cursor: "pointer", fontWeight: 600, fontFamily: UI }}>Back</button>}
+            {dealId && <button onClick={async () => { try { await ensureDraft(); onDone && onDone(); } catch (e) { setErr("Could not save draft."); } }} style={{ padding: "10px 14px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.muted, cursor: "pointer", fontWeight: 600, fontFamily: UI, fontSize: 12.5 }}>Save draft</button>}
+          </div>
+          {step < 5 ? <button onClick={() => goStep(step + 1)} disabled={busy} style={{ padding: "10px 20px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, cursor: "pointer", fontWeight: 700, fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "…" : "Next"}</button>
+            : <button onClick={submit} disabled={busy} style={{ padding: "10px 22px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, cursor: "pointer", fontWeight: 700, fontFamily: UI, display: "flex", alignItems: "center", gap: 7, opacity: busy ? .6 : 1 }}><Check size={15} /> {busy ? "Submitting…" : "Submit for approval"}</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DealDetail({ dealId, user, go }) {
+  const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
+  const [deal, setDeal] = useState(null);
+  const [docs, setDocs] = useState([]);
+  const [acts, setActs] = useState([]);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [ov, setOv] = useState(null); // commission override buffer
+
+  const load = async () => {
+    const { data: d, error } = await supabase.from("deals").select("*").eq("id", dealId).single();
+    if (error || !d) { setErr("load"); return; }
+    setDeal(d); setNote(d.admin_notes || "");
+    const [{ data: dd }, { data: aa }] = await Promise.all([
+      supabase.from("deal_documents").select("*").eq("deal_id", dealId).order("created_at"),
+      supabase.from("deal_activity").select("*, actor:profiles!deal_activity_actor_id_fkey(full_name, role)").eq("deal_id", dealId).order("created_at", { ascending: false }).limit(60),
+    ]);
+    setDocs(dd || []); setActs(aa || []);
+  };
+  useEffect(() => { load(); }, [dealId]);
+
+  if (err === "load") return <div style={{ ...card, padding: 30, textAlign: "center" }}><div style={{ fontWeight: 700, color: T.bad }}>Unable to load this deal.</div><button onClick={() => go("deals")} style={{ ...miniBtn(), marginTop: 12 }}>Back to deals</button></div>;
+  if (!deal) return <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading deal…</div>;
+  const sm = dealStatusMeta(deal.status);
+  const when = (t) => new Date(t).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+
+  const downloadDoc = async (d) => {
+    try {
+      if (d.storage_path) {
+        const { data, error } = await supabase.storage.from("deal-docs").createSignedUrl(d.storage_path, 120);
+        if (error) throw error;
+        await supabase.from("deal_activity").insert({ deal_id: deal.id, actor_id: user.id, action: "document_downloaded", detail: { doc: docTypeLabel(d.doc_type) } });
+        window.open(data.signedUrl, "_blank");
+      } else if (d.url) { window.open(d.url, "_blank"); }
+    } catch (e) { setErr("Could not open document: " + (e.message || "")); }
+  };
+
+  const decide = async (status) => {
+    setBusy(true); setErr("");
+    const upd = { status, reviewer_id: user.id, decided_at: new Date().toISOString(), admin_notes: note || null, updated_at: new Date().toISOString() };
+    if (status === "approved") { upd.accounts_status = "Pending Accounts"; }
+    if (status === "needs_correction") { upd.correction_note = note || null; }
+    if (status === "rejected") { upd.correction_note = note || null; }
+    const { error } = await supabase.from("deals").update(upd).eq("id", deal.id);
+    if (error) { setErr("Action failed: " + error.message); setBusy(false); return; }
+    await supabase.from("deal_activity").insert({ deal_id: deal.id, actor_id: user.id, action: status === "approved" ? "approved" : status === "rejected" ? "rejected" : "correction_requested", detail: { note: note || null } });
+    await supabase.from("admin_audit").insert({ action: "deal_" + (status === "needs_correction" ? "correction_requested" : status), performed_by: user.id, affected_user: deal.agent_id, new_value: { status }, detail: deal.client_name });
+    if (status === "approved" && deal.lead_id) {
+      await supabase.from("leads").update({ status: "Closed Won", is_open: false }).eq("id", deal.lead_id);
+      await supabase.from("lead_activity").insert({ lead_id: deal.lead_id, actor_id: user.id, action: "status_change", detail: { to: "Closed Won", via: "deal " + dealNoFmt(deal) } });
+    }
+    const titles = { approved: "Deal approved", rejected: "Deal rejected", needs_correction: "Deal needs correction" };
+    await supabase.from("notifications").insert({ user_id: deal.agent_id, kind: "deal", title: titles[status],
+      body: dealNoFmt(deal) + " · " + deal.client_name + (note ? " — " + note : ""), link_screen: "deals" });
+    load(); setBusy(false);
+  };
+
+  const saveOverride = async () => {
+    setBusy(true);
+    const upd = { agent_commission_pct: numv(ov.agent_commission_pct), agent_commission: numv(ov.agent_commission), final_net: numv(ov.final_net), company_share: numv(ov.final_net), updated_at: new Date().toISOString() };
+    const { error } = await supabase.from("deals").update(upd).eq("id", deal.id);
+    if (!error) {
+      await supabase.from("deal_activity").insert({ deal_id: deal.id, actor_id: user.id, action: "commission_changed", detail: { agent_pct: upd.agent_commission_pct, agent: upd.agent_commission, net: upd.final_net } });
+      await supabase.from("admin_audit").insert({ action: "deal_commission_changed", performed_by: user.id, old_value: { agent: deal.agent_commission, net: deal.final_net }, new_value: { agent: upd.agent_commission, net: upd.final_net }, detail: deal.client_name });
+    }
+    setOv(null); load(); setBusy(false);
+  };
+
+  const Money = ({ k, v, strong }) => <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13 }}>
+    <span style={{ color: T.muted }}>{k}</span><span style={{ fontWeight: strong ? 800 : 600, color: strong ? T.gold : T.ink }}>{v}</span></div>;
+  const canDecide = isAdmin && ["submitted", "pending_review", "needs_correction"].includes(deal.status);
+
+  return <div>
+    <button onClick={() => go("deals")} style={{ ...miniBtn(), marginBottom: 12 }}>← Back to deals</button>
+    <div style={{ ...card, padding: "18px 20px", background: T.hero, border: "none", boxShadow: T.shadowLg }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 21, color: "#fff" }}>{deal.client_name} <span style={{ fontSize: 13, color: T.goldBright }}>{dealNoFmt(deal)}</span></div>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,.7)", marginTop: 3 }}>{[deal.deal_type, deal.project, deal.area].filter(Boolean).join(" · ")}</div>
+        </div>
+        <Chip tone={sm[2]}>{sm[1]}</Chip>
+      </div>
+    </div>
+
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14, marginTop: 14 }}>
+      <div style={{ ...card, padding: 16 }}>
+        <SectionMini>Property details</SectionMini>
+        <Money k="Location" v={deal.area || "—"} /><Money k="Project" v={deal.project || "—"} /><Money k="Developer" v={deal.developer || "—"} />
+        <Money k="Type" v={deal.property_type || "—"} /><Money k="Unit" v={deal.unit_no || "—"} /><Money k="Value" v={aed(deal.property_value)} />
+        <Money k="Sales / Rental" v={deal.deal_type || "—"} /><Money k="Ready / Off-plan" v={deal.ready_offplan || "—"} />
+      </div>
+      <div style={{ ...card, padding: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <SectionMini>Commission</SectionMini>
+          {isAdmin && !ov && <button onClick={() => setOv({ agent_commission_pct: deal.agent_commission_pct || "", agent_commission: deal.agent_commission || "", final_net: deal.final_net || "" })} style={{ ...miniBtn(), padding: "4px 9px", fontSize: 10.5 }}>Override</button>}
+        </div>
+        <Money k="Property value" v={aed(deal.property_value)} /><Money k={"Commission % (" + (deal.commission_pct || 0) + "%)"} v={aed(deal.gross_commission)} />
+        {deal.vat_amount ? <Money k="VAT (5%)" v={aed(deal.vat_amount)} /> : null}
+        {deal.external_split ? <Money k="External split" v={"− " + aed(deal.external_split)} /> : null}
+        <Money k="Net to Amber Homes" v={aed(deal.net_commission)} />
+        {ov ? <div style={{ marginTop: 8 }}>
+          <label style={dLbl}>Agent %</label><input value={ov.agent_commission_pct} onChange={(e) => setOv({ ...ov, agent_commission_pct: e.target.value })} style={dInp} />
+          <label style={{ ...dLbl, marginTop: 8 }}>Agent commission (AED)</label><input value={ov.agent_commission} onChange={(e) => setOv({ ...ov, agent_commission: e.target.value })} style={dInp} />
+          <label style={{ ...dLbl, marginTop: 8 }}>Final net to Amber (AED)</label><input value={ov.final_net} onChange={(e) => setOv({ ...ov, final_net: e.target.value })} style={dInp} />
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}><button onClick={saveOverride} disabled={busy} style={{ background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontFamily: UI, fontSize: 12.5 }}>Save</button><button onClick={() => setOv(null)} style={{ ...miniBtn() }}>Cancel</button></div>
+        </div> : <>
+          <Money k={"Agent commission (" + (deal.agent_commission_pct == null ? "—" : deal.agent_commission_pct + "%") + ")"} v={deal.agent_commission == null ? "set by admin" : aed(deal.agent_commission)} />
+          <Money k="Final net to Amber Homes" v={aed(deal.final_net)} strong />
+        </>}
+      </div>
+    </div>
+
+    {(deal.participants && deal.participants.length > 0) ? <><SectionTitle>Participants</SectionTitle><div style={{ ...card, padding: 16 }}>
+      <div style={{ fontSize: 12.5, marginBottom: 6 }}>Closing agent: <b>{deal.client_name ? (deal.agent_name || "Submitting agent") : ""}</b></div>
+      {deal.participants.map((p, i) => <div key={i} style={{ display: "flex", gap: 10, padding: "6px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 12.5, flexWrap: "wrap" }}>
+        <span style={{ fontWeight: 600 }}>{p.name || "—"}</span><Chip tone={p.internal ? "info" : "warn"}>{p.internal ? "Internal" : "External"}</Chip><span style={{ color: T.muted }}>{p.role}</span>
+        {p.split_pct && <span style={{ color: T.muted }}>{p.split_pct}%</span>}{p.split_amount && <span style={{ color: T.muted }}>{aed(p.split_amount)}</span>}</div>)}
+    </div></> : null}
+
+    <SectionTitle>Documents</SectionTitle>
+    <div style={{ ...card, padding: 16 }}>
+      {docs.length === 0 ? <div style={{ fontSize: 12.5, color: T.muted }}>No documents uploaded.</div> :
+        docs.map((d) => <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 12.5 }}>
+          <FileText size={15} color={T.gold} /><span style={{ fontWeight: 600 }}>{docTypeLabel(d.doc_type)}</span>
+          <span style={{ color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.file_name}</span>
+          <button onClick={() => downloadDoc(d)} style={{ marginLeft: "auto", ...miniBtn(), padding: "5px 10px", fontSize: 11 }}><Download size={12} /> Open</button>
+        </div>)}
+      <div style={{ fontSize: 11, color: T.faint, marginTop: 10 }}>Required: KYC + Passport/Emirates ID + {deal.transaction_side === "Direct" ? "Booking form" : deal.deal_type === "Rental" ? "Tenancy/Booking" : "Booking/SPA"}.</div>
+    </div>
+
+    {isAdmin && <><SectionTitle>Admin review</SectionTitle><div style={{ ...card, padding: 16 }}>
+      <label style={dLbl}>Admin notes / reason</label>
+      <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} style={{ ...dInp, resize: "vertical" }} placeholder="Notes shown to the agent on correction/rejection" />
+      {canDecide ? <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+        <button onClick={() => decide("approved")} disabled={busy} style={{ background: T.ok, color: "#fff", border: "none", borderRadius: 9, padding: "10px 18px", fontWeight: 700, cursor: "pointer", fontFamily: UI, display: "flex", alignItems: "center", gap: 6 }}><Check size={15} /> Approve</button>
+        <button onClick={() => decide("needs_correction")} disabled={busy} style={{ background: T.warnSoft, color: T.warn, border: `1px solid ${T.warn}`, borderRadius: 9, padding: "10px 16px", fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Request correction</button>
+        <button onClick={() => decide("rejected")} disabled={busy} style={{ background: T.badSoft, color: T.bad, border: `1px solid ${T.bad}`, borderRadius: 9, padding: "10px 16px", fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Reject</button>
+      </div> : <div style={{ fontSize: 12, color: T.muted, marginTop: 10 }}>This deal is {sm[1].toLowerCase()}. {deal.status === "approved" ? "Accounts status: " + (deal.accounts_status || "—") + "." : ""}</div>}
+    </div></>}
+
+    <SectionTitle>Activity timeline</SectionTitle>
+    <div style={{ ...card, padding: 16 }}>
+      {acts.length === 0 ? <div style={{ color: T.muted, fontSize: 12.5 }}>No activity yet.</div> :
+        acts.map((t, i) => <div key={t.id} style={{ display: "flex", gap: 11, paddingBottom: i === acts.length - 1 ? 0 : 14 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}><div style={{ width: 9, height: 9, borderRadius: 9, background: T.gold, marginTop: 3 }} />{i !== acts.length - 1 && <div style={{ width: 2, flex: 1, background: T.hairSoft, marginTop: 3 }} />}</div>
+          <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, textTransform: "capitalize" }}>{String(t.action).replace(/_/g, " ")}{t.detail && t.detail.note ? ' — "' + t.detail.note + '"' : ""}</div>
+            <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>{t.actor?.full_name || "System"} · {when(t.created_at)}</div></div>
+        </div>)}
+    </div>
+    {err && <div style={{ ...card, padding: 12, marginTop: 12, borderColor: T.badSoft, color: T.bad, fontSize: 12.5 }}>{err}</div>}
+  </div>;
+}
+
+function CommissionSettings({ user }) {
+  const [agents, setAgents] = useState(null);
+  const [edit, setEdit] = useState({});
+  const [saved, setSaved] = useState("");
+  const load = async () => {
+    const { data } = await supabase.from("profiles").select("id, full_name, role, active, sales_commission_pct, rental_commission_pct, company_split_pct, commission_notes, commission_active").order("full_name");
+    setAgents((data || []).filter((a) => ["agent", "sales_manager", "admin"].includes(a.role)));
+  };
+  useEffect(() => { load(); }, []);
+  const save = async (a) => {
+    const e = edit[a.id] || {};
+    const upd = { sales_commission_pct: e.sales == null ? a.sales_commission_pct : numv(e.sales), rental_commission_pct: e.rental == null ? a.rental_commission_pct : numv(e.rental),
+      company_split_pct: e.company == null ? a.company_split_pct : numv(e.company), commission_notes: e.notes == null ? a.commission_notes : e.notes };
+    const { error } = await supabase.from("profiles").update(upd).eq("id", a.id);
+    if (!error) { await supabase.from("admin_audit").insert({ action: "agent_commission_set", performed_by: user.id, affected_user: a.id, new_value: upd, detail: a.full_name }); setSaved(a.id); setTimeout(() => setSaved(""), 1500); load(); }
+  };
+  if (agents === null) return <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>Loading agents…</div>;
+  return <div>
+    <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12 }}>Set each agent's share of the net company commission. Agents can't see or change these — they're used automatically when a deal is submitted.</div>
+    <div style={{ display: "grid", gap: 10 }}>
+      {agents.map((a) => { const e = edit[a.id] || {}; const setE = (k, v) => setEdit((s) => ({ ...s, [a.id]: { ...s[a.id], [k]: v } }));
+        return <div key={a.id} style={{ ...card, padding: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}><Av name={a.full_name} size={28} /><div style={{ fontWeight: 700, fontSize: 13.5 }}>{a.full_name}</div><Chip tone="info">{roleLabel(a.role)}</Chip>{saved === a.id && <span style={{ color: T.ok, fontSize: 11.5, fontWeight: 700 }}>Saved ✓</span>}</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 110px" }}><label style={dLbl}>Sales %</label><input value={e.sales != null ? e.sales : (a.sales_commission_pct ?? "")} onChange={(ev) => setE("sales", ev.target.value)} style={dInp} placeholder="e.g. 50" /></div>
+            <div style={{ flex: "1 1 110px" }}><label style={dLbl}>Rental %</label><input value={e.rental != null ? e.rental : (a.rental_commission_pct ?? "")} onChange={(ev) => setE("rental", ev.target.value)} style={dInp} placeholder="e.g. 45" /></div>
+            <div style={{ flex: "1 1 110px" }}><label style={dLbl}>Company split %</label><input value={e.company != null ? e.company : (a.company_split_pct ?? "")} onChange={(ev) => setE("company", ev.target.value)} style={dInp} /></div>
+            <div style={{ flex: "2 1 180px" }}><label style={dLbl}>Notes</label><input value={e.notes != null ? e.notes : (a.commission_notes || "")} onChange={(ev) => setE("notes", ev.target.value)} style={dInp} /></div>
+            <button onClick={() => save(a)} style={{ alignSelf: "flex-end", background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 9, padding: "9px 16px", fontWeight: 700, cursor: "pointer", fontFamily: UI, fontSize: 12.5 }}>Save</button>
+          </div>
+        </div>; })}
+    </div>
+  </div>;
+}
+
+function Deals({ user, go, openDeal }) {
+  const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
+  const [deals, setDeals] = useState(null);
+  const [tab, setTab] = useState("approvals"); // admin: approvals | commissions
+  const [statusF, setStatusF] = useState(isAdmin ? "pending" : "");
+  const [agentF, setAgentF] = useState("");
+  const [typeF, setTypeF] = useState("");
+  const load = async () => {
+    setDeals(null);
+    const { data, error } = await supabase.from("deals").select("*").neq("status", "cancelled").order("created_at", { ascending: false }).limit(1000);
+    setDeals(error ? [] : (data || []));
+  };
+  useEffect(() => { load(); }, []);
+  const all = (deals || []).filter((d) => !d.deleted);
+  const agents = [...new Set(all.map((d) => d.client_name && d.agent_id).filter(Boolean))];
+  const when = (t) => new Date(t).toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "2-digit" });
+
+  const matchStatus = (d) => {
+    if (!statusF) return true;
+    if (statusF === "pending") return ["submitted", "pending_review"].includes(d.status);
+    return d.status === statusF;
+  };
+  const filtered = all.filter(matchStatus).filter((d) => (!typeF || d.deal_type === typeF) && (!agentF || d.agent_id === agentF));
+
+  // Agent view (My Closed Deals)
+  if (!isAdmin) {
+    const mine = all; // RLS already returns only the agent's own deals
+    const group = (s) => mine.filter((d) => s === "pending" ? ["submitted", "pending_review"].includes(d.status) : d.status === s);
+    return <div>
+      <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, marginBottom: 4 }}>My Closed Deals</div>
+      <div style={{ color: T.muted, fontSize: 13, marginBottom: 16 }}>Deals you've submitted and their approval status. Estimated commission becomes final once Admin approves.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10, marginBottom: 16 }}>
+        <Kpi label="Pending" value={group("pending").length} tone="warn" />
+        <Kpi label="Approved" value={group("approved").length} tone="ok" />
+        <Kpi label="Needs correction" value={group("needs_correction").length} tone={group("needs_correction").length ? "bad" : null} />
+        <Kpi label="Rejected" value={group("rejected").length} />
+      </div>
+      {deals === null ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading…</div>
+        : mine.length === 0 ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>No deals yet. Open one of your leads and tap <b>Close deal</b> to submit one.</div>
+        : <div style={{ display: "grid", gap: 10 }}>
+          {mine.map((d) => { const sm = dealStatusMeta(d.status); return <div key={d.id} onClick={() => openDeal(d.id)} style={{ ...card, padding: 14, cursor: "pointer" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+              <div><span style={{ fontWeight: 700 }}>{d.client_name}</span> <span style={{ color: T.gold, fontSize: 11, fontWeight: 700 }}>{dealNoFmt(d)}</span>
+                <div style={{ fontSize: 11.5, color: T.muted, marginTop: 2 }}>{[d.deal_type, d.project, d.area].filter(Boolean).join(" · ")} · {when(d.created_at)}</div></div>
+              <Chip tone={sm[2]}>{sm[1]}</Chip>
+            </div>
+            <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 12, flexWrap: "wrap" }}>
+              <div><span style={{ color: T.faint }}>Value </span><b>{aed(d.property_value)}</b></div>
+              <div><span style={{ color: T.faint }}>{d.status === "approved" ? "Approved comm. " : "Est. commission "}</span><b>{d.agent_commission == null ? "—" : aed(d.agent_commission)}</b></div>
+            </div>
+            {d.status === "needs_correction" && d.correction_note && <div style={{ marginTop: 10, background: T.warnSoft, color: T.warn, borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>Correction needed: {d.correction_note}</div>}
+            {d.status === "rejected" && d.correction_note && <div style={{ marginTop: 10, background: T.badSoft, color: T.bad, borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>Reason: {d.correction_note}</div>}
+          </div>; })}
+        </div>}
+    </div>;
+  }
+
+  // Admin view
+  return <div>
+    <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+      <button onClick={() => setTab("approvals")} style={{ padding: "9px 16px", borderRadius: 9, border: `1px solid ${tab === "approvals" ? T.gold : T.hair}`, background: tab === "approvals" ? T.goldSoft : T.paper, color: tab === "approvals" ? T.gold : T.muted, fontWeight: 700, cursor: "pointer", fontFamily: UI, fontSize: 13 }}>Deal Approvals</button>
+      <button onClick={() => setTab("commissions")} style={{ padding: "9px 16px", borderRadius: 9, border: `1px solid ${tab === "commissions" ? T.gold : T.hair}`, background: tab === "commissions" ? T.goldSoft : T.paper, color: tab === "commissions" ? T.gold : T.muted, fontWeight: 700, cursor: "pointer", fontFamily: UI, fontSize: 13 }}>Agent commissions</button>
+    </div>
+    {tab === "commissions" ? <CommissionSettings user={user} /> : <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 14 }}>
+        <Kpi label="Pending approval" value={all.filter((d) => ["submitted", "pending_review"].includes(d.status)).length} tone="warn" />
+        <Kpi label="Approved" value={all.filter((d) => d.status === "approved").length} tone="ok" />
+        <Kpi label="Needs correction" value={all.filter((d) => d.status === "needs_correction").length} />
+        <Kpi label="Rejected" value={all.filter((d) => d.status === "rejected").length} />
+      </div>
+      <div style={{ ...card, padding: 12, marginBottom: 14, display: "flex", gap: 9, flexWrap: "wrap" }}>
+        <select value={statusF} onChange={(e) => setStatusF(e.target.value)} style={{ ...dInp, width: "auto" }}><option value="">All statuses</option><option value="pending">Pending approval</option>{DEAL_STATUS.filter(([v]) => !["cancelled"].includes(v)).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+        <select value={typeF} onChange={(e) => setTypeF(e.target.value)} style={{ ...dInp, width: "auto" }}><option value="">All types</option><option>Sales</option><option>Rental</option></select>
+      </div>
+      {deals === null ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading deals…</div>
+        : filtered.length === 0 ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>No deals {all.length === 0 ? "submitted yet." : "match these filters."}</div>
+        : <div style={{ display: "grid", gap: 10 }}>
+          {filtered.map((d) => { const sm = dealStatusMeta(d.status); return <div key={d.id} onClick={() => openDeal(d.id)} style={{ ...card, padding: 14, cursor: "pointer" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+              <div><span style={{ fontWeight: 700 }}>{d.client_name}</span> <span style={{ color: T.gold, fontSize: 11, fontWeight: 700 }}>{dealNoFmt(d)}</span>
+                <div style={{ fontSize: 11.5, color: T.muted, marginTop: 2 }}>{[d.deal_type, d.project, d.area, d.property_type].filter(Boolean).join(" · ")}</div></div>
+              <Chip tone={sm[2]}>{sm[1]}</Chip>
+            </div>
+            <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 12, flexWrap: "wrap" }}>
+              <div><span style={{ color: T.faint }}>Value </span><b>{aed(d.property_value)}</b></div>
+              <div><span style={{ color: T.faint }}>Gross </span><b>{aed(d.gross_commission)}</b></div>
+              <div><span style={{ color: T.faint }}>Net to Amber </span><b>{aed(d.final_net || d.net_commission)}</b></div>
+              <div><span style={{ color: T.faint }}>Submitted </span>{d.submitted_at ? when(d.submitted_at) : "—"}</div>
+            </div>
+            {["submitted", "pending_review"].includes(d.status) && <div style={{ marginTop: 8, fontSize: 11.5, color: T.gold, fontWeight: 700 }}>Tap to review & approve →</div>}
+          </div>; })}
+        </div>}
+    </>}
+  </div>;
+}
+
 /* ========================= AI CHAT (ALL USERS) =========================== */
 function AskAmber({ narrow, user }) {
   const [open, setOpen] = useState(false);
@@ -2255,7 +3029,7 @@ function AskAmber({ narrow, user }) {
           ? picked.used.filter((u) => !/do not say|compliance/i.test(u.title)).slice(0, 3).map((u) => u.title)
           : [];
         setMsgs((m) => [...m, { role: "assistant", text: reply || "Please try again.", sources }]);
-        logAi({ user, mentor, question: text, responseSum: reply, model: data.model, status: "success" });
+        logAi({ user, mentor, question: text, responseSum: reply, fullResponse: reply, category: categorize(text), model: data.model, status: "success", tokensIn: data.usage && data.usage.input_tokens, tokensOut: data.usage && data.usage.output_tokens });
       }
     } catch (e) {
       setMsgs((m) => [...m, { role: "assistant", text: "Ask Amber is temporarily unavailable. Please try again." }]);

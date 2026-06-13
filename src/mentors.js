@@ -65,13 +65,31 @@ export async function buildCrmContext(user, lead) {
 }
 
 // Log every Ask Amber turn; flag + (on repeat) notify Master Admin.
-export async function logAi({ user, mentor, question, responseSum, model, status, flagCategory }) {
+// Lightweight category tag for work questions (for Master Admin's Ask Amber Logs).
+export function categorize(text) {
+  const t = String(text || "").toLowerCase();
+  if (/whatsapp|message|draft|reply|template|script|write/.test(t)) return "drafting";
+  if (/plan my day|follow ?up|call back|remind|chase|overdue|due today/.test(t)) return "follow_up";
+  if (/project|palm|jebel|brochure|payment plan|floor ?plan|handover|launch|sold out/.test(t)) return "project";
+  if (/close|deal|negotiat|offer|objection|convert|qualif|closing/.test(t)) return "sales";
+  if (/dubai|developer|emaar|nakheel|meraas|dubai holding|area|community|golden visa|market|roi|mortgage/.test(t)) return "dubai_re";
+  if (/lead|client|pipeline|\bcrm\b|status|assign|hot lead|cold lead|temperature/.test(t)) return "crm";
+  return "other";
+}
+
+export async function logAi({ user, mentor, question, responseSum, fullResponse, model, status, flagCategory, category, deniedReason, tokensIn, tokensOut }) {
   try {
     if (!user) return;
-    await supabase.from("ai_logs").insert({ user_id: user.id, user_name: user.name, user_role: user.role,
-      mentor_id: mentor.id, mentor_name: mentor.name, question: String(question || "").slice(0, 1000),
-      response_sum: String(responseSum || "").slice(0, 500), model: model || null, status: status || "success",
-      flagged: !!flagCategory, flag_category: flagCategory || null });
+    const inappropriate = !!flagCategory && ["sexual", "personal", "gossip", "abusive"].includes(flagCategory);
+    const nonwork = flagCategory === "non_work";
+    const cat = flagCategory ? (flagCategory === "non_work" ? "non_work" : (["sexual", "personal"].includes(flagCategory) ? flagCategory : "inappropriate")) : (category || null);
+    let device = null; try { device = (typeof navigator !== "undefined" && navigator.userAgent) ? navigator.userAgent.slice(0, 240) : null; } catch (e) {}
+    await supabase.from("ai_logs").insert({ user_id: user.id, user_name: user.name, user_email: user.email || null, user_role: user.role,
+      mentor_id: mentor.id, mentor_name: mentor.name, question: String(question || "").slice(0, 2000),
+      response_sum: String(responseSum || "").slice(0, 500), full_response: fullResponse ? String(fullResponse).slice(0, 8000) : null,
+      model: model || null, status: status || "success", flagged: !!flagCategory, flag_category: flagCategory || null,
+      category: cat, inappropriate, non_work: nonwork, refusal_reason: status === "refused" ? (flagCategory || "non-work") : null,
+      denied_reason: deniedReason || null, device, tokens_in: tokensIn || null, tokens_out: tokensOut || null });
     if (flagCategory) {
       const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
       const { count } = await supabase.from("ai_logs").select("id", { count: "exact", head: true })
@@ -79,7 +97,7 @@ export async function logAi({ user, mentor, question, responseSum, model, status
       if ((count || 0) >= 3) {
         await supabase.from("notifications").insert({ user_id: null, kind: "security",
           title: "Ask Amber: repeated non-work questions",
-          body: `Ask Amber flagged repeated non-work-related questions from ${user.name}.`, link_screen: "admin" });
+          body: `Ask Amber flagged repeated non-work-related questions from ${user.name}.`, link_screen: "ailogs" });
       }
     }
   } catch (e) {}

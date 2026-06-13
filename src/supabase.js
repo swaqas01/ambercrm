@@ -19,9 +19,9 @@ export function roleInfo(dbRole) { return ROLES[dbRole] || { label: "Agent", hom
 // Which sidebar screens each role may open. 'users' is Master-Admin only.
 const SCREEN_ACCESS = {
   master_admin: "ALL",
-  admin:        ["projects","admin","live","open","lead","assign","pipeline","performance","security","matching","score","careers","commission","settings"],
-  sales_manager:["projects","admin","live","open","lead","assign","pipeline","performance","matching","score","settings"],
-  agent:        ["projects","agent","live","lead"],
+  admin:        ["projects","admin","live","open","lead","assign","pipeline","performance","security","matching","score","careers","commission","settings","deals","dealdetail"],
+  sales_manager:["projects","admin","live","open","lead","assign","pipeline","performance","matching","score","settings","deals","dealdetail"],
+  agent:        ["projects","agent","live","lead","deals","dealdetail"],
   marketing:    ["projects","admin","live","open","lead","settings"],
   accounts:     ["projects","admin","commission","lead","settings"],
 };
