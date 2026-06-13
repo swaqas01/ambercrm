@@ -20,9 +20,7 @@ class ErrorBoundary extends React.Component {
             "The app hit an unexpected error and couldn't display this screen. Your data is safe. Reloading usually fixes it."),
           React.createElement("button", { onClick: () => window.location.reload(), style: {
             background: "#7C5CFA", color: "#fff", border: "none", borderRadius: 11, padding: "11px 20px",
-            fontSize: 14, fontWeight: 700, cursor: "pointer" } }, "Reload"),
-          React.createElement("div", { style: { fontSize: 11, color: "#94A3B8", marginTop: 14, wordBreak: "break-word" } },
-            String(this.state.err && this.state.err.message || this.state.err))
+            fontSize: 14, fontWeight: 700, cursor: "pointer" } }, "Reload")
         )
       );
     }

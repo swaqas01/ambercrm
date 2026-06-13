@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Component } from "react";
 import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall } from "./supabase.js";
 import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, categorize, logAi, fetchKnowledge, pickKnowledge } from "./mentors.js";
 import {
@@ -227,6 +227,27 @@ function screenLabel(screen, user) {
 }
 
 /* ================================= SHELL ================================= */
+// Per-screen error boundary: if one screen throws, show a contained message and
+// keep the sidebar/header alive. Reset by keying on the active screen.
+class ScreenBoundary extends Component {
+  constructor(p) { super(p); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { try { console.error("Screen crash:", err, info); } catch (e) {} }
+  render() {
+    if (this.state.err) {
+      return (
+        <div style={{ background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 16, padding: 36, textAlign: "center", maxWidth: 460, margin: "40px auto", boxShadow: T.shadow }}>
+          <AlertTriangle size={26} color={T.warn} style={{ marginBottom: 10 }} />
+          <div style={{ fontWeight: 800, fontSize: 16, color: T.ink }}>Unable to load this section</div>
+          <div style={{ fontSize: 13, color: T.muted, marginTop: 6, lineHeight: 1.5 }}>Please refresh, or contact your admin if it keeps happening. Your data is safe.</div>
+          <button onClick={() => window.location.reload()} style={{ marginTop: 16, background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Refresh</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   const [screen, setScreen] = useState("admin");
   const [navOpen, setNavOpen] = useState(false);
@@ -327,7 +348,7 @@ export default function App() {
           <div style={{ padding: "14px 20px", borderTop: "1px solid var(--sideBorder, rgba(255,255,255,.08))", fontSize: 11,
             color: "var(--sideText, rgba(255,255,255,.5))", lineHeight: 1.5, opacity: .9 }}>
             <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span>Signed in: <span style={{ color: T.gold, fontWeight: 600 }}>{user.name.split(" ")[0]} · {user.roleLabel}</span></span>
+              <span>Signed in: <span style={{ color: T.gold, fontWeight: 600 }}>{firstName(user.name)} · {user.roleLabel}</span></span>
               <button onClick={signOut} title="Sign out" style={{ background: "none", border: "none",
                 color: "var(--sideText, rgba(255,255,255,.45))", cursor: "pointer", padding: 2 }}><LogOut size={13} /></button>
             </span>
@@ -373,7 +394,9 @@ export default function App() {
           </div>
         </header>
         <div style={{ padding: narrow ? "16px 14px 70px" : "24px 26px 80px", maxWidth: 1200 }}>
-          {SCREENS[screen]}
+          <ScreenBoundary key={screen}>
+            {SCREENS[screen] || <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>This section isn't available. <button onClick={() => go(roleInfo(user.role).home === "agent" ? "agent" : "admin")} style={{ ...miniBtn(), marginLeft: 8 }}>Go to dashboard</button></div>}
+          </ScreenBoundary>
         </div>
         <AskAmber narrow={narrow} user={user} />
       </main>}
@@ -411,7 +434,7 @@ function TempTag({ t }) {
   return <Chip tone={tone}>{t}</Chip>;
 }
 function Av({ name, size = 36, dark }) {
-  const ini = name.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  const ini = String(name || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase() || "?";
   return <div style={{ width: size, height: size, borderRadius: size * 0.3, background: dark ? T.hero : T.goldSoft,
     color: dark ? T.goldBright : T.gold, display: "grid", placeItems: "center", fontFamily: DISPLAY,
     fontSize: size * 0.36, flexShrink: 0, border: `1px solid ${dark ? "transparent" : T.goldEdge}` }}>{ini}</div>;
@@ -1717,44 +1740,11 @@ function SecurityLog({ go }) {
         </>;
       })()}
     </div>}
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
-      <Kpi label="Open alerts" value="3" sub="1 high severity" trend="down" />
-      <Kpi label="Honeypot triggers" value="1" sub="this month" />
-      <Kpi label="Blocked exports" value="4" sub="all logged" />
-      <Kpi label="New devices (7d)" value="6" sub="2 unverified" />
-    </div>
-
-    <SectionTitle right={<GoldBtn ghost><Download size={13} /> Audit report</GoldBtn>}>Alert stream</SectionTitle>
-    <div style={{ display: "grid", gap: 10 }}>
-      {SUS.map((s, i) => (
-        <div key={i} style={{ ...card, padding: "15px 17px", borderLeft: `3px solid ${s.sev === "high" ? T.bad : s.sev === "med" ? T.warn : T.hair}` }}>
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", gap: 12 }}>
-              <div style={{ width: 34, height: 34, borderRadius: 10, background: s.sev === "high" ? T.badSoft : s.sev === "med" ? T.warnSoft : T.hairSoft,
-                display: "grid", placeItems: "center", flexShrink: 0 }}>
-                {s.sev === "high" ? <ShieldAlert size={16} color={T.bad} /> : s.sev === "med" ? <AlertTriangle size={15} color={T.warn} /> : <Eye size={15} color={T.muted} />}
-              </div>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{s.what}</div>
-                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{s.who} · {s.when}</div>
-                <div style={{ fontSize: 11.5, color: T.faint, marginTop: 4, display: "flex", alignItems: "center", gap: 5 }}>
-                  <Globe size={11} /> {s.meta}</div>
-              </div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <Chip tone={s.sev === "high" ? "bad" : s.sev === "med" ? "warn" : "muted"}>
-                {s.sev === "high" ? "High" : s.sev === "med" ? "Medium" : "Low"}</Chip>
-              <div style={{ fontSize: 11.5, color: T.ok, marginTop: 6, display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                <CheckCircle2 size={12} /> {s.action}</div>
-            </div>
-          </div>
-          {s.sev === "high" && <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <GoldBtn><Ban size={13} /> Keep suspended</GoldBtn>
-            <GoldBtn ghost>Restore access</GoldBtn>
-            <GoldBtn ghost><Eye size={13} /> Full audit trail</GoldBtn>
-          </div>}
-        </div>
-      ))}
+    <SectionTitle>Behavioural alerts</SectionTitle>
+    <div style={{ ...card, padding: 28, textAlign: "center", color: T.muted }}>
+      <ShieldAlert size={22} color={T.faint} style={{ marginBottom: 8 }} />
+      <div style={{ fontWeight: 700, color: T.ink, fontSize: 14 }}>No behavioural alerts flagged</div>
+      <div style={{ fontSize: 12.5, marginTop: 4, lineHeight: 1.5, maxWidth: 460, marginInline: "auto" }}>Login, device and velocity alerts will appear here as they are detected. The authentication events and Ask Amber misuse shown above are drawn from your live logs.</div>
     </div>
   </div>;
 }
@@ -3049,7 +3039,7 @@ function DealDetail({ dealId, user, go }) {
     if (status === "needs_correction") { upd.correction_note = note || null; }
     if (status === "rejected") { upd.correction_note = note || null; }
     const { error } = await supabase.from("deals").update(upd).eq("id", deal.id);
-    if (error) { setErr("Action failed: " + error.message); setBusy(false); return; }
+    if (error) { try { console.error("Deal action failed:", error); } catch (e) {} setErr("Couldn't complete that action. Please try again or contact admin."); setBusy(false); return; }
     await supabase.from("deal_activity").insert({ deal_id: deal.id, actor_id: user.id, action: status === "approved" ? "approved" : status === "rejected" ? "rejected" : "correction_requested", detail: { note: note || null } });
     await supabase.from("admin_audit").insert({ action: "deal_" + (status === "needs_correction" ? "correction_requested" : status), performed_by: user.id, affected_user: deal.agent_id, new_value: { status }, detail: deal.client_name });
     if (status === "approved" && deal.lead_id) {
@@ -3653,7 +3643,7 @@ function LiveLeads({ user, filter, go, openLead }) {
     const { data, error } = await supabase.from("leads")
       .select("id, lead_code, lead_no, client_name, phone, whatsapp, email, project, area, budget, assigned_agent_name, assigned_agent, original_agent, current_owner, created_by, status, temperature, source, is_open, opened_reason, next_followup, last_contacted, created_on, created_at, assigned_at")
       .order("created_at", { ascending: false }).limit(2000);
-    if (error) { setErr(isAgent ? "Unable to load your leads. Please try again or contact admin." : ("Couldn't load leads: " + error.message)); setLeads([]); return; }
+    if (error) { try { console.error("Leads load failed:", error); } catch (e) {} setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); return; }
     let rows = data || [];
     // Agents: show only leads actually assigned to or created by them (RLS also returns the open pool — exclude that here).
     if (isAgent && au) rows = rows.filter((l) => l.assigned_agent === au.id || l.current_owner === au.id || l.created_by === au.id);
@@ -3998,7 +3988,7 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
       purpose: f.purpose.trim() || null, nationality: f.nationality.trim() || null, followup_note: f.followup_note.trim() || null,
       assigned_agent_name: f.assigned_agent_name.trim() || null, source: "Manual", status: "New", temperature: "Cold",
     }).select("id").single();
-    if (error) { setBusy(false); setErr(error.message); return; }
+    if (error) { try { console.error("Add lead failed:", error); } catch (e) {} setBusy(false); setErr("Couldn't save this lead. Please check the details and try again."); return; }
     // audit
     if (me && ins) supabase.from("lead_activity").insert({ lead_id: ins.id, actor_id: me.id,
       action: aiUsed ? "lead_created_ai" : "lead_created", detail: { lead_code: code } }).then(() => {});
@@ -4146,7 +4136,7 @@ function ImportModal({ onClose, onDone, me }) {
         project: x.project || null, area: x.area || null, assigned_agent_name: x.assigned_agent_name || null,
         source: "Import", status: "New", temperature: "Cold" }));
       const { error } = await supabase.from("leads").insert(batch);
-      if (error) { setErr(error.message); setBusy(false); return; }
+      if (error) { try { console.error("Import failed:", error); } catch (e) {} setErr("Some rows couldn't be imported. Please check the file and try again."); setBusy(false); return; }
       n += batch.length; setDone(n);
     }
     setBusy(false); onDone();
