@@ -31,3 +31,8 @@ class ErrorBoundary extends React.Component {
 ReactDOM.createRoot(document.getElementById("root")).render(
   React.createElement(ErrorBoundary, null, React.createElement(App))
 );
+
+// Register the PWA service worker (public static shell only — no private data cached).
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });
+}

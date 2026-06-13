@@ -53,6 +53,10 @@ const THEME_CSS = `
   [data-amber] ::selection { background: var(--goldSoft); }
   [data-amber] [style*="Plus Jakarta"] { font-weight: 800; letter-spacing: -0.015em; }
   @media (prefers-reduced-motion: reduce) { [data-amber] button { transition: none; } [data-amber] button:hover { transform: none; } }
+  /* iOS Safari auto-zooms when a focused input is < 16px — force 16px on mobile to stop the zoom */
+  @media (max-width: 768px) { [data-amber] input, [data-amber] textarea, [data-amber] select { font-size: 16px !important; } }
+  html, body { max-width: 100%; overflow-x: hidden; }
+  [data-amber] { max-width: 100%; }
   /* ===== full theme templates (base + accent) ===== */
   [data-accent="emerald"] {
     --gold:#1F6B52; --goldBright:#3D9474; --goldSoft:#E0EEE8; --goldEdge:#B9D8CB; --goldTint:#F2F9F6; --wm:rgba(31,107,82,.07);
@@ -396,7 +400,8 @@ class ScreenBoundary extends Component {
 export default function App() {
   const [screen, setScreen] = useState("admin");
   const [navOpen, setNavOpen] = useState(false);
-  const [dark, setDark] = useState(false);
+  const [dark, setDark] = useState(() => { try { return localStorage.getItem("amber_theme") === "dark"; } catch (e) { return false; } });
+  useEffect(() => { try { localStorage.setItem("amber_theme", dark ? "dark" : "light"); } catch (e) {} }, [dark]);
   const [user, setUser] = useState(null); // {name, role, email, roleLabel}
   const [authChecked, setAuthChecked] = useState(false);
   const [recovery, setRecovery] = useState(typeof window !== "undefined" && /type=recovery/.test(window.location.hash || ""));
@@ -473,8 +478,8 @@ export default function App() {
       {!recovery && !authChecked && (
         <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: T.bone, zIndex: 100 }}>
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontFamily: DISPLAY, fontSize: 22, letterSpacing: ".22em", color: T.ink, fontWeight: 500 }}>AMBER</div>
-            <div style={{ fontFamily: DISPLAY, fontSize: 10.5, letterSpacing: ".42em", color: T.gold, marginTop: 3, fontWeight: 400 }}>HOMES</div>
+            <div style={{ fontFamily: DISPLAY, fontSize: 22, letterSpacing: ".005em", color: T.ink, fontWeight: 800, lineHeight: 1.1 }}>Amber Homes</div>
+            <div style={{ fontFamily: DISPLAY, fontSize: 10, letterSpacing: ".34em", color: T.gold, marginTop: 4, fontWeight: 700 }}>REAL ESTATE CRM</div>
             <div style={{ marginTop: 16, fontSize: 12.5, color: T.muted }}>Restoring your session…</div>
           </div>
         </div>
@@ -488,8 +493,8 @@ export default function App() {
           borderRight: "1px solid var(--sideBorder, transparent)",
           zIndex: 50, boxShadow: narrow ? "0 0 60px rgba(0,0,0,.4)" : "none" }}>
           <div style={{ padding: "22px 20px 18px", borderBottom: "1px solid var(--sideBorder, rgba(140,87,255,.18))" }}>
-            <div style={{ fontFamily: DISPLAY, fontSize: 19, letterSpacing: ".22em", color: "var(--sideBrand, #fff)", fontWeight: 500 }}>AMBER</div>
-            <div style={{ fontFamily: DISPLAY, fontSize: 10.5, letterSpacing: ".42em", color: T.gold, marginTop: 3, fontWeight: 400 }}>HOMES</div>
+            <div style={{ fontFamily: DISPLAY, fontSize: 18, letterSpacing: ".005em", color: "var(--sideBrand, #fff)", fontWeight: 800, lineHeight: 1.1 }}>Amber Homes</div>
+            <div style={{ fontFamily: DISPLAY, fontSize: 9.5, letterSpacing: ".34em", color: T.gold, marginTop: 4, fontWeight: 700 }}>REAL ESTATE CRM</div>
           </div>
           <nav style={{ flex: 1, overflowY: "auto", padding: "12px 12px" }}>
             {NAV.filter(([k]) => user && canOpen(user.role, k)).map(([k, label0, Ic]) => {
@@ -537,14 +542,6 @@ export default function App() {
               borderRadius: 9, padding: "8px 12px", background: T.bone }}>
               <Search size={14} color={T.muted} />
               <span style={{ fontSize: 12.5, color: T.faint }}>Search leads, projects…</span></div>}
-            <div style={{ display: "flex", alignItems: "center", gap: 6, border: `1px solid ${T.hair}`,
-              background: T.paper, borderRadius: 9, padding: "0 10px", height: 36 }}>
-              {ACCENTS.map(([k, label, hex]) => (
-                <button key={k} onClick={() => setAccent(k)} title={label} style={{ width: 16, height: 16, borderRadius: 16,
-                  background: hex, border: accent === k ? `2px solid ${T.ink}` : "2px solid transparent",
-                  outlineOffset: 1, cursor: "pointer", padding: 0 }} />
-              ))}
-            </div>
             <button onClick={() => setDark(!dark)} title={dark ? "Switch to light" : "Switch to dark"}
               style={{ border: `1px solid ${T.hair}`, background: T.paper, borderRadius: 9,
               width: 36, height: 36, display: "grid", placeItems: "center", cursor: "pointer" }}>
@@ -5091,15 +5088,6 @@ function ProfileMenu({ user, dark, setDark, accent, setAccent, ACCENTS, signOut 
             {[["Profile", "profile"], ["Settings", "settings"], ["Change password", "password"]].map(([lbl, m]) => (
               <button key={m} onClick={() => { setModal(m); setOpen(false); }} style={menuItem()}>{lbl}</button>
             ))}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px" }}>
-              <span style={{ fontSize: 13, color: T.ink }}>Theme</span>
-              <div style={{ display: "flex", gap: 5 }}>
-                {ACCENTS.map(([k, label, hex]) => (
-                  <button key={k} onClick={() => setAccent(k)} title={label} style={{ width: 15, height: 15, borderRadius: 15,
-                    background: hex, border: accent === k ? `2px solid ${T.ink}` : "2px solid transparent", cursor: "pointer", padding: 0 }} />
-                ))}
-              </div>
-            </div>
             <button onClick={() => setDark(!dark)} style={menuItem()}>{dark ? "Light mode" : "Dark mode"}</button>
             <div style={{ height: 1, background: T.hairSoft, margin: "5px 8px" }} />
             <button onClick={signOut} style={{ ...menuItem(), color: T.bad, fontWeight: 600 }}>Log out</button>
@@ -5132,14 +5120,10 @@ function ProfileMenu({ user, dark, setDark, accent, setAccent, ACCENTS, signOut 
       <Row k="Status" v={details?.active === false ? "Inactive" : "Active"} />
       <Row k="Joined" v={details?.created_at ? new Date(details.created_at).toLocaleDateString() : "—"} />
       <Row k="Last login" v={details?.last_login ? new Date(details.last_login).toLocaleString() : "—"} />
-      <div style={{ marginTop: 14, fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Preferred theme</div>
-      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-        {ACCENTS.map(([k, label, hex]) => (
-          <button key={k} onClick={() => setAccent(k)} style={{ display: "flex", alignItems: "center", gap: 6,
-            border: `1px solid ${accent === k ? T.gold : T.hair}`, background: accent === k ? T.goldSoft : T.paper,
-            borderRadius: 9, padding: "6px 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>
-            <span style={{ width: 12, height: 12, borderRadius: 12, background: hex }} /> {label}</button>))}
-        <button onClick={() => setDark(!dark)} style={{ ...miniBtn() }}>{dark ? "Light mode" : "Dark mode"}</button>
+      <div style={{ marginTop: 14, fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Theme</div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <button onClick={() => setDark(false)} style={{ display: "flex", alignItems: "center", gap: 6, border: `1px solid ${!dark ? T.gold : T.hair}`, background: !dark ? T.goldSoft : T.paper, color: !dark ? T.gold : T.ink, borderRadius: 9, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: UI }}><Sun size={13} /> Day</button>
+        <button onClick={() => setDark(true)} style={{ display: "flex", alignItems: "center", gap: 6, border: `1px solid ${dark ? T.gold : T.hair}`, background: dark ? T.goldSoft : T.paper, color: dark ? T.gold : T.ink, borderRadius: 9, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: UI }}><Moon size={13} /> Night</button>
       </div>
       <button onClick={() => setModal("password")} style={{ ...miniBtn(), width: "100%", justifyContent: "center", marginTop: 14 }}>
         <Lock size={13} /> Change password</button>
@@ -5148,15 +5132,19 @@ function ProfileMenu({ user, dark, setDark, accent, setAccent, ACCENTS, signOut 
     </Modal>}
     {modal === "settings" && <Modal title="Settings" onClose={() => setModal(null)}>
       <SettingsBlock title="Appearance">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0" }}>
-          <span style={{ fontSize: 13 }}>Dark mode</span>
-          <button onClick={() => setDark(!dark)} style={{ ...miniBtn() }}>{dark ? "On" : "Off"}</button></div>
-        <div style={{ fontSize: 12.5, marginTop: 8, marginBottom: 8, color: T.muted }}>Accent theme</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{ACCENTS.map(([k, label, hex]) => (
-          <button key={k} onClick={() => setAccent(k)} style={{ display: "flex", alignItems: "center", gap: 6,
-            border: `1px solid ${accent === k ? T.gold : T.hair}`, background: accent === k ? T.goldSoft : T.paper,
-            borderRadius: 9, padding: "6px 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>
-            <span style={{ width: 12, height: 12, borderRadius: 12, background: hex }} /> {label}</button>))}</div>
+        <div style={{ fontSize: 12.5, marginBottom: 8, color: T.muted }}>Choose your theme</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setDark(false)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: `1px solid ${!dark ? T.gold : T.hair}`, background: !dark ? T.goldSoft : T.paper, color: !dark ? T.gold : T.ink, borderRadius: 10, padding: "10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}><Sun size={14} /> Day</button>
+          <button onClick={() => setDark(true)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: `1px solid ${dark ? T.gold : T.hair}`, background: dark ? T.goldSoft : T.paper, color: dark ? T.gold : T.ink, borderRadius: 10, padding: "10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}><Moon size={14} /> Night</button>
+        </div>
+      </SettingsBlock>
+      <SettingsBlock title="Install on your phone">
+        <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 10, lineHeight: 1.5 }}>Add Amber Homes CRM to your home screen to use it like an app.</div>
+        <button onClick={() => { try { if (window.__amberInstall) { window.__amberInstall.prompt(); } else { alert("On iPhone (Safari): tap Share, then 'Add to Home Screen'.\nOn Android (Chrome): open the menu, then 'Install app'."); } } catch (e) {} }} style={{ ...miniBtn(), width: "100%", justifyContent: "center", marginBottom: 12 }}><Download size={13} /> Install app</button>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: T.ink, marginBottom: 4 }}>iPhone (Safari)</div>
+        <div style={{ fontSize: 11.5, color: T.muted, lineHeight: 1.6, marginBottom: 10 }}>1. Open the CRM in Safari. 2. Tap the Share icon. 3. Tap "Add to Home Screen". 4. Tap Add. 5. Open Amber Homes CRM from your home screen.</div>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: T.ink, marginBottom: 4 }}>Android (Chrome)</div>
+        <div style={{ fontSize: 11.5, color: T.muted, lineHeight: 1.6 }}>1. Open the CRM in Chrome. 2. Tap the menu. 3. Tap "Install app" or "Add to Home screen". 4. Confirm. 5. Open Amber Homes CRM from your home screen.</div>
       </SettingsBlock>
       <SettingsBlock title="Security">
         <button onClick={() => setModal("password")} style={{ ...miniBtn(), width: "100%", justifyContent: "center" }}>
