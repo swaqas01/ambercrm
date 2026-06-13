@@ -198,7 +198,6 @@ const NAV = [
   ["admin", "Admin Dashboard", LayoutDashboard],
   ["users", "Users & Agents", Users],
   ["agent", "Agent Dashboard", UserCircle],
-  ["lead", "Lead Detail", FileText],
   ["assign", "Lead Assignment", UserPlus],
   ["pipeline", "Pipeline Board", Kanban],
   ["open", "Open Leads", Unlock],
@@ -260,7 +259,9 @@ export default function App() {
     document.head.appendChild(l); return () => { try { document.head.removeChild(l); } catch (e) {} };
   }, []);
   const [filter, setFilter] = useState(null);
+  const [detailId, setDetailId] = useState(null);
   const go = (s, f = null) => { setScreen(s); setFilter(f); setNavOpen(false); };
+  const openLead = (id) => { setDetailId(id); setScreen("lead"); setFilter(null); setNavOpen(false); };
   // role guard — agents may only open their own surfaces
   useEffect(() => {
     if (user && !canOpen(user.role, screen)) {
@@ -268,7 +269,7 @@ export default function App() {
     }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} />, lead: <LeadDetail />, open: <OpenLeads />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} />, lead: <LeadDetail leadId={detailId} user={user} go={go} />, open: <OpenLeads />,
     assign: <Assignment />, pipeline: <Pipeline go={go} />, performance: <Performance />,
     security: <SecurityLog />, matching: <Matching go={go} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -616,7 +617,7 @@ function AdminDash({ go }) {
 }
 
 /* ============================ 2 AGENT DASHBOARD ========================== */
-function AgentDash({ go, user }) {
+function AgentDash({ go, user, openLead }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState("");
   const [modal, setModal] = useState(null); // 'target' | 'focus'
@@ -699,7 +700,7 @@ function AgentDash({ go, user }) {
           All my leads <ChevronRight size={13} /></button>}>Today's focus</SectionTitle>
         <div style={{ display: "grid", gap: 10 }}>
           {(dueToday.length ? dueToday : mine).slice(0, 5).map((l) => (
-            <div key={l.id} style={{ ...card, padding: "13px 15px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ ...card, padding: "13px 15px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", cursor: "pointer" }}>
               <Av name={l.client_name} />
               <div style={{ flex: 1, minWidth: 150 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -710,9 +711,11 @@ function AgentDash({ go, user }) {
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 {l.phone && <a href={`https://wa.me/${String(l.phone).replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
+                  onClick={(e) => { e.stopPropagation(); logAction("whatsapp", l, user && user.id); }}
                   style={{ width: 34, height: 34, borderRadius: 9, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
                   <MessageCircle size={15} color={T.ok} /></a>}
                 {l.phone && <a href={`tel:${String(l.phone).replace(/\D/g, "")}`}
+                  onClick={(e) => { e.stopPropagation(); logAction("call", l, user && user.id); }}
                   style={{ width: 34, height: 34, borderRadius: 9, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
                   <Phone size={14} color={T.inkSoft} /></a>}
               </div>
@@ -755,112 +758,211 @@ function FocusList({ title, items, go, onClose }) {
 }
 
 /* ============================= 3 LEAD DETAIL ============================= */
-function LeadDetail() {
+function LeadDetail({ leadId, user, go }) {
+  const [lead, setLead] = useState(null);
+  const [comments, setComments] = useState([]);
+  const [timeline, setTimeline] = useState([]);
+  const [err, setErr] = useState("");
   const [revealed, setRevealed] = useState(false);
-  const L = LEADS[0];
-  const wmRows = Array.from({ length: 14 });
-  return <div style={{ position: "relative" }}>
-    {/* signature: live security watermark */}
-    <div aria-hidden style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none", zIndex: 5 }}>
-      {wmRows.map((_, i) => (
-        <div key={i} style={{ position: "absolute", top: i * 120 - 40, left: -100, right: -100,
-          transform: "rotate(-18deg)", whiteSpace: "nowrap", fontSize: 13, letterSpacing: ".22em",
-          color: T.wm, fontWeight: 700, userSelect: "none" }}>
-          {"DERYA ALTUN · derya@amberhomes.ae · 11 JUN 2026 09:42 ··· ".repeat(6)}
+  const [newComment, setNewComment] = useState("");
+  const [sched, setSched] = useState(false);
+  const [schedDate, setSchedDate] = useState("");
+  const me = user;
+  const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
+
+  const loadAll = async () => {
+    if (!leadId) { setErr("none"); return; }
+    setErr("");
+    const { data: l, error } = await supabase.from("leads").select("*").eq("id", leadId).single();
+    if (error || !l) { setErr("load"); return; }
+    setLead(l);
+    if (isAdmin) setRevealed(true);
+    const [{ data: cs }, { data: ts }] = await Promise.all([
+      supabase.from("lead_comments").select("*, author:profiles!lead_comments_author_id_fkey(full_name, role)").eq("lead_id", leadId).eq("deleted", false).order("created_at", { ascending: false }),
+      supabase.from("lead_activity").select("*, actor:profiles!lead_activity_actor_id_fkey(full_name, role)").eq("lead_id", leadId).order("created_at", { ascending: false }).limit(60),
+    ]);
+    setComments(cs || []); setTimeline(ts || []);
+  };
+  useEffect(() => { loadAll(); }, [leadId]);
+
+  if (err === "none") return <div style={{ ...card, padding: 40, textAlign: "center" }}>
+    <FileText size={26} color={T.faint} style={{ marginBottom: 10 }} />
+    <div style={{ fontWeight: 700 }}>No lead selected</div>
+    <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>Open a lead from {user && user.role === "agent" ? "My Leads" : "Leads"} to see its full detail.</div>
+    <button onClick={() => go("live")} style={{ marginTop: 14, ...miniBtn() }}>Go to leads</button></div>;
+  if (err === "load") return <div style={{ ...card, padding: 30, textAlign: "center", borderColor: T.badSoft }}>
+    <div style={{ fontWeight: 700, color: T.bad }}>Unable to load this lead.</div>
+    <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>Please try again or contact admin.</div>
+    <button onClick={() => go("live")} style={{ marginTop: 14, ...miniBtn() }}>Back to leads</button></div>;
+  if (!lead) return <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading lead…</div>;
+
+  const leadIdFmt = lead.lead_no ? "L" + String(lead.lead_no).padStart(3, "0") : (lead.lead_code || "—");
+  const digits = (p) => String(p || "").replace(/\D/g, "");
+  const reveal = () => { setRevealed(true); logAction("view_number", lead, me && me.id); };
+
+  const addComment = async () => {
+    if (!newComment.trim() || !me) return;
+    const body = newComment.trim();
+    const { data, error } = await supabase.from("lead_comments").insert({ lead_id: lead.id, author_id: me.id, body })
+      .select("*, author:profiles!lead_comments_author_id_fkey(full_name, role)").single();
+    if (error) return;
+    setComments((c) => [data, ...c]); setNewComment("");
+    logAction("comment", lead, me.id, { note: body.slice(0, 80) });
+    loadTimeline();
+  };
+  const delComment = async (c) => {
+    await supabase.from("lead_comments").update({ deleted: true }).eq("id", c.id);
+    setComments((cs) => cs.filter((x) => x.id !== c.id));
+  };
+  const loadTimeline = async () => {
+    const { data: ts } = await supabase.from("lead_activity").select("*, actor:profiles!lead_activity_actor_id_fkey(full_name, role)").eq("lead_id", lead.id).order("created_at", { ascending: false }).limit(60);
+    setTimeline(ts || []);
+  };
+  const saveSchedule = async () => {
+    if (!schedDate) return;
+    await supabase.from("leads").update({ next_followup: schedDate }).eq("id", lead.id);
+    setLead((l) => ({ ...l, next_followup: schedDate }));
+    logAction("schedule", lead, me && me.id, { next_followup: schedDate });
+    setSched(false); loadTimeline();
+  };
+
+  const ACT_LABEL = { view_number: "Viewed number", reveal_phone: "Viewed number", call: "Called", whatsapp: "WhatsApp", schedule: "Scheduled follow-up",
+    comment: "Commented", lead_created: "Lead created", lead_created_ai: "Lead created (AI)", status_change: "Status changed", assign: "Assigned", make_open: "Made open", view: "Viewed" };
+  const when = (t) => { const d = (Date.now() - new Date(t)) / 6e4; if (d < 1) return "just now"; if (d < 60) return Math.round(d) + "m ago"; if (d < 1440) return Math.round(d / 60) + "h ago"; return new Date(t).toLocaleDateString(); };
+
+  const HeaderItem = ({ k, v }) => <div><div style={{ fontSize: 9.5, letterSpacing: ".1em", textTransform: "uppercase", color: "rgba(255,255,255,.5)" }}>{k}</div>
+    <div style={{ fontSize: 13, color: "#fff", marginTop: 2, fontWeight: 600 }}>{v}</div></div>;
+  const Field = ({ k, v }) => <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13, gap: 12 }}>
+    <span style={{ color: T.muted, flexShrink: 0 }}>{k}</span><span style={{ fontWeight: 600, textAlign: "right" }}>{v || "—"}</span></div>;
+  const Btn = ({ icon: Ic, label, onClick, tone }) => <button onClick={onClick} style={{ flex: 1, minWidth: 86, display: "flex", flexDirection: "column",
+    alignItems: "center", gap: 5, padding: "12px 8px", borderRadius: 12, border: `1px solid ${tone === "ok" ? T.ok : T.hair}`,
+    background: tone === "ok" ? T.okSoft : T.paper, color: tone === "ok" ? T.ok : T.ink, cursor: "pointer", fontFamily: UI, fontSize: 11.5, fontWeight: 700 }}>
+    <Ic size={17} /> {label}</button>;
+
+  return <div>
+    <button onClick={() => go("live")} style={{ ...miniBtn(), marginBottom: 12 }}>← Back to {user && user.role === "agent" ? "My Leads" : "Leads"}</button>
+
+    {/* header */}
+    <div style={{ ...card, padding: "18px 20px", background: T.hero, border: "none", boxShadow: T.shadowLg }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <Av name={lead.client_name} size={48} />
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <div style={{ fontFamily: DISPLAY, fontSize: 21, color: "#fff" }}>{lead.client_name}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: T.goldBright }}>{leadIdFmt}</span>
+            <span style={{ fontSize: 10.5, fontWeight: 700, background: "rgba(255,255,255,.14)", color: "#fff", borderRadius: 6, padding: "2px 8px" }}>{lead.is_open ? "Open" : lead.status}</span>
+            {(lead.temperature === "Hot" || lead.temperature === "Very Hot") && <span style={{ fontSize: 10.5, fontWeight: 700, background: "rgba(225,90,80,.25)", color: "#ffd9d5", borderRadius: 6, padding: "2px 8px" }}>{lead.temperature}</span>}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 12, marginTop: 16 }}>
+        <HeaderItem k="Assigned agent" v={lead.assigned_agent_name || "Unassigned"} />
+        <HeaderItem k="Source" v={lead.source || "—"} />
+        <HeaderItem k="Last contact" v={lead.last_contacted || "—"} />
+        <HeaderItem k="Created" v={lead.created_on || (lead.created_at ? new Date(lead.created_at).toLocaleDateString() : "—")} />
+      </div>
+    </div>
+
+    {/* action buttons */}
+    <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+      {!revealed && <Btn icon={Eye} label="View Number" onClick={reveal} />}
+      {revealed && lead.phone && <Btn icon={Phone} label="Call" tone="" onClick={() => { logAction("call", lead, me && me.id); window.location.href = "tel:" + digits(lead.phone); }} />}
+      {lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="ok" onClick={() => { logAction("whatsapp", lead, me && me.id); window.open("https://wa.me/" + digits(lead.phone), "_blank"); }} />}
+      <Btn icon={Calendar} label="Schedule" onClick={() => { setSchedDate(lead.next_followup || ""); setSched(true); }} />
+    </div>
+
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 14, marginTop: 14 }}>
+      {/* main info */}
+      <div style={{ ...card, padding: 16 }}>
+        <SectionMini>Main information</SectionMini>
+        <Field k="Customer" v={lead.client_name} />
+        <Field k="Lead ID" v={leadIdFmt} />
+        <Field k="Assigned agent" v={lead.assigned_agent_name || "Unassigned"} />
+        <Field k="Source" v={lead.source} />
+        <Field k="Status" v={lead.is_open ? "Open" : lead.status} />
+        <Field k="Temperature" v={lead.temperature} />
+        <Field k="Last contact" v={lead.last_contacted} />
+        <Field k="Phone" v={revealed ? (lead.phone || "—") : "•••••• (View Number)"} />
+        <Field k="WhatsApp" v={revealed ? (lead.whatsapp || lead.phone || "—") : "••••••"} />
+        <Field k="Email" v={revealed ? (lead.email || "—") : "••••••"} />
+      </div>
+      {/* client profile + investment */}
+      <div style={{ ...card, padding: 16 }}>
+        <SectionMini>Client profile</SectionMini>
+        <Field k="Nationality" v={lead.nationality} />
+        <Field k="Country of residence" v={lead.country_residence} />
+        <Field k="Language" v={lead.language} />
+        <div style={{ height: 14 }} />
+        <SectionMini>Investment requirement</SectionMini>
+        <Field k="Budget" v={lead.budget} />
+        <Field k="Purpose" v={lead.purpose} />
+        <Field k="Area" v={lead.area} />
+        <Field k="Project" v={lead.project} />
+        <Field k="Developer" v={lead.developer} />
+        <Field k="Property type" v={lead.property_type} />
+        <Field k="Ready / Off-plan" v={lead.ready_offplan} />
+        <Field k="Finance" v={lead.finance} />
+        <Field k="Timeline" v={lead.timeline} />
+      </div>
+    </div>
+
+    {/* comments */}
+    <SectionTitle>Comments</SectionTitle>
+    <div style={{ ...card, padding: 16 }}>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Add a comment…"
+          onKeyDown={(e) => { if (e.key === "Enter") addComment(); }}
+          style={{ flex: 1, border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: UI, outline: "none", color: T.ink, background: T.bone }} />
+        <button onClick={addComment} disabled={!newComment.trim()} style={{ background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10,
+          padding: "0 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: newComment.trim() ? 1 : .5 }}>Post</button>
+      </div>
+      <div style={{ marginTop: 14 }}>
+        {comments.length === 0 ? <div style={{ color: T.muted, fontSize: 12.5, padding: "8px 0" }}>No comments yet.</div> :
+          comments.map((c) => (
+          <div key={c.id} style={{ padding: "10px 0", borderBottom: `1px solid ${T.hairSoft}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Av name={c.author?.full_name || "User"} size={24} />
+              <span style={{ fontSize: 12.5, fontWeight: 700 }}>{c.author?.full_name || "User"}</span>
+              <span style={{ fontSize: 10, color: T.faint }}>{roleLabel(c.author?.role)}</span>
+              <span style={{ fontSize: 10, color: T.faint, marginLeft: "auto" }}>{when(c.created_at)}</span>
+              {(isAdmin || c.author_id === (me && me.id)) && <button onClick={() => delComment(c)} title="Delete"
+                style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", padding: 2 }}><X size={13} /></button>}
+            </div>
+            <div style={{ fontSize: 13, color: T.inkSoft, marginTop: 5, marginLeft: 32, lineHeight: 1.5 }}>{c.body}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {/* activity timeline */}
+    <SectionTitle>Activity timeline</SectionTitle>
+    <div style={{ ...card, padding: 16 }}>
+      {timeline.length === 0 ? <div style={{ color: T.muted, fontSize: 12.5 }}>No activity recorded yet.</div> :
+        timeline.map((t, i) => (
+        <div key={t.id} style={{ display: "flex", gap: 11, paddingBottom: i === timeline.length - 1 ? 0 : 14 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+            <div style={{ width: 9, height: 9, borderRadius: 9, background: T.gold, marginTop: 3 }} />
+            {i !== timeline.length - 1 && <div style={{ width: 2, flex: 1, background: T.hairSoft, marginTop: 3 }} />}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{ACT_LABEL[t.action] || t.action}{t.detail && t.detail.note ? ` — "${t.detail.note}"` : ""}</div>
+            <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>{t.actor?.full_name || "System"} · {roleLabel(t.actor?.role)} · {when(t.created_at)}</div>
+          </div>
         </div>
       ))}
     </div>
 
-    <div style={{ position: "relative", zIndex: 10 }}>
-      <div style={{ ...card, padding: 20 }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", gap: 14 }}>
-            <Av name={L.name} size={54} dark />
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ fontFamily: DISPLAY, fontSize: 22 }}>{L.name}</span>
-                <TempTag t={L.temp} /><Chip tone="info">{L.status}</Chip>
-              </div>
-              <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
-                {L.id} · Assigned to {L.agent} · Source: {L.source} · Last contact {L.last}</div>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <GoldBtn><Phone size={14} /> Call</GoldBtn>
-            <GoldBtn><MessageCircle size={14} /> WhatsApp</GoldBtn>
-            <GoldBtn ghost><Calendar size={14} /> Schedule</GoldBtn>
-          </div>
-        </div>
-
-        {/* masked contact with reveal */}
-        <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 10 }}>
-          <div style={{ background: T.bone, borderRadius: 11, padding: "12px 14px", border: `1px solid ${T.hair}` }}>
-            <div style={{ fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted, fontWeight: 600 }}>Phone</div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
-              <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: ".02em" }}>{revealed ? L.phoneFull : L.phone}</span>
-              <button onClick={() => setRevealed(!revealed)} style={{ display: "flex", alignItems: "center", gap: 5,
-                border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold, borderRadius: 8,
-                padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>
-                {revealed ? <EyeOff size={12} /> : <Eye size={12} />} {revealed ? "Hide" : "Reveal"}</button>
-            </div>
-            {revealed && <div style={{ fontSize: 10.5, color: T.warn, marginTop: 6, display: "flex", alignItems: "center", gap: 4 }}>
-              <Lock size={11} /> Reveal logged · 09:42 · this device</div>}
-          </div>
-          <div style={{ background: T.bone, borderRadius: 11, padding: "12px 14px", border: `1px solid ${T.hair}` }}>
-            <div style={{ fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: T.muted, fontWeight: 600 }}>Email</div>
-            <div style={{ fontSize: 15, fontWeight: 600, marginTop: 4 }}>{L.email}</div>
-          </div>
-        </div>
-
-        {/* profile grid */}
-        <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 9 }}>
-          {[["Nationality", L.nationality], ["Residence", L.residence], ["Budget", L.budget], ["Purpose", L.purpose],
-            ["Preferred area", L.area], ["Developer", L.developer], ["Type", `${L.ptype} · ${L.beds}`], ["Ready / Off-plan", L.ready],
-            ["Finance", L.finance], ["Timeline", L.timeline], ["Language", L.lang], ["Next follow-up", L.next]].map(([k, v]) => (
-            <div key={k} style={{ padding: "9px 11px", borderRadius: 9, border: `1px solid ${T.hairSoft}` }}>
-              <div style={{ fontSize: 9.5, letterSpacing: ".1em", textTransform: "uppercase", color: T.faint, fontWeight: 700 }}>{k}</div>
-              <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 2 }}>{v}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* options shared + timeline */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 14, marginTop: 14 }}>
-        <div style={{ ...card, padding: 16 }}>
-          <div style={{ fontFamily: DISPLAY, fontSize: 15, marginBottom: 10 }}>Options shared</div>
-          {PROJECTS.slice(0, 2).map((p) => (
-            <div key={p.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "10px 12px", borderRadius: 10, background: T.bone, marginBottom: 8 }}>
-              <div><div style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</div>
-                <div style={{ fontSize: 11, color: T.muted }}>{p.dev} · {p.price}</div></div>
-              <div style={{ fontFamily: DISPLAY, fontSize: 18, color: T.gold }}>{p.score}</div>
-            </div>
-          ))}
-          <button style={{ width: "100%", border: `1px dashed ${T.goldEdge}`, background: "transparent", color: T.gold,
-            borderRadius: 10, padding: "9px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>
-            + Attach property option</button>
-        </div>
-        <div style={{ ...card, padding: 16 }}>
-          <div style={{ fontFamily: DISPLAY, fontSize: 15, marginBottom: 10 }}>Activity</div>
-          {[["Today 09:42", "Phone revealed — Derya Altun", Lock],
-            ["Yesterday 17:20", "WhatsApp: payment plan sent · client reviewing", MessageCircle],
-            ["Mon 11:05", "Zoom meeting · shortlisted 2 penthouses", Calendar],
-            ["Last Fri", "Status → Negotiation", CircleDot]].map(([t, w, Ic], i) => (
-            <div key={i} style={{ display: "flex", gap: 10, marginBottom: 11 }}>
-              <div style={{ width: 26, height: 26, borderRadius: 8, background: T.hairSoft, display: "grid",
-                placeItems: "center", flexShrink: 0 }}><Ic size={12} color={T.inkSoft} /></div>
-              <div><div style={{ fontSize: 12.5 }}>{w}</div>
-                <div style={{ fontSize: 10.5, color: T.faint }}>{t}</div></div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
+    {sched && <Modal title="Schedule follow-up" onClose={() => setSched(false)}>
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Next follow-up date</span>
+      <input type="date" value={schedDate} onChange={(e) => setSchedDate(e.target.value)}
+        style={{ width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box", marginTop: 5, marginBottom: 12 }} />
+      <button onClick={saveSchedule} disabled={!schedDate} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
+        borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: schedDate ? 1 : .5 }}>Save follow-up</button>
+    </Modal>}
   </div>;
 }
+function SectionMini({ children }) { return <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: T.gold, marginBottom: 8 }}>{children}</div>; }
 
-/* ============================ 4 LEAD ASSIGNMENT ========================== */
 function Assignment() {
   const [method, setMethod] = useState("Round-robin");
   return <div>
@@ -1623,7 +1725,7 @@ function LoginFlow({ onLogin, dark, setDark }) {
   );
 }
 
-function LiveLeads({ user, filter, go }) {
+function LiveLeads({ user, filter, go, openLead }) {
   const isAgent = user && user.role === "agent";
   const [leads, setLeads] = useState(null);   // null = loading
   const [err, setErr] = useState("");
@@ -1761,8 +1863,8 @@ function LiveLeads({ user, filter, go }) {
                        : <><span>Code</span><span>Client</span><span>Project</span><span>Phone</span><span>Area</span><span>Agent</span><span>Status</span></>}
             </div>
             {filtered.map((l, i) => (isAgent ? (
-              <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr",
-                gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5 }}>
+              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr",
+                gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5, cursor: "pointer" }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{l.client_name}
                     {(l.temperature === "Hot" || l.temperature === "Very Hot") && <span style={{ width: 7, height: 7, borderRadius: 7, background: T.bad }} />}</div>
@@ -1775,24 +1877,24 @@ function LiveLeads({ user, filter, go }) {
                 <Chip tone={l.is_open ? "gold" : l.temperature === "Hot" || l.temperature === "Very Hot" ? "bad" : "info"}>{l.is_open ? "Open" : l.status}</Chip>
                 <span style={{ display: "flex", gap: 6 }}>
                   {l.phone && <a href={`https://wa.me/${digits(l.phone)}`} target="_blank" rel="noreferrer" title="WhatsApp"
-                    onClick={() => logAction("whatsapp", l, me && me.id)}
+                    onClick={(e) => { e.stopPropagation(); logAction("whatsapp", l, me && me.id); }}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
                     <MessageCircle size={14} color={T.ok} /></a>}
                   {l.phone && <a href={`tel:${digits(l.phone)}`} title="Call"
-                    onClick={() => logAction("call", l, me && me.id)}
+                    onClick={(e) => { e.stopPropagation(); logAction("call", l, me && me.id); }}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
                     <Phone size={13} color={T.inkSoft} /></a>}
                 </span>
               </div>
             ) : (
-              <div key={l.id} style={{ display: "grid", gridTemplateColumns: "0.7fr 1.4fr 1.3fr 1.3fr 1.1fr 1.2fr 0.9fr",
-                gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5 }}>
+              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "0.7fr 1.4fr 1.3fr 1.3fr 1.1fr 1.2fr 0.9fr",
+                gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5, cursor: "pointer" }}>
                 <span style={{ fontWeight: 700, color: T.gold, fontSize: 11 }}>{l.lead_code}</span>
                 <span style={{ fontWeight: 600 }}>{l.client_name}</span>
                 <span style={{ color: T.inkSoft }}>{l.project || "—"}</span>
                 <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 12 }}>{revealed[l.id] ? l.phone : maskPhone(l.phone)}</span>
-                  {!revealed[l.id] && <button onClick={() => reveal(l)} title="Reveal is logged"
+                  {!revealed[l.id] && <button onClick={(e) => { e.stopPropagation(); reveal(l); }} title="Reveal is logged"
                     style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold, borderRadius: 6,
                       padding: "2px 6px", fontSize: 9.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Reveal</button>}
                 </span>
