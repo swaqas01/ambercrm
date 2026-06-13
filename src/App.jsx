@@ -1113,6 +1113,15 @@ function LeadDetail({ leadId, user, go }) {
   const leadIdFmt = lead.lead_no ? "L" + String(lead.lead_no).padStart(3, "0") : (lead.lead_code || "—");
   const digits = (p) => String(p || "").replace(/\D/g, "");
   const reveal = () => { setRevealed(true); logAction("view_number", lead, me && me.id); markContacted(); };
+  const askAmberLead = () => {
+    try { supabase.from("admin_audit").insert({ action: "ask_amber_lead_opened", performed_by: me && me.id, detail: (lead && (lead.client_name || lead.lead_code)) || null, new_value: { lead_id: lead && lead.id, project: (lead && lead.project) || null } }); } catch (e) {}
+    const prompt = "Help me approach this client. Use only the lead details and approved project knowledge — do not invent project details. Lead: " + (lead.client_name || "—")
+      + (lead.project ? ", interested in " + lead.project : "") + (lead.area ? " (" + lead.area + ")" : "")
+      + (lead.budget ? ", budget " + lead.budget : "") + (lead.purpose ? ", purpose " + lead.purpose : "")
+      + (lead.timeline ? ", timeline " + lead.timeline : "") + ", status " + (lead.status || "—") + ", temperature " + (lead.temperature || "—")
+      + ". Give me a short client summary, suggested approach, a WhatsApp message, call talking points, and the next best action.";
+    window.dispatchEvent(new CustomEvent("amber-open", { detail: { lead, prompt } }));
+  };
   const agentNameFor = (id) => { if (!id) return null; if (me && id === me.id) return me.name; const a = agents.find((x) => x.id === id); return a ? a.full_name : null; };
   // Source of truth is the assigned_agent uuid. assigned_agent_name is only a synced fallback (migration 12 backfills it).
   const agentDisplay = lead.is_open ? "Open Lead"
@@ -1302,6 +1311,7 @@ function LeadDetail({ leadId, user, go }) {
             {(lead.temperature === "Hot" || lead.temperature === "Very Hot") && <span style={{ fontSize: 10.5, fontWeight: 700, background: "rgba(225,90,80,.25)", color: "#ffd9d5", borderRadius: 6, padding: "2px 8px" }}>{lead.temperature}</span>}
           </div>
         </div>
+        <button onClick={askAmberLead} style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "rgba(212,175,92,.18)", border: `1px solid ${T.goldEdge}`, color: "#fff", borderRadius: 999, padding: "9px 15px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}><Sparkle size={15} color={T.goldBright} /> Ask Amber</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 12, marginTop: 16 }}>
         <HeaderItem k="Assigned agent" v={agentDisplay} />
@@ -3291,15 +3301,21 @@ function AskAmber({ narrow, user }) {
   const boxRef = useRef(null);
   useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight; }, [msgs, busy]);
 
-  const pick = async (m) => {
+  const pick = async (m, leadCtx) => {
     setMentor(m);
     setMsgs([{ role: "assistant", text: m.greeting }]);
-    setCtx(await buildCrmContext(user)); // fetch permitted CRM context once per session
+    setCtx(await buildCrmContext(user, leadCtx)); // fetch permitted CRM context once per session
     fetchKnowledge(user).then(setKb).catch(() => setKb([])); // verified company knowledge
   };
   const reset = () => { setMentor(null); setMsgs([]); setInput(""); };
   useEffect(() => {
-    const onOpen = (e) => { setOpen(true); if (!mentor) pick(MENTORS[0]); const p = e && e.detail && e.detail.prompt; if (p) setInput(p); };
+    const onOpen = async (e) => {
+      const d = e && e.detail;
+      setOpen(true);
+      if (!mentor) pick(MENTORS[0], d && d.lead);
+      else if (d && d.lead) { try { setCtx(await buildCrmContext(user, d.lead)); } catch (err) {} }
+      if (d && d.prompt) setInput(d.prompt);
+    };
     window.addEventListener("amber-open", onOpen);
     return () => window.removeEventListener("amber-open", onOpen);
   }, [mentor]);
@@ -3623,23 +3639,58 @@ function LiveLeads({ user, filter, go, openLead }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [me, setMe] = useState(null);
+  const [sort, setSort] = useState("newest");
+  const [agentFilter, setAgentFilter] = useState(null);   // null | 'unassigned' | 'open' | <agentId>
+  const [agents, setAgents] = useState([]);
+  const [selected, setSelected] = useState({});            // { [leadId]: true }
+  const [showBulk, setShowBulk] = useState(false);
+  const [toast, setToast] = useState("");
 
   const load = async () => {
     setErr("");
     const { data: { user: au } } = await supabase.auth.getUser();
     setMe(au);
     const { data, error } = await supabase.from("leads")
-      .select("id, lead_code, lead_no, client_name, phone, whatsapp, email, project, area, budget, assigned_agent_name, assigned_agent, current_owner, created_by, status, temperature, source, is_open, next_followup, last_contacted, created_on")
-      .order("created_on", { ascending: false }).limit(2000);
+      .select("id, lead_code, lead_no, client_name, phone, whatsapp, email, project, area, budget, assigned_agent_name, assigned_agent, original_agent, current_owner, created_by, status, temperature, source, is_open, opened_reason, next_followup, last_contacted, created_on, created_at, assigned_at")
+      .order("created_at", { ascending: false }).limit(2000);
     if (error) { setErr(isAgent ? "Unable to load your leads. Please try again or contact admin." : ("Couldn't load leads: " + error.message)); setLeads([]); return; }
     let rows = data || [];
     // Agents: show only leads actually assigned to or created by them (RLS also returns the open pool — exclude that here).
     if (isAgent && au) rows = rows.filter((l) => l.assigned_agent === au.id || l.current_owner === au.id || l.created_by === au.id);
     setLeads(rows);
+    if (!isAgent) {
+      try { const { data: ag } = await supabase.from("profiles").select("id, full_name, role, active").order("full_name"); setAgents(ag || []); } catch (e) {}
+    }
   };
   useEffect(() => { load(); }, []);
 
   const today = dubaiToday();
+  const fmtDubai = (ts) => { if (!ts) return "—"; try { const s = new Date(ts).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }); return s.replace(/\b(am|pm)\b/i, (m) => m.toUpperCase()); } catch (e) { return "—"; } };
+  const fmtDay = (d) => { if (!d) return "—"; try { return new Date(d).toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "numeric" }); } catch (e) { return String(d); } };
+  const agentName = (id) => { const a = agents.find((x) => x.id === id); return a ? a.full_name : null; };
+  const assignable = agents.filter((a) => a.active !== false && (a.role === "agent" || a.role === "sales_manager"));
+  const matchAgentFilter = (l) => {
+    if (isAgent || !agentFilter) return true;
+    if (agentFilter === "unassigned") return !l.assigned_agent && !l.is_open;
+    if (agentFilter === "open") return l.is_open === true;
+    return l.assigned_agent === agentFilter;
+  };
+  const sortCmp = (a, b) => {
+    const t = (x) => x.created_at || x.created_on || "";
+    switch (sort) {
+      case "oldest": return t(a).localeCompare(t(b));
+      case "agent": return (a.assigned_agent_name || "~~~").localeCompare(b.assigned_agent_name || "~~~");
+      case "status": return (a.status || "").localeCompare(b.status || "");
+      case "temp": { const o = { "Very Hot": 0, Hot: 1, Warm: 2, Cold: 3 }; return ((o[a.temperature] ?? 9) - (o[b.temperature] ?? 9)); }
+      case "source": return (a.source || "~~~").localeCompare(b.source || "~~~");
+      case "project": return (a.project || "~~~").localeCompare(b.project || "~~~");
+      case "area": return (a.area || "~~~").localeCompare(b.area || "~~~");
+      case "lastcontact": return (b.last_contacted || "").localeCompare(a.last_contacted || "");
+      case "nextfu": return (a.next_followup || "9999-99-99").localeCompare(b.next_followup || "9999-99-99");
+      case "newest": default: return t(b).localeCompare(t(a));
+    }
+  };
+  const SORTS = [["newest", "Newest first"], ["oldest", "Oldest first"], ["agent", "Assigned agent"], ["status", "Status"], ["temp", "Temperature"], ["source", "Source"], ["project", "Project"], ["area", "Area"], ["lastcontact", "Last contact"], ["nextfu", "Next follow-up"]];
   const maskPhone = (p) => { if (!p) return "—"; const s = String(p); return s.slice(0, 5) + " ••• " + s.slice(-2); };
   const digits = (p) => String(p || "").replace(/\D/g, "");
   const reveal = async (l) => {
@@ -3673,14 +3724,47 @@ function LiveLeads({ user, filter, go, openLead }) {
     }
   };
   const matchTab = (l) => tabDef(tab, l);
-  const baseLeads = (leads || []).filter(matchFilter);
+  const baseLeads = (leads || []).filter(matchFilter).filter(matchAgentFilter);
   const tabCount = (t) => baseLeads.filter((l) => tabDef(t, l)).length;
   const TAB_TONE = { Hot: T.bad, "Very Hot": T.bad, Warm: T.warn, Cold: T.muted, "Closed Won": T.ok, "Closed Lost": T.bad, Overdue: T.bad, "Follow-up due": T.gold, New: T.gold };
-  const filtered = (leads || []).filter(matchFilter).filter(matchTab).filter((l) => {
+  const filteredRaw = (leads || []).filter(matchFilter).filter(matchTab).filter(matchAgentFilter).filter((l) => {
     if (!q.trim()) return true;
     const s = q.toLowerCase();
     return [l.client_name, l.project, l.area, l.assigned_agent_name, l.lead_code, l.status].some((v) => (v || "").toLowerCase().includes(s));
   });
+  const filtered = isAgent ? filteredRaw : [...filteredRaw].sort(sortCmp);
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2800); };
+  const selIds = Object.keys(selected).filter((k) => selected[k]);
+  const toggleSel = (id) => setSelected((s) => ({ ...s, [id]: !s[id] }));
+  const allVisibleSelected = filtered.length > 0 && filtered.every((l) => selected[l.id]);
+  const toggleSelAll = () => { if (allVisibleSelected) { setSelected({}); } else { const n = {}; filtered.forEach((l) => { n[l.id] = true; }); setSelected(n); } };
+  const clearSel = () => setSelected({});
+  const runBulk = async ({ mode, agentId, reason }) => {
+    const ids = selIds; if (!ids.length) return;
+    const sel = (leads || []).filter((l) => selected[l.id]);
+    const nowIso = new Date().toISOString();
+    let shared = {}, toName = null;
+    if (mode === "assign") { toName = agentName(agentId); shared = { assigned_agent: agentId, assigned_agent_name: toName, current_owner: agentId, assigned_at: nowIso, is_open: false, opened_reason: null, opened_by: null, opened_at: null }; }
+    else if (mode === "open") { shared = { is_open: true, assigned_agent: null, assigned_agent_name: null, current_owner: null, opened_reason: reason || "Lead redistribution", opened_by: me?.id || null, opened_at: nowIso }; }
+    else { shared = { is_open: false, assigned_agent: null, assigned_agent_name: null, current_owner: null }; }
+    try {
+      const { error } = await supabase.from("leads").update(shared).in("id", ids);
+      if (error) throw error;
+      if (mode === "open") { for (const l of sel.filter((x) => !x.original_agent && x.assigned_agent)) { try { await supabase.from("leads").update({ original_agent: l.assigned_agent }).eq("id", l.id); } catch (e) {} } }
+      try {
+        const hist = sel.map((l) => ({ lead_id: l.id, from_agent: l.assigned_agent || null, to_agent: mode === "assign" ? agentId : null, reason: reason || (mode === "open" ? "Moved to Open Leads" : mode === "unassign" ? "Unassigned" : "Bulk reassignment"), changed_by: me?.id || null }));
+        if (hist.length) await supabase.from("lead_ownership_history").insert(hist);
+      } catch (e) {}
+      if (mode === "assign" && agentId) { try { await supabase.from("notifications").insert({ user_id: agentId, kind: "lead_assigned", title: ids.length + (ids.length === 1 ? " lead assigned to you" : " leads assigned to you"), body: "You have " + ids.length + " newly assigned " + (ids.length === 1 ? "lead" : "leads") + (reason ? " — " + reason : ""), link_screen: "live" }); } catch (e) {} }
+      try {
+        await supabase.from("admin_audit").insert({ action: mode === "assign" ? "leads_bulk_assigned" : mode === "open" ? "leads_bulk_opened" : "leads_bulk_unassigned", performed_by: me?.id || null, new_value: { count: ids.length, to: toName, mode, reason: reason || null }, detail: ids.length + (mode === "assign" ? " → " + (toName || "agent") : mode === "open" ? " → Open Leads" : " → Unassigned") });
+        const per = sel.map((l) => ({ action: "lead_assigned", performed_by: me?.id || null, affected_user: mode === "assign" ? agentId : null, old_value: { agent: l.assigned_agent_name || null }, new_value: { mode, to: toName }, detail: (l.lead_code || l.client_name || "lead") }));
+        if (per.length) await supabase.from("admin_audit").insert(per);
+      } catch (e) {}
+      setShowBulk(false); clearSel(); await load();
+      flash(mode === "assign" ? ids.length + " leads assigned to " + (toName || "agent") : mode === "open" ? ids.length + " leads moved to Open Leads" : ids.length + " leads set to unassigned");
+    } catch (e) { setShowBulk(false); flash("Bulk action failed: " + (e.message || "please try again")); }
+  };
 
   return <div>
     {filter && go && (
@@ -3722,6 +3806,36 @@ function LiveLeads({ user, filter, go, openLead }) {
       {q && <span style={{ fontSize: 11.5, color: T.muted }}>{filtered.length} match</span>}
     </div>
 
+    {!isAgent && <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+        <span style={{ fontSize: 11.5, color: T.muted, fontWeight: 600 }}>Sort</span>
+        <select value={sort} onChange={(e) => setSort(e.target.value)} style={{ border: `1px solid ${T.hair}`, borderRadius: 9, padding: "7px 10px", fontSize: 12.5, fontFamily: UI, color: T.ink, background: T.paper, cursor: "pointer" }}>
+          {SORTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+        <span style={{ fontSize: 11.5, color: T.muted, fontWeight: 600 }}>Agent</span>
+        <select value={agentFilter || ""} onChange={(e) => setAgentFilter(e.target.value || null)} style={{ border: `1px solid ${agentFilter ? T.gold : T.hair}`, borderRadius: 9, padding: "7px 10px", fontSize: 12.5, fontFamily: UI, color: T.ink, background: T.paper, cursor: "pointer", maxWidth: 210 }}>
+          <option value="">All agents</option>
+          <option value="unassigned">Unassigned</option>
+          <option value="open">Open leads</option>
+          <optgroup label="Agents">{assignable.map((a) => <option key={a.id} value={a.id}>{a.full_name}</option>)}</optgroup>
+        </select>
+      </div>
+      {agentFilter && <span style={{ display: "inline-flex", alignItems: "center", gap: 8, background: T.goldSoft, color: T.gold, borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 700 }}>
+        Showing: {agentFilter === "unassigned" ? "Unassigned leads" : agentFilter === "open" ? "Open leads" : ("leads assigned to " + (agentName(agentFilter) || "agent"))}
+        <button onClick={() => setAgentFilter(null)} title="Clear filter" style={{ background: "none", border: "none", color: T.gold, cursor: "pointer", padding: 0, display: "grid" }}><X size={13} /></button>
+      </span>}
+    </div>}
+
+    {!isAgent && selIds.length > 0 && (
+      <div style={{ ...card, padding: "12px 16px", marginTop: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: T.ink, color: "#fff", borderColor: T.ink }}>
+        <span style={{ fontWeight: 700, fontSize: 13.5 }}>{selIds.length} selected</span>
+        <button onClick={() => setShowBulk(true)} style={{ background: T.gold, color: "#1a1205", border: "none", borderRadius: 9, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 6 }}><UserPlus size={14} /> Assign to agent</button>
+        <button onClick={clearSel} style={{ background: "rgba(255,255,255,.12)", color: "#fff", border: "1px solid rgba(255,255,255,.2)", borderRadius: 9, padding: "9px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Clear</button>
+      </div>
+    )}
+
     {/* filter chips */}
     <div style={{ display: "flex", gap: 8, marginTop: 12, overflowX: "auto", paddingBottom: 4, WebkitOverflowScrolling: "touch" }}>
       {TABS.map((t) => {
@@ -3756,12 +3870,12 @@ function LiveLeads({ user, filter, go, openLead }) {
     ) : (
       <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
         <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: isAgent ? 820 : 1680 }}>
-            <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr" : "0.6fr 1.2fr 1.1fr 1.15fr 1.15fr 1.35fr 0.9fr 1fr 0.8fr 0.85fr 0.9fr 0.9fr", gap: 8,
+          <div style={{ minWidth: isAgent ? 820 : 2240 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr" : "0.35fr 1.5fr 0.7fr 1.2fr 1.1fr 1.1fr 1.3fr 1.1fr 0.9fr 0.9fr 1.1fr 0.85fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
               padding: "10px 16px", fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
               color: T.muted, borderBottom: `1px solid ${T.hair}`, background: T.bone }}>
               {isAgent ? <><span>Client</span><span>Project</span><span>Budget</span><span>Next follow-up</span><span>Status</span><span>Contact</span></>
-                       : <><span>Code</span><span>Client</span><span>Project</span><span>Phone</span><span>WhatsApp</span><span>Email</span><span>Area</span><span>Agent</span><span>Status</span><span>Temp</span><span>Source</span><span>Last / Created</span></>}
+                       : <><span style={{ display: "grid", placeItems: "center" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Code</span><span>Client</span><span>Phone</span><span>WhatsApp</span><span>Email</span><span>Project</span><span>Area</span><span>Source</span><span>Agent</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
             </div>
             {filtered.map((l, i) => (isAgent ? (
               <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr",
@@ -3788,22 +3902,24 @@ function LiveLeads({ user, filter, go, openLead }) {
                 </span>
               </div>
             ) : (
-              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "0.6fr 1.2fr 1.1fr 1.15fr 1.15fr 1.35fr 0.9fr 1fr 0.8fr 0.85fr 0.9fr 0.9fr",
-                gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12, cursor: "pointer" }}>
+              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "0.35fr 1.5fr 0.7fr 1.2fr 1.1fr 1.1fr 1.3fr 1.1fr 0.9fr 0.9fr 1.1fr 0.85fr 0.85fr 0.95fr 0.95fr 1fr",
+                gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12, cursor: "pointer", background: selected[l.id] ? T.goldSoft : "transparent" }}>
+                <span onClick={(e) => e.stopPropagation()} style={{ display: "grid", placeItems: "center" }}><input type="checkbox" checked={!!selected[l.id]} onChange={() => toggleSel(l.id)} style={{ cursor: "pointer", width: 14, height: 14 }} /></span>
+                <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 600, lineHeight: 1.3 }}>{fmtDubai(l.created_at || l.created_on)}</span>
                 <span style={{ fontWeight: 700, color: T.gold, fontSize: 10.5 }}>{l.lead_code || (l.lead_no ? "L" + String(l.lead_no).padStart(3, "0") : "—")}</span>
                 <span style={{ fontWeight: 600 }}>{l.client_name}</span>
-                <span style={{ color: T.inkSoft }}>{l.project || "—"}</span>
                 <span style={{ fontSize: 11.5 }}>{l.phone || <span style={{ color: T.faint }}>—</span>}</span>
                 <span style={{ fontSize: 11.5 }}>{l.whatsapp || l.phone || <span style={{ color: T.faint }}>—</span>}</span>
                 <span style={{ fontSize: 11.5, color: l.email ? T.inkSoft : T.faint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.email || "No email"}</span>
+                <span style={{ color: T.inkSoft }}>{l.project || "—"}</span>
                 <span style={{ color: T.inkSoft }}>{l.area || "—"}</span>
-                <span style={{ color: l.assigned_agent_name ? T.ink : T.faint }}>{l.assigned_agent_name || "Unassigned"}</span>
+                <span style={{ color: T.inkSoft, fontSize: 11 }}>{l.source || "—"}</span>
+                <button onClick={(e) => { e.stopPropagation(); if (l.is_open) setAgentFilter("open"); else if (l.assigned_agent) setAgentFilter(l.assigned_agent); else setAgentFilter("unassigned"); }} title="Filter by this agent" style={{ background: "none", border: "none", textAlign: "left", padding: 0, cursor: "pointer", fontFamily: UI, fontSize: 12, color: l.is_open ? T.gold : (l.assigned_agent_name ? T.gold : T.faint), fontWeight: l.assigned_agent_name || l.is_open ? 600 : 400 }}>{l.is_open ? "Open" : (l.assigned_agent_name || "Unassigned")}</button>
                 <Chip tone={l.is_open ? "gold" : "info"}>{l.is_open ? "Open" : l.status}</Chip>
                 <span style={{ fontSize: 11 }}><Chip tone={l.temperature === "Hot" || l.temperature === "Very Hot" ? "bad" : l.temperature === "Warm" ? "warn" : "info"}>{l.temperature || "—"}</Chip></span>
-                <span style={{ color: T.inkSoft, fontSize: 11 }}>{l.source || "—"}</span>
-                <span style={{ fontSize: 10.5, color: T.faint, lineHeight: 1.35 }}>
-                  {l.last_contacted ? <span>LC {l.last_contacted}</span> : <span>LC —</span>}<br />
-                  {l.created_on || (l.created_at ? new Date(l.created_at).toLocaleDateString() : "—")}</span>
+                <span style={{ fontSize: 11, color: T.inkSoft }}>{l.last_contacted ? fmtDay(l.last_contacted) : "—"}</span>
+                <span style={{ fontSize: 11, color: l.next_followup && l.next_followup < today ? T.bad : T.inkSoft }}>{l.next_followup ? fmtDay(l.next_followup) : "—"}</span>
+                <span style={{ fontSize: 11, color: T.faint }}>{agentName(l.created_by) || "—"}</span>
               </div>
             )))}
           </div>
@@ -3817,6 +3933,8 @@ function LiveLeads({ user, filter, go, openLead }) {
 
     {showAdd && <AddLeadModal me={me} user={user} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />}
     {showImport && <ImportModal me={me} onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); load(); }} />}
+    {showBulk && <BulkAssignModal count={selIds.length} agents={assignable} onClose={() => setShowBulk(false)} onRun={runBulk} />}
+    {toast && <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.ink, color: "#fff", padding: "11px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600, zIndex: 200, boxShadow: T.shadowLg }}>{toast}</div>}
   </div>;
 }
 function miniBtn() { return { background: T.paper, color: T.ink, border: `1px solid ${T.hair}`, borderRadius: 9,
@@ -4278,6 +4396,53 @@ function HotDeals({ user, go }) {
   </div>;
 }
 
+
+function BulkAssignModal({ count, agents, onClose, onRun }) {
+  const REASONS = ["Lead redistribution", "Agent workload balancing", "Agent deactivated", "No response from previous agent", "Client request", "Manager decision", "Other"];
+  const [mode, setMode] = useState("assign");
+  const [agentId, setAgentId] = useState(agents[0] ? agents[0].id : "");
+  const [reason, setReason] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const toName = (agents.find((a) => a.id === agentId) || {}).full_name || "agent";
+  const lbl = { fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6, display: "block", marginTop: 12 };
+  const inp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 9, padding: "9px 11px", fontSize: 13, fontFamily: UI, color: T.ink, background: T.paper, boxSizing: "border-box" };
+  const summary = mode === "assign" ? "assigning " + count + (count === 1 ? " lead" : " leads") + " to " + toName : mode === "open" ? "moving " + count + (count === 1 ? " lead" : " leads") + " to Open Leads" : "setting " + count + (count === 1 ? " lead" : " leads") + " to unassigned";
+  const run = async () => { setBusy(true); await onRun({ mode, agentId: mode === "assign" ? agentId : null, reason }); setBusy(false); };
+  return <Modal title="Bulk assign leads" onClose={onClose}>
+    {!confirm ? <>
+      <div style={{ fontSize: 13, color: T.inkSoft }}><b style={{ color: T.ink }}>{count}</b> {count === 1 ? "lead" : "leads"} selected.</div>
+      <span style={lbl}>Action</span>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {[["assign", "Assign to agent"], ["open", "Move to Open Leads"], ["unassign", "Make unassigned"]].map(([v, l]) => (
+          <button key={v} onClick={() => setMode(v)} style={{ border: `1px solid ${mode === v ? T.gold : T.hair}`, background: mode === v ? T.goldSoft : T.paper, color: mode === v ? T.gold : T.muted, borderRadius: 9, padding: "8px 13px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>{l}</button>
+        ))}
+      </div>
+      {mode === "assign" && <><span style={lbl}>Agent</span>
+        <select value={agentId} onChange={(e) => setAgentId(e.target.value)} style={inp}>
+          {agents.length === 0 ? <option value="">No active agents</option> : agents.map((a) => <option key={a.id} value={a.id}>{a.full_name}{a.role === "sales_manager" ? " (Sales Manager)" : ""}</option>)}
+        </select></>}
+      <span style={lbl}>Reason / comment {mode === "assign" ? "(optional)" : ""}</span>
+      <select value={reason} onChange={(e) => setReason(e.target.value)} style={inp}>
+        <option value="">— Select a reason —</option>
+        {REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
+      </select>
+      <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+        <button onClick={onClose} style={{ ...miniBtn(), flex: "0 0 auto", padding: "11px 16px" }}>Cancel</button>
+        <button onClick={() => { if (mode === "assign" && !agentId) return; setConfirm(true); }} style={{ flex: 1, background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Continue</button>
+      </div>
+    </> : <>
+      <div style={{ ...card, padding: 16, background: T.goldSoft, borderColor: T.goldEdge }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: T.ink, lineHeight: 1.5 }}>You are {summary}. Continue?</div>
+        {reason && <div style={{ fontSize: 12, color: T.muted, marginTop: 6 }}>Reason: {reason}</div>}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+        <button onClick={() => setConfirm(false)} disabled={busy} style={{ ...miniBtn(), flex: "0 0 auto", padding: "11px 16px" }}>Back</button>
+        <button onClick={run} disabled={busy} style={{ flex: 1, background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "Working…" : "Confirm"}</button>
+      </div>
+    </>}
+  </Modal>;
+}
 
 function Modal({ title, children, onClose }) {
   return <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 80,
