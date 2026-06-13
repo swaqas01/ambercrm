@@ -23,26 +23,26 @@ const T = {
 };
 const THEME_CSS = `
   [data-amber] {
-    --ink:#0F172A; --inkSoft:#475569; --muted:#64748B; --faint:#94A3B8;
-    --bone:#F2F4FB; --paper:#FFFFFF; --hair:#E9EBF5; --hairSoft:#F4F5FB;
-    --gold:#7C5CFA; --goldBright:#8B6CFA; --goldSoft:#F0EDFE; --goldEdge:#DDD5FC;
-    --ok:#16A34A; --okSoft:#E9F9EF; --warn:#D97706; --warnSoft:#FEF5E0;
-    --bad:#DC2626; --badSoft:#FDEAEA; --info:#2563EB; --infoSoft:#E8F1FE;
-    --hero:#1B1733; --side:#1B1733; --btnBg:#7C5CFA; --btnFg:#FFFFFF;
-    --goldTint:#F7F5FF; --wm:rgba(124,92,250,.06);
-    --shadow:0 1px 2px rgba(15,23,42,.04), 0 10px 30px rgba(15,23,42,.06);
-    --shadowLg:0 2px 4px rgba(15,23,42,.06), 0 16px 40px rgba(15,23,42,.10);
+    --ink:#2E263D; --inkSoft:#4B465C; --muted:#6E6B7B; --faint:#A5A2B2;
+    --bone:#F4F5FA; --paper:#FFFFFF; --hair:#EAEAEF; --hairSoft:#F3F3F8;
+    --gold:#8C57FF; --goldBright:#9B6BFF; --goldSoft:#F1EAFF; --goldEdge:#E4D7FF;
+    --ok:#56CA00; --okSoft:#EAF8DD; --warn:#FFB400; --warnSoft:#FFF3DA;
+    --bad:#FF4C51; --badSoft:#FFE6E7; --info:#16B1FF; --infoSoft:#E0F4FF;
+    --hero:#2B2C40; --side:#FFFFFF; --btnBg:#8C57FF; --btnFg:#FFFFFF;
+    --goldTint:#F7F3FF; --wm:rgba(140,87,255,.06);
+    --shadow:0 2px 8px rgba(76,78,100,.10); --shadowLg:0 6px 24px rgba(76,78,100,.16);
+    --sideText:#5B5769; --sideActiveText:#FFFFFF; --sideActiveBg:linear-gradient(72deg,#9168FF 0%,#8C57FF 100%); --sideBorder:#ECECF2; --sideBrand:#2E263D;
   }
   [data-amber="dark"] {
-    --ink:#E7E8F2; --inkSoft:#AEB4C8; --muted:#7E8499; --faint:#565C74;
-    --bone:#0D0D18; --paper:#17172A; --hair:#272742; --hairSoft:#1F1F38;
-    --gold:#8B6CFA; --goldBright:#A78BFA; --goldSoft:#221E3A; --goldEdge:#3A3360;
-    --ok:#4ADE80; --okSoft:#15251C; --warn:#FBBF24; --warnSoft:#2A2210;
-    --bad:#F87171; --badSoft:#2A1717; --info:#60A5FA; --infoSoft:#16203A;
-    --hero:#0A0A16; --side:#0A0A16; --btnBg:#8B6CFA; --btnFg:#FFFFFF;
-    --goldTint:#1A1630; --wm:rgba(139,108,250,.07);
-    --shadow:0 1px 2px rgba(0,0,0,.35), 0 10px 30px rgba(0,0,0,.4);
-    --shadowLg:0 2px 4px rgba(0,0,0,.45), 0 16px 40px rgba(0,0,0,.55);
+    --ink:#E7E3FC; --inkSoft:#D5D2E8; --muted:#A9A6C0; --faint:#6E6B8C;
+    --bone:#28243D; --paper:#312D4B; --hair:#3B3759; --hairSoft:#353150;
+    --gold:#9E72FF; --goldBright:#B492FF; --goldSoft:#3A335A; --goldEdge:#4D4673;
+    --ok:#56CA00; --okSoft:#22300F; --warn:#FFB400; --warnSoft:#33290F;
+    --bad:#FF4C51; --badSoft:#3A1B1D; --info:#16B1FF; --infoSoft:#0F2A3A;
+    --hero:#232132; --side:#2B2940; --btnBg:#8C57FF; --btnFg:#FFFFFF;
+    --goldTint:#2A2447; --wm:rgba(158,114,255,.08);
+    --shadow:0 2px 8px rgba(0,0,0,.35); --shadowLg:0 6px 24px rgba(0,0,0,.5);
+    --sideText:rgba(231,227,252,.72); --sideActiveText:#FFFFFF; --sideActiveBg:linear-gradient(72deg,#9168FF 0%,#8C57FF 100%); --sideBorder:rgba(255,255,255,.07); --sideBrand:#FFFFFF;
   }
   [data-amber] * { box-sizing: border-box; }
   [data-amber] button, [data-amber] select { transition: background .18s ease, border-color .18s ease, color .18s ease, transform .12s ease, box-shadow .18s ease; }
@@ -286,35 +286,35 @@ export default function App() {
       }} signOut={signOut} />}
       {/* sidebar */}
       {user && (!narrow || navOpen) && (
-        <aside style={{ width: 232, background: T.side, color: "#fff", flexShrink: 0, display: "flex",
+        <aside style={{ width: 232, background: T.side, color: "var(--sideText, #fff)", flexShrink: 0, display: "flex",
           flexDirection: "column", position: narrow ? "fixed" : "sticky", top: 0, height: narrow ? "100%" : "100vh", transition: "background .25s ease",
-          zIndex: 50, boxShadow: narrow ? "0 0 60px rgba(0,0,0,.5)" : "none" }}>
-          <div style={{ padding: "22px 20px 18px", borderBottom: "1px solid rgba(212,175,92,.22)" }}>
-            <div style={{ fontFamily: DISPLAY, fontSize: 19, letterSpacing: ".22em", color: "#fff", fontWeight: 500 }}>AMBER</div>
-            <div style={{ fontFamily: DISPLAY, fontSize: 10.5, letterSpacing: ".42em", color: T.goldBright, marginTop: 3, fontWeight: 400 }}>LEAD DESK</div>
+          borderRight: "1px solid var(--sideBorder, transparent)",
+          zIndex: 50, boxShadow: narrow ? "0 0 60px rgba(0,0,0,.4)" : "none" }}>
+          <div style={{ padding: "22px 20px 18px", borderBottom: "1px solid var(--sideBorder, rgba(140,87,255,.18))" }}>
+            <div style={{ fontFamily: DISPLAY, fontSize: 19, letterSpacing: ".22em", color: "var(--sideBrand, #fff)", fontWeight: 500 }}>AMBER</div>
+            <div style={{ fontFamily: DISPLAY, fontSize: 10.5, letterSpacing: ".42em", color: T.gold, marginTop: 3, fontWeight: 400 }}>HOMES</div>
           </div>
-          <nav style={{ flex: 1, overflowY: "auto", padding: "12px 10px" }}>
+          <nav style={{ flex: 1, overflowY: "auto", padding: "12px 12px" }}>
             {NAV.filter(([k]) => user && canOpen(user.role, k)).map(([k, label0, Ic]) => {
               const label = screenLabel(k, user);
               const on = screen === k;
               return (
                 <button key={k} onClick={() => go(k)} style={{ display: "flex", alignItems: "center", gap: 11,
-                  width: "100%", textAlign: "left", background: on ? "rgba(212,175,92,.13)" : "transparent",
-                  border: "none", borderLeft: `2px solid ${on ? T.goldBright : "transparent"}`,
-                  color: on ? T.goldBright : "rgba(255,255,255,.66)", padding: "10px 12px", borderRadius: "0 8px 8px 0",
-                  fontSize: 13, fontWeight: on ? 600 : 500, cursor: "pointer", fontFamily: UI, marginBottom: 2 }}>
+                  width: "100%", textAlign: "left", background: on ? "var(--sideActiveBg, rgba(140,87,255,.16))" : "transparent",
+                  border: "none", color: on ? "var(--sideActiveText, #fff)" : "var(--sideText, rgba(255,255,255,.66))",
+                  padding: "10px 13px", borderRadius: 10, boxShadow: on ? "0 4px 10px rgba(140,87,255,.32)" : "none",
+                  fontSize: 13, fontWeight: on ? 600 : 500, cursor: "pointer", fontFamily: UI, marginBottom: 3 }}>
                   <Ic size={16} /> {label}
                 </button>
               );
             })}
           </nav>
-          <div style={{ padding: "14px 20px", borderTop: "1px solid rgba(255,255,255,.08)", fontSize: 11,
-            color: "rgba(255,255,255,.4)", lineHeight: 1.5 }}>
-            Clickable prototype · mock data<br />
-            <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
-              <span>Signed in: <span style={{ color: T.goldBright }}>{user.name.split(" ")[0]} · {user.roleLabel}</span></span>
+          <div style={{ padding: "14px 20px", borderTop: "1px solid var(--sideBorder, rgba(255,255,255,.08))", fontSize: 11,
+            color: "var(--sideText, rgba(255,255,255,.5))", lineHeight: 1.5, opacity: .9 }}>
+            <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span>Signed in: <span style={{ color: T.gold, fontWeight: 600 }}>{user.name.split(" ")[0]} · {user.roleLabel}</span></span>
               <button onClick={signOut} title="Sign out" style={{ background: "none", border: "none",
-                color: "rgba(255,255,255,.45)", cursor: "pointer", padding: 2 }}><LogOut size={13} /></button>
+                color: "var(--sideText, rgba(255,255,255,.45))", cursor: "pointer", padding: 2 }}><LogOut size={13} /></button>
             </span>
           </div>
         </aside>
@@ -367,7 +367,7 @@ export default function App() {
 }
 
 /* ============================== PRIMITIVES =============================== */
-const card = { background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 14, boxShadow: T.shadow, transition: "background .25s ease, border-color .25s ease" };
+const card = { background: T.paper, border: `1px solid ${T.hairSoft}`, borderRadius: 12, boxShadow: T.shadow, transition: "background .25s ease, border-color .25s ease, box-shadow .25s ease" };
 function SectionTitle({ children, right }) {
   return <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", margin: "26px 0 12px" }}>
     <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
