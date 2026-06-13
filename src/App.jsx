@@ -194,6 +194,20 @@ const LOGIN_CSS = `
   background:rgba(255,255,255,.03);border:1px solid rgba(150,130,210,.22);border-radius:13px;
   padding:15px 10px;outline:none;font-family:${UI};margin-bottom:4px;}
 .al-otp:focus{border-color:rgba(168,130,240,.7);box-shadow:0 0 0 3px rgba(140,90,240,.16);}
+/* Keep browser autofill on-theme: dark fill + white text in every state (Chrome/Safari/Edge). */
+.al-root input:-webkit-autofill,
+.al-root input:-webkit-autofill:hover,
+.al-root input:-webkit-autofill:focus,
+.al-root input:-webkit-autofill:active{
+  -webkit-text-fill-color:#f1eefb !important;
+  -webkit-box-shadow:0 0 0 1000px #161226 inset !important;
+  box-shadow:0 0 0 1000px #161226 inset !important;
+  caret-color:#f1eefb;
+  font-family:${UI};
+  transition:background-color 9999s ease-in-out 0s, color 9999s ease-in-out 0s;
+}
+/* Firefox */
+.al-root input:autofill{ -webkit-text-fill-color:#f1eefb; box-shadow:0 0 0 1000px #161226 inset; }
 .al-forgot-row{text-align:right;margin:-4px 0 16px;}
 .al-forgot{background:none;border:none;cursor:pointer;color:#ab8df1;font-size:12.5px;font-weight:600;font-family:${UI};}
 .al-forgot:hover{color:#c4abf7;}
