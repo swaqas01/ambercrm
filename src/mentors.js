@@ -103,9 +103,29 @@ export async function fetchKnowledge(user) {
       .eq("status", "active").eq("deleted", false)
       .order("priority", { ascending: true });
     const { data, error } = await q;
-    if (error || !Array.isArray(data)) return [];
-    // Admin-only items are usable only by admin-level mentors/users.
-    return data.filter((k) => k.visibility !== "admin_only" || isAdmin);
+    let items = (!error && Array.isArray(data)) ? data.filter((k) => k.visibility !== "admin_only" || isAdmin) : [];
+    // Fold APPROVED PROJECTS into the knowledge pool as 'Project Knowledge' items so
+    // Ask Amber can answer "tell me about <project>". RLS already limits agent visibility.
+    try {
+      const { data: projs } = await supabase.from("projects")
+        .select("id,name,developer,area,property_type,starting_price,payment_plan,handover_date,unit_types,bedroom_options,selling_points,investment_points,risks_notes,golden_visa,target_client,talking_points,do_not_say,status,agent_visible,deleted")
+        .eq("deleted", false).neq("status", "inactive");
+      (projs || []).forEach((p) => {
+        if (!isAdmin && !p.agent_visible) return;
+        const parts = [];
+        const add = (lbl, v) => { if (v) parts.push(lbl + ": " + v); };
+        add("Developer", p.developer); add("Area", p.area); add("Type", p.property_type);
+        add("Status", p.status === "sold_out" ? "Sold out" : p.status === "upcoming" ? "Upcoming" : "Active");
+        add("Starting price", p.starting_price); add("Payment plan", p.payment_plan); add("Handover", p.handover_date);
+        add("Unit types", p.unit_types || p.bedroom_options); add("Selling points", p.selling_points);
+        add("Investment points", p.investment_points); add("Golden Visa", p.golden_visa);
+        add("Target client", p.target_client); add("Risks/notes", p.risks_notes); add("Approved talking points", p.talking_points);
+        if (p.do_not_say) parts.push("DO NOT SAY for this project: " + p.do_not_say);
+        items.push({ id: "proj_" + p.id, title: p.name, category: "Project Knowledge", visibility: "all", priority: 2,
+          content: "Approved project details for " + p.name + ". " + parts.join(". ") });
+      });
+    } catch (e) {}
+    return items;
   } catch (e) { return []; }
 }
 
