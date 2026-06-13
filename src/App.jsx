@@ -109,6 +109,16 @@ const dubaiHour = () => { try { return parseInt(new Date().toLocaleString("en-US
 const greetWord = (h) => h >= 5 && h < 12 ? "Good morning" : h >= 12 && h < 17 ? "Good afternoon" : h >= 17 && h < 22 ? "Good evening" : "Good night";
 const dubaiToday = () => { try { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return new Date().toISOString().slice(0,10); } };
 const firstName = (n) => (n || "there").trim().split(/\s+/)[0];
+// Role picker options + label lookup (kept in sync with ROLES in supabase.js).
+const ROLE_OPTIONS = [
+  ["master_admin", "Master Admin"],
+  ["admin", "Admin"],
+  ["sales_manager", "Sales Manager"],
+  ["agent", "Agent"],
+  ["marketing", "Marketing"],
+  ["accounts", "Accounts"],
+];
+function roleLabel(r) { const m = { master_admin: "Master Admin", admin: "Admin", sales_manager: "Sales Manager", agent: "Agent", marketing: "Marketing", accounts: "Accounts" }; return m[r] || (r ? String(r) : "—"); }
 // Log a lead action to the activity trail (RLS: actor must be the signed-in user).
 function logAction(action, lead, actorId, extra) {
   if (!actorId) return;
@@ -271,7 +281,9 @@ export default function App() {
             const expired = !!(prof.password_expires_at && new Date(prof.password_expires_at).getTime() < Date.now());
             setUser({ name: prof.full_name || session.user.email, email: session.user.email, role: prof.role,
               roleLabel: ri.label, id: session.user.id, mustChangePw: !!prof.force_password_change || !!prof.first_login || expired });
-            setScreen(ri.home === "agent" ? "agent" : "admin");
+            let initial = ri.home === "agent" ? "agent" : "admin";
+            try { const saved = sessionStorage.getItem("amber_screen"); if (saved && saved !== "lead" && saved !== "dealdetail" && canOpen(prof.role, saved)) initial = saved; } catch (e) {}
+            setScreen(initial);
             stampLogin(session.user.id);
           } else if (prof && prof.active === false) { await supabase.auth.signOut(); }
         }
@@ -306,10 +318,14 @@ export default function App() {
       setScreen(roleInfo(user.role).home === "agent" ? "agent" : "admin");
     }
   }, [user, screen]);
+  // Remember the current top-level screen so a refresh returns here (detail screens need an id, so skip them).
+  useEffect(() => {
+    if (user && screen !== "lead" && screen !== "dealdetail") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
+  }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} />, lead: <LeadDetail leadId={detailId} user={user} go={go} />, open: <OpenLeads />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
-    assign: <Assignment />, pipeline: <Pipeline go={go} />, performance: <Performance />,
-    security: <SecurityLog go={go} />, matching: <Matching go={go} />, score: <ScorePage />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} />, lead: <LeadDetail leadId={detailId} user={user} go={go} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
+    assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <Performance go={go} />,
+    security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
     hotdeals: <HotDeals user={user} go={go} />,
   };
@@ -318,7 +334,16 @@ export default function App() {
       transition: "background .25s ease" }}>
       <style>{THEME_CSS}</style>
       {recovery && <ResetPassword onDone={() => { setRecovery(false); setUser(null); try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {} }} />}
-      {!recovery && !user && <LoginFlow onLogin={(u) => { setUser(u); setScreen(u.home === "agent" ? "agent" : "admin"); }} dark={dark} setDark={setDark} />}
+      {!recovery && !authChecked && (
+        <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", background: T.bone, zIndex: 100 }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontFamily: DISPLAY, fontSize: 22, letterSpacing: ".22em", color: T.ink, fontWeight: 500 }}>AMBER</div>
+            <div style={{ fontFamily: DISPLAY, fontSize: 10.5, letterSpacing: ".42em", color: T.gold, marginTop: 3, fontWeight: 400 }}>HOMES</div>
+            <div style={{ marginTop: 16, fontSize: 12.5, color: T.muted }}>Restoring your session…</div>
+          </div>
+        </div>
+      )}
+      {!recovery && authChecked && !user && <LoginFlow onLogin={(u) => { setUser(u); setScreen(u.home === "agent" ? "agent" : "admin"); }} dark={dark} setDark={setDark} />}
       {!recovery && user && user.mustChangePw && <ForcedPasswordChange onDone={() => setUser({ ...user, mustChangePw: false })} signOut={signOut} />}
       {/* sidebar */}
       {user && (!narrow || navOpen) && (
@@ -443,8 +468,8 @@ function Bar({ pct, color = T.gold, h = 8 }) {
   return <div style={{ background: T.hairSoft, borderRadius: 8, height: h, overflow: "hidden" }}>
     <div style={{ width: pct + "%", height: "100%", background: color, borderRadius: 8 }} /></div>;
 }
-function GoldBtn({ children, ghost }) {
-  return <button style={{ background: ghost ? "transparent" : T.btnBg, color: ghost ? T.ink : T.btnFg,
+function GoldBtn({ children, ghost, onClick, ...rest }) {
+  return <button onClick={onClick} {...rest} style={{ background: ghost ? "transparent" : T.btnBg, color: ghost ? T.ink : T.btnFg,
     border: `1px solid ${ghost ? T.hair : T.btnBg}`, borderRadius: 9, padding: "8px 15px", fontSize: 12.5,
     fontWeight: 600, cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 6 }}>{children}</button>;
 }
@@ -1514,154 +1539,218 @@ function LeadDetail({ leadId, user, go }) {
 }
 function SectionMini({ children }) { return <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: T.gold, marginBottom: 8 }}>{children}</div>; }
 
-function Assignment() {
-  const [method, setMethod] = useState("Round-robin");
-  return <div>
-    <div style={{ ...card, padding: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-      <span style={{ fontSize: 12.5, fontWeight: 600, color: T.inkSoft }}>Assignment method</span>
-      {["Manual", "Round-robin", "By language", "By budget", "By project", "By performance"].map((m) => (
-        <button key={m} onClick={() => setMethod(m)} style={{ border: `1px solid ${method === m ? T.gold : T.hair}`,
-          background: method === m ? T.goldSoft : T.paper, color: method === m ? T.gold : T.inkSoft, borderRadius: 8,
-          padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>{m}</button>
-      ))}
-    </div>
-
-    <SectionTitle right={<Chip tone="warn">SLA: first contact 30 min</Chip>}>Unassigned pool · 4</SectionTitle>
-    <div style={{ display: "grid", gap: 10 }}>
-      {POOL.map((p) => (
-        <div key={p.id} style={{ ...card, padding: "14px 16px", display: "flex", alignItems: "center", gap: 13, flexWrap: "wrap" }}>
-          <Av name={p.name} />
-          <div style={{ flex: 1, minWidth: 170 }}>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div>
-            <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{p.source} · {p.area} · {p.budget} · {p.lang}</div>
-          </div>
-          <Chip tone={p.mins > 25 ? "bad" : p.mins > 10 ? "warn" : "ok"}>{p.mins} min in pool</Chip>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <select style={{ border: `1px solid ${T.hair}`, borderRadius: 9, padding: "8px 10px", fontSize: 12.5,
-              fontFamily: UI, background: T.paper, color: T.ink, cursor: "pointer" }}>
-              <option>Suggested: {p.lang === "Mandarin" ? "— hire pending —" : p.lang === "Russian" ? "Lara Petrova" : p.lang === "Urdu" ? "Bilal Hussain" : "Derya Altun"}</option>
-              {AGENTS.map((a) => <option key={a.id}>{a.name}</option>)}
-            </select>
-            <GoldBtn>Assign</GoldBtn>
-          </div>
-        </div>
-      ))}
-    </div>
-
-    <SectionTitle>Reassignment queue</SectionTitle>
-    <div style={{ ...card, overflow: "hidden" }}>
-      {[["L-2440 · Fatima Al Said", "No first contact in 4h 12m (SLA 30 min)", "Bilal Hussain → pool", "bad"],
-        ["L-2436 · Sergei Volkov", "Transfer requested by agent — pending approval", "Omar Farouk → Lara Petrova", "warn"]].map(([l, why, move, tone], i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 16px",
-          borderTop: i ? `1px solid ${T.hairSoft}` : "none", flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{l}</div>
-            <div style={{ fontSize: 11.5, color: T.muted, marginTop: 1 }}>{why}</div>
-          </div>
-          <Chip tone={tone}>{move}</Chip>
-          <div style={{ display: "flex", gap: 8 }}>
-            <GoldBtn>Approve</GoldBtn><GoldBtn ghost>Reject</GoldBtn>
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>;
-}
+/* Lead Assignment is served by <LiveLeads initialAgentFilter="unassigned"> via the SCREENS map (real data + single & bulk assign). */
 
 /* ============================ 5 PIPELINE BOARD =========================== */
-function Pipeline({ go }) {
+function Pipeline({ go, openLead }) {
+  const CANON = ["New", "Contacted", "Interested", "Not Interested", "Hot", "Very Hot", "Warm", "Cold", "Follow-Up Scheduled", "Negotiation", "EOI Collected", "Booking Form Sent", "Closed Won", "Closed Lost", "Dead Lead"];
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const { data, error } = await supabase.from("leads")
+        .select("id,lead_code,client_name,project,area,budget,status,temperature,assigned_agent_name,is_open,deal_value,next_followup,deleted")
+        .order("created_at", { ascending: false }).limit(5000);
+      if (error) throw error;
+      setRows((data || []).filter((l) => !l.deleted));
+    } catch (e) { setErr(e.message || "Could not load the pipeline."); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+  const statusOf = (l) => l.status || "New";
+  const present = Array.from(new Set(rows.map(statusOf)));
+  const cols = [...CANON, ...present.filter((s) => !CANON.includes(s))];
+  const dotColor = (t) => t === "Very Hot" ? T.bad : t === "Hot" ? T.warn : t === "Warm" ? T.gold : T.faint;
+  const aedNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const closedSet = new Set(["Closed Won", "Closed Lost", "Dead Lead"]);
+  const activeCount = rows.filter((l) => !closedSet.has(statusOf(l))).length;
+  const weighted = rows.reduce((s, l) => s + aedNum(l.deal_value), 0);
+  const fmtAED = (n) => n >= 1e6 ? "AED " + (n / 1e6).toFixed(n % 1e6 === 0 ? 0 : 1) + "M" : n > 0 ? "AED " + n.toLocaleString() : "AED 0";
+
   return <div>
-    {filter && go && (
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-        <button onClick={() => go("admin")} style={{ ...miniBtn() }}>← Dashboard</button>
-        <span style={{ fontSize: 12.5, color: T.muted }}>Dashboard <span style={{ color: T.faint }}>›</span> Leads <span style={{ color: T.faint }}>›</span> <b style={{ color: T.ink }}>{filter.label}</b></span>
-        <span style={{ background: T.goldSoft, color: T.gold, borderRadius: 8, padding: "3px 10px", fontSize: 11.5, fontWeight: 700 }}>
-          {filtered.length} {filtered.length === 1 ? "lead" : "leads"}</span>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: DISPLAY, fontSize: 19 }}>Pipeline Board</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, lineHeight: 1.5, maxWidth: 760 }}>Every live lead grouped by its current stage. Click any card to open the full lead. A column with no cards simply has no leads at that stage yet.</div>
+    </div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.goldSoft, color: T.gold, borderRadius: 8, padding: "4px 11px", fontSize: 11.5, fontWeight: 700 }}><Database size={13} /> LIVE DATABASE</span>
+      <Chip tone="muted">{activeCount} active</Chip>
+      <Chip tone="gold">{fmtAED(weighted)} in stages</Chip>
+      <div style={{ flex: 1 }} />
+      <button onClick={load} style={{ ...miniBtn() }}><RefreshCw size={13} /> Refresh</button>
+    </div>
+    {loading ? (
+      <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted, fontSize: 13 }}>Loading the live pipeline…</div>
+    ) : err ? (
+      <div style={{ ...card, padding: 30, textAlign: "center" }}>
+        <AlertTriangle size={22} style={{ color: T.warn }} />
+        <div style={{ fontSize: 13.5, marginTop: 10, color: T.ink }}>{err}</div>
+        <div style={{ marginTop: 14 }}><GoldBtn onClick={load}><RefreshCw size={13} /> Try again</GoldBtn></div>
+      </div>
+    ) : rows.length === 0 ? (
+      <div style={{ ...card, padding: 44, textAlign: "center" }}>
+        <Kanban size={26} style={{ color: T.faint }} />
+        <div style={{ fontFamily: DISPLAY, fontSize: 16, marginTop: 12 }}>No leads in the pipeline yet</div>
+        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 6 }}>Once leads are created or imported, they will appear here grouped by stage.</div>
+      </div>
+    ) : (
+      <div style={{ overflowX: "auto", paddingBottom: 10 }}>
+        <div style={{ display: "flex", gap: 12, minWidth: Math.max(1100, cols.length * 210) }}>
+          {cols.map((st) => {
+            const list = rows.filter((l) => statusOf(l) === st);
+            return <div key={st} style={{ width: 198, flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", borderRadius: 9, background: T.hairSoft, marginBottom: 8 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: T.inkSoft, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{st}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: T.muted, marginLeft: 6 }}>{list.length}</span>
+              </div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {list.map((l) => (
+                  <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ ...card, padding: "10px 11px", cursor: "pointer" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 8, background: dotColor(l.temperature), flexShrink: 0 }} />
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.client_name || "Unnamed lead"}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: T.muted, marginTop: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[l.area, l.budget].filter(Boolean).join(" · ") || "No criteria yet"}</div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8, gap: 6 }}>
+                      {l.is_open ? <Chip tone="warn">Open</Chip> : l.assigned_agent_name ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5, minWidth: 0 }}><Av name={l.assigned_agent_name} size={18} /><span style={{ fontSize: 10.5, color: T.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{firstName(l.assigned_agent_name)}</span></span> : <Chip tone="muted">Unassigned</Chip>}
+                      <span style={{ fontSize: 10, color: T.faint, fontWeight: 600, whiteSpace: "nowrap" }}>{l.lead_code || ""}</span>
+                    </div>
+                  </div>
+                ))}
+                {list.length === 0 && <div style={{ fontSize: 11, color: T.faint, textAlign: "center", padding: "14px 0" }}>—</div>}
+              </div>
+            </div>;
+          })}
+        </div>
       </div>
     )}
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-      <div style={{ fontSize: 12.5, color: T.muted }}>64 active leads · AED 101M weighted</div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <GoldBtn ghost><Filter size={13} /> Filter</GoldBtn><GoldBtn><Plus size={14} /> New lead</GoldBtn>
-      </div>
-    </div>
-    <div style={{ overflowX: "auto", marginTop: 14, paddingBottom: 8 }}>
-      <div style={{ display: "flex", gap: 12, minWidth: 1100 }}>
-        {PIPE.map(([stage, n], col) => (
-          <div key={stage} style={{ width: 195, flexShrink: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.inkSoft }}>{stage}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: T.gold }}>{n}</span>
-            </div>
-            <div style={{ height: 2, background: col >= 6 ? T.gold : T.hair, marginBottom: 10, borderRadius: 2 }} />
-            {LEADS.slice(0, Math.min(2, Math.max(1, 3 - (col % 3)))).map((l, i) => (
-              <div key={stage + i} onClick={() => go("lead")} style={{ ...card, padding: "11px 12px", marginBottom: 8, cursor: "pointer" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 600 }}>{LEADS[(col + i) % LEADS.length].name.split(" ").slice(-2).join(" ")}</span>
-                  {((col + i) % 3 === 0) && <Flame size={12} color={T.bad} />}
-                </div>
-                <div style={{ fontSize: 11, color: T.muted, marginTop: 3 }}>{LEADS[(col + i) % LEADS.length].area} · {LEADS[(col + i) % LEADS.length].budget}</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 7 }}>
-                  <Av name={LEADS[(col + i) % LEADS.length].agent || "A"} size={20} />
-                  <span style={{ fontSize: 10.5, color: T.faint }}>{["2d", "5h", "1d", "3d"][((col + i) % 4)]} in stage</span>
-                </div>
-              </div>
-            ))}
-            <button style={{ width: "100%", border: `1px dashed ${T.hair}`, background: "transparent", color: T.faint,
-              borderRadius: 9, padding: 7, fontSize: 11.5, cursor: "pointer", fontFamily: UI }}>+ Add</button>
-          </div>
-        ))}
-      </div>
-    </div>
   </div>;
 }
 
 /* =========================== 6 AGENT PERFORMANCE ========================= */
-function Performance() {
+function Performance({ go }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const [leadsR, actR, profR, dealsR] = await Promise.all([
+        supabase.from("leads").select("assigned_agent,assigned_agent_name,status,temperature,next_followup,last_contacted,deleted").limit(10000),
+        supabase.from("lead_activity").select("actor_id,action,created_at").limit(20000),
+        supabase.from("profiles").select("id,full_name,role,active,last_login"),
+        supabase.from("deals").select("agent_id,status,deleted").limit(10000),
+      ]);
+      if (leadsR.error) throw leadsR.error;
+      if (profR.error) throw profR.error;
+      const leads = (leadsR.data || []).filter((l) => !l.deleted);
+      const acts = actR.data || [];
+      const profs = profR.data || [];
+      const deals = (dealsR.data || []).filter((d) => !d.deleted);
+      const today = dubaiToday();
+      const closedSet = new Set(["Closed Won", "Closed Lost", "Dead Lead"]);
+      const build = (name, id, role, active, lastLogin, imported) => {
+        const mine = leads.filter((l) => (id && l.assigned_agent === id) || (name && l.assigned_agent_name === name));
+        const myActs = id ? acts.filter((a) => a.actor_id === id) : [];
+        const myDeals = id ? deals.filter((d) => d.agent_id === id) : [];
+        const assigned = mine.length;
+        const contacted = mine.filter((l) => l.last_contacted || (l.status && l.status !== "New")).length;
+        const won = mine.filter((l) => l.status === "Closed Won").length;
+        const notClosed = (l) => !closedSet.has(l.status || "New");
+        const overdue = mine.filter((l) => l.next_followup && l.next_followup < today && notClosed(l)).length;
+        const due = mine.filter((l) => l.next_followup && l.next_followup >= today && notClosed(l)).length;
+        const calls = myActs.filter((a) => a.action === "call").length;
+        const wa = myActs.filter((a) => a.action === "whatsapp").length;
+        const reveals = myActs.filter((a) => a.action === "view_number" || a.action === "reveal_phone").length;
+        const submitted = myDeals.filter((d) => d.status && d.status !== "draft").length;
+        const approved = myDeals.filter((d) => d.status === "approved").length;
+        const conv = assigned ? Math.round((won / assigned) * 100) : 0;
+        return { name, id, role, active, lastLogin, imported, assigned, contacted, won, overdue, due, calls, wa, reveals, submitted, approved, conv };
+      };
+      const accountRows = profs.filter((p) => p.role === "agent" || p.role === "sales_manager")
+        .map((p) => build(p.full_name, p.id, p.role, p.active, p.last_login, false));
+      const known = new Set(profs.map((p) => p.full_name).filter(Boolean));
+      const orphanNames = Array.from(new Set(leads.map((l) => l.assigned_agent_name).filter((n) => n && !known.has(n))));
+      const orphanRows = orphanNames.map((n) => build(n, null, "agent", null, null, true));
+      const all = [...accountRows, ...orphanRows].sort((a, b) => b.assigned - a.assigned);
+      setRows(all);
+    } catch (e) { setErr(e.message || "Could not load performance data."); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+  const totAgents = rows.filter((r) => !r.imported).length;
+  const totAssigned = rows.reduce((s, r) => s + r.assigned, 0);
+  const totWon = rows.reduce((s, r) => s + r.won, 0);
+  const teamConv = totAssigned ? Math.round((totWon / totAssigned) * 100) : 0;
+  const fmtLogin = (d) => { if (!d) return "Never"; try { return new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", timeZone: "Asia/Dubai" }); } catch (e) { return "—"; } };
+  const H = ({ children, w }) => <th style={{ textAlign: "left", padding: "9px 10px", fontSize: 10, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: T.muted, whiteSpace: "nowrap", width: w }}>{children}</th>;
+  const C = ({ children, strong, tone }) => <td style={{ padding: "10px 10px", fontSize: 12.5, color: tone || (strong ? T.ink : T.inkSoft), fontWeight: strong ? 700 : 500, whiteSpace: "nowrap" }}>{children}</td>;
+
   return <div>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
-      <Kpi label="Team conversion" value="13.2%" sub="+1.8 pts vs last month" trend="up" />
-      <Kpi label="Avg response" value="24 min" sub="target 30 min" trend="up" />
-      <Kpi label="Follow-up compliance" value="87%" sub="missed: 14 this month" />
-      <Kpi label="Closed value (Q)" value="AED 33.9M" gold />
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: DISPLAY, fontSize: 19 }}>Agent Performance</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, lineHeight: 1.5, maxWidth: 760 }}>Live metrics per agent, computed from real leads, contact activity and submitted deals. Click any row to see that agent's leads.</div>
     </div>
-    <SectionTitle>Agent leaderboard · June</SectionTitle>
-    <div style={{ ...card, overflow: "hidden" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 1.4fr", gap: 8, padding: "10px 16px",
-        fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted,
-        borderBottom: `1px solid ${T.hair}` }}>
-        <span>Agent</span><span>Leads</span><span>Closed</span><span>Conv.</span><span>Response</span><span>Performance</span>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.goldSoft, color: T.gold, borderRadius: 8, padding: "4px 11px", fontSize: 11.5, fontWeight: 700 }}><Database size={13} /> LIVE DATABASE</span>
+      <div style={{ flex: 1 }} />
+      <button onClick={load} style={{ ...miniBtn() }}><RefreshCw size={13} /> Refresh</button>
+    </div>
+    {loading ? (
+      <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted, fontSize: 13 }}>Calculating live performance…</div>
+    ) : err ? (
+      <div style={{ ...card, padding: 30, textAlign: "center" }}>
+        <AlertTriangle size={22} style={{ color: T.warn }} />
+        <div style={{ fontSize: 13.5, marginTop: 10, color: T.ink }}>{err}</div>
+        <div style={{ marginTop: 14 }}><GoldBtn onClick={load}><RefreshCw size={13} /> Try again</GoldBtn></div>
       </div>
-      {AGENTS.map((a, i) => (
-        <div key={a.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 1.4fr", gap: 8,
-          alignItems: "center", padding: "13px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontFamily: DISPLAY, fontSize: 15, color: i === 0 ? T.gold : T.faint, width: 16 }}>{i + 1}</span>
-            <Av name={a.name} size={30} dark={i === 0} />
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</span>
-          </div>
-          <span style={{ fontSize: 13 }}>{a.leads}</span>
-          <span style={{ fontSize: 13 }}>{a.deals}</span>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{a.conv}%</span>
-          <span style={{ fontSize: 13, color: a.resp.includes("h") ? T.bad : T.inkSoft }}>{a.resp}</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ flex: 1 }}><Bar pct={a.score} color={a.score > 70 ? T.gold : T.bad} h={7} /></div>
-            <span style={{ fontSize: 12, fontWeight: 700, color: a.score > 70 ? T.ink : T.bad, width: 22 }}>{a.score}</span>
-          </div>
+    ) : rows.length === 0 ? (
+      <div style={{ ...card, padding: 44, textAlign: "center" }}>
+        <BarChart3 size={26} style={{ color: T.faint }} />
+        <div style={{ fontFamily: DISPLAY, fontSize: 16, marginTop: 12 }}>No performance data yet</div>
+        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 6 }}>Activity will appear here once agents are added and start working leads.</div>
+      </div>
+    ) : (<>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
+        <Kpi label="Agents" value={totAgents} />
+        <Kpi label="Leads assigned" value={totAssigned} />
+        <Kpi label="Closed won" value={totWon} gold />
+        <Kpi label="Team conversion" value={teamConv + "%"} />
+      </div>
+      <div style={{ ...card, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 940 }}>
+            <thead><tr style={{ borderBottom: `1px solid ${T.hairSoft}` }}>
+              <H>Agent</H><H>Assigned</H><H>Contacted</H><H>Calls</H><H>WhatsApp</H><H>Reveals</H><H>Due</H><H>Overdue</H><H>Won</H><H>Deals</H><H>Approved</H><H>Conv.</H><H>Last login</H>
+            </tr></thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={(r.id || "x") + i} onClick={() => go && go("live", { type: "agent", value: r.name, label: "Agent: " + r.name })}
+                  style={{ borderBottom: i < rows.length - 1 ? `1px solid ${T.hairSoft}` : "none", cursor: "pointer" }}>
+                  <C strong>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                      <Av name={r.name} size={26} />
+                      <span style={{ display: "inline-flex", flexDirection: "column" }}>
+                        <span>{r.name || "Unnamed"}</span>
+                        {r.imported ? <span style={{ fontSize: 9.5, color: T.warn, fontWeight: 600 }}>imported · no account</span>
+                          : <span style={{ fontSize: 9.5, color: r.active === false ? T.bad : T.faint, fontWeight: 600 }}>{r.active === false ? "deactivated" : roleLabel(r.role)}</span>}
+                      </span>
+                    </span>
+                  </C>
+                  <C strong>{r.assigned}</C><C>{r.contacted}</C><C>{r.calls}</C><C>{r.wa}</C><C>{r.reveals}</C>
+                  <C>{r.due}</C><C tone={r.overdue > 0 ? T.bad : undefined}>{r.overdue}</C>
+                  <C strong tone={r.won > 0 ? T.ok : undefined}>{r.won}</C><C>{r.submitted}</C><C>{r.approved}</C>
+                  <C strong>{r.conv}%</C><C>{fmtLogin(r.lastLogin)}</C>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      ))}
-    </div>
-    <SectionTitle>Coaching flags</SectionTitle>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 12 }}>
-      {[["Bilal Hussain", "Response time 1h 12m — 4× team average. 9 leads at First Contact Pending.", "bad"],
-        ["Lara Petrova", "Strong conversion but 5 hot leads idle 3+ days — risk of cooling.", "warn"],
-        ["Omar Farouk", "Export attempt this week — reminded of data policy. Pipeline healthy.", "warn"]].map(([who, note, tone], i) => (
-        <div key={i} style={{ ...card, padding: 14, borderLeft: `3px solid ${tone === "bad" ? T.bad : T.warn}` }}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>{who}</div>
-          <div style={{ fontSize: 12, color: T.inkSoft, marginTop: 4, lineHeight: 1.5 }}>{note}</div>
-        </div>
-      ))}
-    </div>
+      </div>
+      <div style={{ fontSize: 11, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>Calls, WhatsApp and number-reveals are all-time totals from the activity log and are only available for agents with a CRM account. Agents shown as "imported · no account" came in on lead imports and have no login to attribute activity to.</div>
+    </>)}
   </div>;
 }
 
@@ -1750,50 +1839,156 @@ function SecurityLog({ go }) {
 }
 
 /* ========================== 8 PROPERTY MATCHING ========================== */
-function Matching({ go }) {
-  return <div>
-    <div style={{ ...card, padding: 16, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-      <Av name="Mr. Vishal Kalantri" dark />
-      <div style={{ flex: 1, minWidth: 200 }}>
-        <div style={{ fontWeight: 600, fontSize: 14 }}>Matching for: Mr. Vishal Kalantri</div>
-        <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>AED 22–25M · Penthouse/Villa · Palm Jumeirah preference · Golden Visa · Cash · 1–2 months</div>
-      </div>
-      <GoldBtn ghost onClick={() => go && go("lead")}><Filter size={13} /> Edit criteria</GoldBtn>
-    </div>
+function Matching({ go, openLead }) {
+  const [leads, setLeads] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [hotdeals, setHotdeals] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [selId, setSelId] = useState(null);
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const [leadsR, projR, hotR] = await Promise.all([
+        supabase.from("leads").select("id,lead_code,client_name,budget,area,property_type,purpose,bedrooms,timeline,project,status,deleted").order("created_at", { ascending: false }).limit(5000),
+        supabase.from("projects").select("id,name,developer,area,property_type,starting_price,bedroom_options,golden_visa,status,deleted").limit(2000),
+        supabase.from("hot_resale_deals").select("id,project_name,area,property_type,bedrooms,price,status").limit(2000),
+      ]);
+      if (leadsR.error) throw leadsR.error;
+      const ls = (leadsR.data || []).filter((l) => !l.deleted);
+      const ps = (projR.error ? [] : (projR.data || [])).filter((p) => !p.deleted && p.status !== "inactive" && p.status !== "sold_out");
+      const hs = (hotR.error ? [] : (hotR.data || [])).filter((h) => h.status === "Approved");
+      setLeads(ls); setProjects(ps); setHotdeals(hs);
+      const first = ls.find((l) => l.budget || l.area) || ls[0];
+      setSelId((cur) => cur || (first ? first.id : null));
+    } catch (e) { setErr(e.message || "Could not load matching data."); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
 
-    <SectionTitle>Matches · ranked</SectionTitle>
-    <div style={{ display: "grid", gap: 12 }}>
-      {PROJECTS.map((p, i) => (
-        <div key={p.name} style={{ ...card, padding: "16px 18px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap",
-          borderColor: i === 0 ? T.goldEdge : T.hair, background: i === 0 ? T.goldTint : T.paper }}>
-          <div style={{ width: 52, textAlign: "center" }}>
-            <div style={{ fontFamily: DISPLAY, fontSize: 26, color: i === 0 ? T.gold : T.inkSoft }}>{p.match}</div>
-            <div style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: T.faint, fontWeight: 700 }}>Match</div>
-          </div>
-          <div style={{ width: 1, alignSelf: "stretch", background: T.hairSoft }} />
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 15, fontWeight: 600 }}>{p.name}</span>
-              {i === 0 && <Chip tone="gold">Best fit</Chip>}
-            </div>
-            <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>
-              {p.dev} · {p.type} · {p.price} · Handover {p.handover} · Plan {p.plan} · Yield {p.yieldPct}</div>
-            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-              {["Budget ✓", "Golden Visa ✓", p.type === "Villa" ? "Type ✓" : "Type ~", i < 2 ? "Area ✓" : "Area ~"].map((t) => (
-                <Chip key={t} tone={t.includes("✓") ? "ok" : "muted"}>{t}</Chip>))}
-            </div>
-          </div>
-          <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 9.5, letterSpacing: ".1em", textTransform: "uppercase", color: T.faint, fontWeight: 700 }}>Amber Score</div>
-            <div style={{ fontFamily: DISPLAY, fontSize: 22, color: T.gold }}>{p.score}</div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            <GoldBtn><MessageCircle size={13} /> Share via WhatsApp</GoldBtn>
-            <GoldBtn ghost>Attach to lead</GoldBtn>
-          </div>
-        </div>
-      ))}
+  const toNum = (raw) => {
+    if (!raw) return null;
+    let s = String(raw).toLowerCase().replace(/aed|aud|usd|,|\s/g, "");
+    const mult = /m/.test(s) ? 1e6 : /k/.test(s) ? 1e3 : 1;
+    const n = parseFloat(s.replace(/[^0-9.]/g, ""));
+    return Number.isFinite(n) ? n * mult : null;
+  };
+  const parseRange = (raw) => {
+    if (!raw) return null;
+    const s = String(raw).trim();
+    const plus = /\+\s*$/.test(s);
+    const parts = s.split(/\s*(?:–|—|-|to)\s*/i).filter(Boolean);
+    if (parts.length >= 2) {
+      let a = parts[0], b = parts[1];
+      if (!/[mk]/i.test(a) && /[mk]/i.test(b)) a = a + b.replace(/[0-9.]/g, "");
+      const lo = toNum(a), hi = toNum(b);
+      if (lo == null && hi == null) return null;
+      return { lo: lo ?? hi, hi: hi ?? lo };
+    }
+    const v = toNum(s);
+    if (v == null) return null;
+    if (plus) return { lo: v, hi: Infinity };
+    return { lo: v * 0.9, hi: v * 1.1 };
+  };
+  const norm = (x) => String(x || "").toLowerCase().trim();
+  const overlapText = (a, b) => { const x = norm(a), y = norm(b); if (!x || !y) return null; return x.includes(y) || y.includes(x); };
+
+  const sel = leads.find((l) => l.id === selId) || null;
+  const leadRange = sel ? parseRange(sel.budget) : null;
+  const score = (price, area, type, golden) => {
+    const factors = [];
+    let pts = 0;
+    // budget 40
+    const pr = toNum(price);
+    if (!leadRange || pr == null) { pts += 20; factors.push({ k: "Budget", s: "~" }); }
+    else if (pr >= leadRange.lo * 0.85 && pr <= (leadRange.hi === Infinity ? Infinity : leadRange.hi * 1.15)) { pts += 40; factors.push({ k: "Budget", s: "ok" }); }
+    else factors.push({ k: "Budget", s: "no" });
+    // area 30
+    const aov = overlapText(sel && sel.area, area);
+    if (aov == null) { pts += 15; factors.push({ k: "Area", s: "~" }); }
+    else if (aov) { pts += 30; factors.push({ k: "Area", s: "ok" }); }
+    else factors.push({ k: "Area", s: "no" });
+    // type 20
+    const tov = overlapText(sel && sel.property_type, type);
+    if (tov == null) { pts += 10; factors.push({ k: "Type", s: "~" }); }
+    else if (tov) { pts += 20; factors.push({ k: "Type", s: "ok" }); }
+    else factors.push({ k: "Type", s: "no" });
+    // golden visa 10 (only if lead purpose mentions visa)
+    if (sel && /visa/i.test(sel.purpose || "")) {
+      if (golden) { pts += 10; factors.push({ k: "Golden Visa", s: "ok" }); }
+      else factors.push({ k: "Golden Visa", s: "no" });
+    }
+    return { pct: Math.round(pts), factors };
+  };
+
+  const matches = sel ? [
+    ...projects.map((p) => ({ id: "p" + p.id, kind: "Project", name: p.name, meta: [p.developer, p.area].filter(Boolean).join(" · "), price: p.starting_price, ...score(p.starting_price, p.area, p.property_type, p.golden_visa) })),
+    ...hotdeals.map((h) => ({ id: "h" + h.id, kind: "Hot Deal", name: h.project_name || "Resale unit", meta: [h.area, h.property_type].filter(Boolean).join(" · "), price: h.price, ...score(h.price, h.area, h.property_type, false) })),
+  ].sort((a, b) => b.pct - a.pct).slice(0, 25) : [];
+
+  const inventory = projects.length + hotdeals.length;
+  const FBadge = ({ f }) => { const tone = f.s === "ok" ? "ok" : f.s === "no" ? "bad" : "muted"; const mark = f.s === "ok" ? "✓" : f.s === "no" ? "✗" : "~"; return <Chip tone={tone}>{mark} {f.k}</Chip>; };
+
+  return <div>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: DISPLAY, fontSize: 19 }}>Property Matching</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, lineHeight: 1.5, maxWidth: 760 }}>Pick a real lead and see how your live projects and approved hot resale deals score against their budget, area and unit type. A "~" means that detail isn't recorded on the lead or the listing yet, so it's scored neutrally rather than held against the match.</div>
     </div>
+    {loading ? (
+      <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted, fontSize: 13 }}>Loading leads and inventory…</div>
+    ) : err ? (
+      <div style={{ ...card, padding: 30, textAlign: "center" }}>
+        <AlertTriangle size={22} style={{ color: T.warn }} />
+        <div style={{ fontSize: 13.5, marginTop: 10, color: T.ink }}>{err}</div>
+        <div style={{ marginTop: 14 }}><GoldBtn onClick={load}><RefreshCw size={13} /> Try again</GoldBtn></div>
+      </div>
+    ) : leads.length === 0 ? (
+      <div style={{ ...card, padding: 44, textAlign: "center" }}>
+        <Users size={26} style={{ color: T.faint }} />
+        <div style={{ fontFamily: DISPLAY, fontSize: 16, marginTop: 12 }}>No leads to match yet</div>
+        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 6 }}>Add or import leads with a budget and area to enable property matching.</div>
+      </div>
+    ) : inventory === 0 ? (
+      <div style={{ ...card, padding: 44, textAlign: "center" }}>
+        <Building2 size={26} style={{ color: T.faint }} />
+        <div style={{ fontFamily: DISPLAY, fontSize: 16, marginTop: 12 }}>Not enough real project / property data yet</div>
+        <div style={{ fontSize: 12.5, color: T.muted, marginTop: 6, maxWidth: 460, marginLeft: "auto", marginRight: "auto" }}>Add active projects or approve hot resale deals and they'll be matched against your leads here.</div>
+        <div style={{ marginTop: 16 }}><GoldBtn onClick={() => go && go("projects")}><Building2 size={13} /> Open Projects</GoldBtn></div>
+      </div>
+    ) : (<>
+      <div style={{ ...card, padding: 16, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <Av name={sel ? sel.client_name : "?"} dark />
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted, marginBottom: 6 }}>Matching for</div>
+          <select value={selId || ""} onChange={(e) => setSelId(e.target.value)} style={{ width: "100%", maxWidth: 460, padding: "9px 11px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontSize: 13, fontWeight: 600 }}>
+            {leads.map((l) => <option key={l.id} value={l.id}>{(l.client_name || "Unnamed") + (l.lead_code ? " · " + l.lead_code : "") + (l.budget ? " · " + l.budget : "")}</option>)}
+          </select>
+          {sel && <div style={{ fontSize: 12, color: T.muted, marginTop: 8 }}>{[sel.budget, sel.area, sel.property_type, /visa/i.test(sel.purpose || "") ? "Golden Visa" : null, sel.timeline].filter(Boolean).join(" · ") || "No criteria recorded on this lead yet"}</div>}
+        </div>
+        {sel && <GoldBtn ghost onClick={() => openLead && openLead(sel.id)}><Filter size={13} /> Edit criteria</GoldBtn>}
+      </div>
+
+      <SectionTitle right={<span style={{ fontSize: 11.5, color: T.muted }}>{matches.length} ranked · {projects.length} projects · {hotdeals.length} hot deals</span>}>Matches · ranked</SectionTitle>
+      <div style={{ display: "grid", gap: 12 }}>
+        {matches.map((m, i) => (
+          <div key={m.id} style={{ ...card, padding: "16px 18px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", borderColor: i === 0 ? T.goldEdge : T.hairSoft, background: i === 0 ? T.goldTint : T.paper }}>
+            <div style={{ width: 56, textAlign: "center", flexShrink: 0 }}>
+              <div style={{ fontFamily: DISPLAY, fontSize: 26, color: i === 0 ? T.gold : T.inkSoft }}>{m.pct}</div>
+              <div style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: T.faint, fontWeight: 700 }}>Match</div>
+            </div>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontWeight: 700, fontSize: 14, color: T.ink }}>{m.name}</span>
+                <Chip tone={m.kind === "Hot Deal" ? "warn" : "info"}>{m.kind}</Chip>
+                {i === 0 && <Chip tone="gold">Best fit</Chip>}
+              </div>
+              <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>{[m.meta, m.price].filter(Boolean).join(" · ") || "Details not recorded"}</div>
+              <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap" }}>{m.factors.map((f) => <FBadge key={f.k} f={f} />)}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>)}
   </div>;
 }
 
@@ -2024,74 +2219,7 @@ function SettingsPage() {
 }
 
 /* ============================= OPEN LEADS ================================ */
-function OpenLeads() {
-  const [revealed, setRevealed] = useState({});
-  const toggle = (id, kind) => setRevealed((r) => ({ ...r, [id + kind]: !r[id + kind] }));
-  return <div>
-    <div style={{ ...card, padding: "15px 18px", display: "flex", gap: 12, alignItems: "flex-start",
-      borderLeft: `3px solid ${T.gold}` }}>
-      <Unlock size={17} color={T.gold} style={{ flexShrink: 0, marginTop: 2 }} />
-      <div style={{ fontSize: 12.5, color: T.inkSoft, lineHeight: 1.6 }}>
-        <b style={{ color: T.ink }}>Open pool rule:</b> any lead not closed within <b style={{ color: T.gold }}>60 days</b> of
-        assignment is automatically released here, visible to <b>all agents</b>. Name and project are open; phone and
-        email stay masked until revealed — <b>every reveal is logged</b> with agent, time, and device. First agent to
-        log a meaningful contact claims the lead.
-      </div>
-    </div>
-
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginTop: 14 }}>
-      <Kpi label="Open leads" value={OPEN_LEADS.length} sub="auto-released at 60 days" />
-      <Kpi label="Combined budget" value="AED 29.3M" gold />
-      <Kpi label="Reveals this week" value="11" sub="all logged" />
-      <Kpi label="Reclaimed & closed" value="3" sub="last 90 days" trend="up" />
-    </div>
-
-    <SectionTitle right={<Chip tone="gold">Visible to all agents</Chip>}>Open list</SectionTitle>
-    <div style={{ ...card, overflow: "hidden" }}>
-      <div style={{ overflowX: "auto" }}>
-        <div style={{ minWidth: 880 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1.7fr 0.8fr 0.9fr 0.9fr 1.5fr 1.5fr 1fr", gap: 8,
-            padding: "10px 16px", fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase",
-            color: T.muted, borderBottom: `1px solid ${T.hair}`, background: T.bone }}>
-            <span>Client</span><span>Project</span><span>Type</span><span>Budget</span><span>Age</span>
-            <span>Phone</span><span>Email</span><span>Action</span>
-          </div>
-          {OPEN_LEADS.map((l, i) => (
-            <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.7fr 0.8fr 0.9fr 0.9fr 1.5fr 1.5fr 1fr",
-              gap: 8, alignItems: "center", padding: "13px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5 }}>
-              <div>
-                <div style={{ fontWeight: 600 }}>{l.name}</div>
-                <div style={{ fontSize: 10.5, color: T.faint }}>{l.id} · was {l.lastAgent}</div>
-              </div>
-              <span style={{ color: T.inkSoft }}>{l.project}</span>
-              <Chip tone={l.ptype === "Off-plan" ? "gold" : "muted"}>{l.ptype}</Chip>
-              <span style={{ fontWeight: 600 }}>{l.budget}</span>
-              <Chip tone={l.days > 70 ? "bad" : "warn"}>{l.days}d</Chip>
-              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <span style={{ fontSize: 12 }}>{revealed[l.id + "p"] ? l.phoneFull : l.phone}</span>
-                <button onClick={() => toggle(l.id, "p")} title="Reveal is logged" style={{ border: `1px solid ${T.goldEdge}`,
-                  background: T.goldSoft, color: T.gold, borderRadius: 7, padding: "2px 7px", fontSize: 10, fontWeight: 700,
-                  cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 3 }}>
-                  {revealed[l.id + "p"] ? <EyeOff size={10} /> : <Eye size={10} />}{revealed[l.id + "p"] ? "Hide" : "Reveal"}</button>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <span style={{ fontSize: 12 }}>{revealed[l.id + "e"] ? l.emailFull : l.email}</span>
-                <button onClick={() => toggle(l.id, "e")} title="Reveal is logged" style={{ border: `1px solid ${T.goldEdge}`,
-                  background: T.goldSoft, color: T.gold, borderRadius: 7, padding: "2px 7px", fontSize: 10, fontWeight: 700,
-                  cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 3 }}>
-                  {revealed[l.id + "e"] ? <EyeOff size={10} /> : <Eye size={10} />}{revealed[l.id + "e"] ? "Hide" : "Reveal"}</button>
-              </div>
-              <GoldBtn><Phone size={12} /> Claim</GoldBtn>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-    <div style={{ fontSize: 11, color: T.faint, marginTop: 10 }}>
-      Reveals on open leads are rate-limited and velocity-monitored like all contact data — mass-revealing triggers a security alert.
-    </div>
-  </div>;
-}
+/* Open Leads is served by <LiveLeads initialAgentFilter="open"> via the SCREENS map (real open pool + assign). */
 
 /* ===================== AI KNOWLEDGE BASE (MASTER ADMIN) =================== */
 const KB_CATEGORIES = ["Company Overview","Awards and Recognition","Developer Relationships","Services","Sales Scripts","WhatsApp Templates","Area Knowledge","Project Knowledge","Developer Knowledge","Investment Guidance","Golden Visa Guidance","Internal Policies","CRM Usage","Objection Handling","Compliance / Do Not Say","Market Updates","FAQs","Agent Training"];
@@ -3619,7 +3747,7 @@ function LoginFlow({ onLogin, dark, setDark }) {
   );
 }
 
-function LiveLeads({ user, filter, go, openLead }) {
+function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, heading = null, sub = null }) {
   const isAgent = user && user.role === "agent";
   const [leads, setLeads] = useState(null);   // null = loading
   const [err, setErr] = useState("");
@@ -3630,7 +3758,7 @@ function LiveLeads({ user, filter, go, openLead }) {
   const [showImport, setShowImport] = useState(false);
   const [me, setMe] = useState(null);
   const [sort, setSort] = useState("newest");
-  const [agentFilter, setAgentFilter] = useState(null);   // null | 'unassigned' | 'open' | <agentId>
+  const [agentFilter, setAgentFilter] = useState(initialAgentFilter);   // null | 'unassigned' | 'open' | <agentId>
   const [agents, setAgents] = useState([]);
   const [selected, setSelected] = useState({});            // { [leadId]: true }
   const [showBulk, setShowBulk] = useState(false);
@@ -3757,6 +3885,10 @@ function LiveLeads({ user, filter, go, openLead }) {
   };
 
   return <div>
+    {heading && (<div style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: DISPLAY, fontSize: 19 }}>{heading}</div>
+      {sub && <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, lineHeight: 1.5, maxWidth: 760 }}>{sub}</div>}
+    </div>)}
     {filter && go && (
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
         <button onClick={() => go(isAgent ? "agent" : "admin")} style={{ ...miniBtn() }}>← {isAgent ? "Dashboard" : "Dashboard"}</button>
