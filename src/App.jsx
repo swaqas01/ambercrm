@@ -224,6 +224,7 @@ const NAV = [
   ["hotdeals", "Hot Resale Deals", Flame],
   ["ailogs", "Ask Amber Logs", Sparkle],
   ["kb", "AI Knowledge Base", BookOpen],
+  ["aisources", "AI Sources & Web", Globe],
   ["settings", "Settings & Permissions", Settings],
 ];
 
@@ -328,6 +329,7 @@ export default function App() {
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
     hotdeals: <HotDeals user={user} go={go} />,
+    aisources: <AiSources user={user} />,
   };
   return (
     <div data-amber={dark ? "dark" : "light"} data-accent={accent} style={{ fontFamily: UI, background: T.bone, minHeight: 600, display: "flex", color: T.ink,
@@ -3407,6 +3409,175 @@ function Deals({ user, go, openDeal }) {
   </div>;
 }
 
+/* ===================== AI SOURCES & WEB RESEARCH (MASTER ADMIN) ===================== */
+function AiSources({ user }) {
+  const [sources, setSources] = useState(null);
+  const [err, setErr] = useState("");
+  const [webOn, setWebOn] = useState(false);
+  const [savingToggle, setSavingToggle] = useState(false);
+  const [logs, setLogs] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [q, setQ] = useState("");
+  const TRUST = { 1: "Government & verification", 2: "Official developers", 3: "Portals & market data", 4: "News & market updates", 5: "Training & regulation" };
+  const CATS = ["government", "developer", "portal", "news", "regulation"];
+
+  const load = async () => {
+    setErr("");
+    try {
+      const [sr, st, lg] = await Promise.all([
+        supabase.from("ai_sources").select("*").order("trust_level", { ascending: true }).order("domain", { ascending: true }),
+        supabase.from("app_settings").select("value").eq("key", "web_research_enabled").maybeSingle(),
+        supabase.from("ai_web_log").select("*").order("created_at", { ascending: false }).limit(20),
+      ]);
+      if (sr.error) { setErr("load"); setSources([]); return; }
+      setSources(sr.data || []);
+      setWebOn(st.data && String(st.data.value).toLowerCase() === "true");
+      setLogs(lg.data || []);
+    } catch (e) { setErr("load"); setSources([]); }
+  };
+  useEffect(() => { load(); }, []);
+
+  if (user?.role !== "master_admin") return <div style={{ ...card, padding: 30, textAlign: "center" }}>
+    <Lock size={24} color={T.faint} style={{ marginBottom: 8 }} />
+    <div style={{ fontWeight: 700 }}>Master Admin only</div>
+    <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>AI sources and web research are managed by the Master Admin.</div></div>;
+
+  const toggleWeb = async () => {
+    const next = !webOn; setSavingToggle(true); setWebOn(next);
+    try { await supabase.from("app_settings").upsert({ key: "web_research_enabled", value: next ? "true" : "false", updated_by: user.id, updated_at: new Date().toISOString() }, { onConflict: "key" }); }
+    catch (e) { setWebOn(!next); }
+    setSavingToggle(false);
+  };
+  const toggleActive = async (s) => {
+    setSources((arr) => arr.map((x) => x.id === s.id ? { ...x, active: !x.active } : x));
+    try { await supabase.from("ai_sources").update({ active: !s.active, updated_at: new Date().toISOString() }).eq("id", s.id); } catch (e) { load(); }
+  };
+  const normDomain = (d) => String(d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "");
+  const saveSource = async (f) => {
+    const domain = normDomain(f.domain);
+    if (!domain || !f.name.trim()) return { error: "Domain and name are required." };
+    const row = { domain, name: f.name.trim(), trust_level: Number(f.trust_level) || 3, category: f.category || "developer", active: f.active !== false, notes: f.notes || null, updated_at: new Date().toISOString() };
+    try {
+      if (editing && editing.id) { const { error } = await supabase.from("ai_sources").update(row).eq("id", editing.id); if (error) throw error; }
+      else { const { error } = await supabase.from("ai_sources").insert({ ...row, added_by: user.id }); if (error) throw error; }
+      setShowForm(false); setEditing(null); load(); return {};
+    } catch (e) { return { error: /duplicate|unique/i.test(e.message || "") ? "That domain is already in the list." : (e.message || "Could not save.") }; }
+  };
+  const removeSource = async (s) => { setSources((arr) => arr.filter((x) => x.id !== s.id)); try { await supabase.from("ai_sources").delete().eq("id", s.id); } catch (e) { load(); } };
+
+  const fmt = (d) => { if (!d) return "—"; try { return new Date(d).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "numeric", minute: "2-digit", timeZone: "Asia/Dubai" }); } catch (e) { return "—"; } };
+  const list = (sources || []).filter((s) => { if (!q.trim()) return true; const t = q.toLowerCase(); return (s.domain + " " + s.name + " " + s.category).toLowerCase().includes(t); });
+  const groups = [1, 2, 3, 4, 5].map((lvl) => [lvl, list.filter((s) => s.trust_level === lvl)]).filter(([, g]) => g.length);
+  const activeCount = (sources || []).filter((s) => s.active).length;
+
+  return <div>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: DISPLAY, fontSize: 19 }}>AI Sources &amp; Web Research</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, lineHeight: 1.5, maxWidth: 760 }}>Ask Amber always checks the Amber Homes Knowledge Base first. When web research is ON, it may also search ONLY the approved domains below — official DLD/government, official developers, then portals/news — and must state a confidence level and source. It will never invent project details.</div>
+    </div>
+
+    {err && <div style={{ ...card, padding: 14, marginBottom: 14, borderColor: T.badSoft, color: T.bad, fontSize: 13 }}>Could not load AI sources. Please refresh.</div>}
+
+    <div style={{ ...card, padding: 16, marginBottom: 16, borderColor: webOn ? T.goldEdge : T.hairSoft, background: webOn ? T.goldTint : T.paper }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <Globe size={22} color={webOn ? T.gold : T.muted} />
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Approved-source web research is {webOn ? "ON" : "OFF"}</div>
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 3, lineHeight: 1.5 }}>{webOn ? "Ask Amber may search the approved domains below when something isn't in the Knowledge Base." : "Ask Amber answers only from the Knowledge Base and approved internal project notes. Turn this on to let it search approved official sources too."}</div>
+        </div>
+        <button onClick={toggleWeb} disabled={savingToggle} style={{ background: webOn ? T.btnBg : T.paper, color: webOn ? T.btnFg : T.ink, border: `1px solid ${webOn ? T.btnBg : T.hair}`, borderRadius: 999, padding: "9px 18px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: savingToggle ? 0.6 : 1 }}>{webOn ? "Turn off" : "Turn on"}</button>
+      </div>
+      <div style={{ fontSize: 11, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>Note: web research uses Anthropic's server-side web search and only works if your Anthropic plan/key supports it. If answers start failing after turning this on, turn it back off — normal Knowledge-Base answers are unaffected.</div>
+    </div>
+
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok, borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}><Database size={12} /> {sources === null ? "Loading…" : `${activeCount} active of ${sources.length} sources`}</span>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={load} style={{ ...miniBtn() }}><RefreshCw size={13} /> Refresh</button>
+        <button onClick={() => { setEditing(null); setShowForm(true); }} style={{ background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 9, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 6 }}><Plus size={14} /> Add source</button>
+      </div>
+    </div>
+
+    <div style={{ ...card, padding: "10px 14px", marginTop: 14, display: "flex", alignItems: "center", gap: 9 }}>
+      <Search size={15} color={T.muted} />
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search domain, name, category…" style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 13, fontFamily: UI, color: T.ink }} />
+    </div>
+
+    {sources === null ? <div style={{ ...card, padding: 40, marginTop: 14, textAlign: "center", color: T.muted }}>Loading sources…</div> :
+      list.length === 0 ? <div style={{ ...card, padding: 36, marginTop: 14, textAlign: "center", color: T.muted, fontSize: 13 }}>No sources match.</div> :
+      groups.map(([lvl, g]) => (
+        <div key={lvl} style={{ marginTop: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ fontFamily: DISPLAY, fontSize: 14 }}>Trust {lvl}</span>
+            <span style={{ fontSize: 11.5, color: T.muted }}>· {TRUST[lvl]}</span>
+          </div>
+          <div style={{ ...card, overflow: "hidden" }}>
+            {g.map((s, i) => (
+              <div key={s.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr 0.8fr 0.7fr auto", gap: 10, alignItems: "center", padding: "11px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5 }}>
+                <span style={{ fontWeight: 600, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
+                <span style={{ color: T.gold, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.domain}</span>
+                <Chip tone="muted">{s.category}</Chip>
+                <button onClick={() => toggleActive(s)} title={s.active ? "Active — click to disable" : "Disabled — click to enable"} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, justifySelf: "start" }}>
+                  <Chip tone={s.active ? "ok" : "muted"}>{s.active ? "Active" : "Off"}</Chip></button>
+                <span style={{ display: "flex", gap: 6, justifySelf: "end" }}>
+                  <button onClick={() => { setEditing(s); setShowForm(true); }} title="Edit" style={{ ...miniBtn(), padding: "5px 9px" }}><Pencil size={12} /></button>
+                  <button onClick={() => removeSource(s)} title="Remove" style={{ ...miniBtn(), padding: "5px 9px", color: T.bad }}><Trash2 size={12} /></button>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+    <SectionTitle>Recent web-research activity</SectionTitle>
+    <div style={{ ...card, padding: logs.length ? 0 : 18, overflow: "hidden" }}>
+      {logs.length === 0 ? <div style={{ color: T.muted, fontSize: 12.5 }}>No web-research queries yet. They appear here when web research is on and Ask Amber searches an approved source.</div> :
+        logs.map((l, i) => (
+          <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5 }}>
+            <Globe size={14} color={l.used ? T.gold : T.faint} style={{ flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.query || "—"}</div>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>{l.user_name || "User"} · {fmt(l.created_at)}</div>
+            </div>
+            <Chip tone={l.used ? "ok" : "muted"}>{l.used ? "Searched" : "KB only"}</Chip>
+          </div>
+        ))}
+    </div>
+
+    {showForm && <AiSourceForm initial={editing} cats={CATS} trust={TRUST} onSave={saveSource} onClose={() => { setShowForm(false); setEditing(null); }} />}
+  </div>;
+}
+
+function AiSourceForm({ initial, cats, trust, onSave, onClose }) {
+  const [f, setF] = useState({ domain: initial?.domain || "", name: initial?.name || "", trust_level: initial?.trust_level || 2, category: initial?.category || "developer", active: initial ? initial.active !== false : true, notes: initial?.notes || "" });
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const lbl = { fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted, display: "block", marginTop: 12, marginBottom: 5 };
+  const fld = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box" };
+  const save = async () => { setBusy(true); setErr(""); const r = await onSave(f); setBusy(false); if (r && r.error) setErr(r.error); };
+  return <Modal title={initial ? "Edit approved source" : "Add approved source"} onClose={onClose}>
+    <span style={{ ...lbl, marginTop: 0 }}>Domain *</span>
+    <input value={f.domain} onChange={(e) => set("domain", e.target.value)} placeholder="e.g. emaar.com" style={fld} />
+    <span style={lbl}>Name *</span>
+    <input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Emaar" style={fld} />
+    <div style={{ display: "flex", gap: 10 }}>
+      <div style={{ flex: 1 }}><span style={lbl}>Trust level</span>
+        <select value={f.trust_level} onChange={(e) => set("trust_level", e.target.value)} style={{ ...fld, background: T.paper }}>
+          {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} — {trust[n]}</option>)}</select></div>
+      <div style={{ flex: 1 }}><span style={lbl}>Category</span>
+        <select value={f.category} onChange={(e) => set("category", e.target.value)} style={{ ...fld, background: T.paper }}>
+          {cats.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
+    </div>
+    <span style={lbl}>Notes</span>
+    <input value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Optional — what to use this source for" style={fld} />
+    <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, fontSize: 13, cursor: "pointer" }}>
+      <input type="checkbox" checked={f.active} onChange={(e) => set("active", e.target.checked)} style={{ width: 15, height: 15 }} /> Active (Ask Amber may use it when web research is on)</label>
+    {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginTop: 12 }}>{err}</div>}
+    <button onClick={save} disabled={busy} style={{ width: "100%", marginTop: 16, background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: busy ? 0.6 : 1 }}>{busy ? "Saving…" : initial ? "Save changes" : "Add source"}</button>
+  </Modal>;
+}
+
 /* ========================= AI CHAT (ALL USERS) =========================== */
 function AskAmber({ narrow, user }) {
   const [open, setOpen] = useState(false);
@@ -3465,11 +3636,19 @@ function AskAmber({ narrow, user }) {
         logAi({ user, mentor, question: text, status: "error" });
       } else {
         const reply = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
-        const sources = picked.used && picked.used.length
+        // Approved-source web research (only happens when Master Admin has enabled it; domains are restricted server-side).
+        const webBlocks = (data.content || []).filter((b) => b.type === "web_search_tool_result");
+        const webUsed = webBlocks.length > 0 || (data.content || []).some((b) => b.type === "server_tool_use" && b.name === "web_search");
+        const webDomains = [];
+        webBlocks.forEach((b) => (Array.isArray(b.content) ? b.content : []).forEach((r) => {
+          try { const h = new URL(r.url).hostname.replace(/^www\./, ""); if (h && !webDomains.includes(h)) webDomains.push(h); } catch (e) {} }));
+        const kbSources = picked.used && picked.used.length
           ? picked.used.filter((u) => !/do not say|compliance/i.test(u.title)).slice(0, 3).map((u) => u.title)
           : [];
+        const sources = [...kbSources, ...webDomains.slice(0, 4)];
         setMsgs((m) => [...m, { role: "assistant", text: reply || "Please try again.", sources }]);
         logAi({ user, mentor, question: text, responseSum: reply, fullResponse: reply, category: categorize(text), model: data.model, status: "success", tokensIn: data.usage && data.usage.input_tokens, tokensOut: data.usage && data.usage.output_tokens });
+        if (data.web_enabled) { try { supabase.from("ai_web_log").insert({ user_id: user.id, user_name: user.name, user_role: user.role, query: String(text).slice(0, 500), used: webUsed, domains: data.web_domains || 0 }); } catch (e) {} }
       }
     } catch (e) {
       setMsgs((m) => [...m, { role: "assistant", text: "Ask Amber is temporarily unavailable. Please try again." }]);

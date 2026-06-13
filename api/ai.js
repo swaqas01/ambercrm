@@ -4,6 +4,8 @@
 // hold even if the client is bypassed. Model is configurable via env.
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5";
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "https://fkeniejcitwlqfatkopi.supabase.co";
+const ANON_KEY     = process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_3M0eOBeRvTuC8yjMWWcEqg_BPZfYyKJ";
 
 const SAFETY = `You are an internal AI mentor for Amber Homes Real Estate, a Dubai brokerage. You are called "Ask Amber" and you speak ONLY to Amber Homes staff.
 
@@ -19,7 +21,28 @@ COMPANY CLAIMS — CRITICAL: When describing Amber Homes, rely ONLY on facts in 
 
 DATA: Only use the CRM context provided below (if any). It already contains ONLY the data this user is permitted to see. Never claim to access other agents' leads, company-wide data, commissions of others, admin analytics, audit logs, or user data. If a user asks for data not in the context, say you can only help with their own leads. If the context is empty or lacks the answer, say you don't have enough CRM data for that yet — do NOT invent leads, names, or numbers.
 
-PROJECTS — CRITICAL: When asked about a specific project (its selling points, payment plan, price, handover, availability, risks, brochure, WhatsApp message, or which clients to pitch), use ONLY the approved project details that appear in the knowledge section (items in category "Project Knowledge", titled with the project name). If the project the user names is NOT present in the knowledge section, reply with EXACTLY this sentence and nothing more: "I do not have approved project details for this yet. Please ask Master Admin to add it to the Project Knowledge Base." Do NOT invent or estimate prices, payment plans, handover dates, unit availability, commission, or ROI for any project. Do NOT say a project is "sold out" or "available" unless its Status field says so. Strictly obey any per-project "DO NOT SAY" instruction present in that project's knowledge item.`;
+PROJECTS — CRITICAL (default, no web research): When asked about a specific project (its selling points, payment plan, price, handover, availability, risks, brochure, WhatsApp message, or which clients to pitch), use ONLY the approved project details that appear in the knowledge section (items in category "Project Knowledge", titled with the project name). If the project the user names is NOT present in the knowledge section, reply with EXACTLY this sentence and nothing more: "I do not have approved project details for this yet. Please ask Master Admin to add it to the Project Knowledge Base." Do NOT invent or estimate prices, payment plans, handover dates, unit availability, commission, or ROI for any project. Do NOT say a project is "sold out" or "available" unless its Status field says so. Strictly obey any per-project "DO NOT SAY" instruction present in that project's knowledge item.`;
+
+// Instructions that apply ONLY when Master Admin has enabled web research. They
+// override the "reply EXACTLY ..." hard-stop above with the approved-source flow.
+const WEB_RESEARCH = `
+
+=== WEB RESEARCH MODE (ENABLED by Master Admin) ===
+You have a web_search tool that is RESTRICTED to Amber Homes' approved sources only. Follow this strict source hierarchy:
+1. Amber Homes Knowledge Base (the knowledge section above) — HIGHEST priority. If it answers the question, use it and do NOT search the web. Master-Admin-approved internal knowledge supersedes any web information; if they conflict, prefer the internal approved knowledge but do not disclose private/internal details unless the knowledge item is agent-visible.
+2. Official government / DLD sources (e.g. dubailand.gov.ae) for laws, regulations, project status, transactions, verification, Golden Visa rules.
+3. Official developer websites for project details, launches, payment plans, handover, amenities.
+4. Approved portals / market-data sources for discovery and comparison only — never as final truth unless confirmed by DLD or the developer.
+5. Approved news sources for market context only.
+
+OVERRIDE: The "reply EXACTLY ..." instruction in PROJECTS — CRITICAL is SUSPENDED while web research is enabled. Instead, when a project or topic is NOT in the knowledge section, you MAY use web_search (approved domains only), then give a SHORT, useful answer.
+
+Every answer that uses the web MUST end with two lines, exactly:
+Confidence: High | Medium | Low
+Source: Amber Homes Knowledge Base | DLD/Government | Developer | Portal | News
+Confidence guide: High = Amber Homes approved knowledge, or DLD + official developer. Medium = developer source only, or partial official data. Low = portal or news only.
+
+NEVER invent prices, payment plans, unit sizes, availability, handover dates, fees or ROI. If a fact is not on an approved source, say it needs verification. Never present an off-plan launch as confirmed unless an official developer/DLD source (or approved internal knowledge) supports it. For Golden Visa, never guarantee eligibility; recommend confirming with the official authority. If approved sources return nothing reliable, say: "I could not verify this from the Amber Homes Knowledge Base or approved official sources. Please ask Master Admin to add verified details before pitching it."`;
 
 const MENTORS = {
   ambreen_ai: {
@@ -39,6 +62,28 @@ REFUSAL LINE (use verbatim for off-topic/inappropriate): "Let's keep it work-rel
   },
 };
 
+// --- Server-side web-research config (whitelist + global toggle), cached 60s. ---
+let _webCache = { at: 0, enabled: false, domains: [] };
+async function getWebConfig() {
+  const now = Date.now();
+  if (now - _webCache.at < 60000) return _webCache;
+  let enabled = false, domains = [];
+  try {
+    const h = { apikey: ANON_KEY, Authorization: "Bearer " + ANON_KEY };
+    const sres = await fetch(SUPABASE_URL + "/rest/v1/app_settings?key=eq.web_research_enabled&select=value", { headers: h });
+    const sj = await sres.json();
+    enabled = Array.isArray(sj) && sj[0] && String(sj[0].value).toLowerCase() === "true";
+    if (enabled) {
+      const dres = await fetch(SUPABASE_URL + "/rest/v1/ai_sources?active=eq.true&select=domain", { headers: h });
+      const dj = await dres.json();
+      domains = (Array.isArray(dj) ? dj : []).map((r) => String(r.domain || "").trim().toLowerCase()
+        .replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "")).filter(Boolean).slice(0, 60);
+    }
+  } catch (e) { enabled = false; domains = []; }
+  _webCache = { at: now, enabled: enabled && domains.length > 0, domains };
+  return _webCache;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   const key = process.env.ANTHROPIC_API_KEY;
@@ -50,28 +95,36 @@ export default async function handler(req, res) {
     const total = JSON.stringify(messages).length + String(system || "").length + String(crmContext || "").length + String(knowledge || "").length;
     if (total > 70000) return res.status(413).json({ error: "request too large" });
 
+    const web = (mentor && MENTORS[mentor]) ? await getWebConfig() : { enabled: false, domains: [] };
+
     // Build the system prompt. Mentor path enforces persona + safety server-side.
     let sys;
     if (mentor && MENTORS[mentor]) {
-      sys = SAFETY + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
-        (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — use for company/positioning/awards/services/scripts; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
+      sys = SAFETY + (web.enabled ? WEB_RESEARCH : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
+        (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — highest priority; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
         (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)");
     } else {
       sys = String(system || "").slice(0, 30000); // legacy path (e.g. lead extraction)
     }
 
+    const body = {
+      model: MODEL,
+      max_tokens: web.enabled ? 1100 : 700,
+      system: sys,
+      messages: messages.slice(-12),
+    };
+    if (web.enabled) {
+      body.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4, allowed_domains: web.domains }];
+    }
+
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 700,
-        system: sys,
-        messages: messages.slice(-12),
-      }),
+      body: JSON.stringify(body),
     });
     const data = await r.json();
-    return res.status(r.status).json({ ...data, model: MODEL });
+    // Tell the client whether web research was available + how many domains were in scope.
+    return res.status(r.status).json({ ...data, model: MODEL, web_enabled: !!web.enabled, web_domains: web.enabled ? web.domains.length : 0 });
   } catch (e) {
     return res.status(500).json({ error: "AI request failed" });
   }
