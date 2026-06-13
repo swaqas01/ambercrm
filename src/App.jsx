@@ -20,26 +20,26 @@ const T = {
 };
 const THEME_CSS = `
   [data-amber] {
-    --ink:#16140F; --inkSoft:#46423A; --muted:#8A8478; --faint:#B5AFA2;
-    --bone:#F5F2EB; --paper:#FFFFFF; --hair:#E6E0D4; --hairSoft:#F0EBE1;
-    --gold:#A8862C; --goldBright:#C9A648; --goldSoft:#F5EDD8; --goldEdge:#E2D2A4;
-    --ok:#2E6B52; --okSoft:#E4EEE9; --warn:#A87420; --warnSoft:#F6ECD7;
-    --bad:#A8402F; --badSoft:#F5E2DD; --info:#3D5A75; --infoSoft:#E5EBF1;
-    --hero:#13110D; --side:#13110D; --btnBg:#16140F; --btnFg:#FFFFFF;
-    --goldTint:#FFFDF6; --wm:rgba(168,134,44,.07);
-    --shadow:0 1px 2px rgba(22,20,15,.04), 0 6px 18px rgba(22,20,15,.05);
-    --shadowLg:0 2px 4px rgba(22,20,15,.06), 0 16px 40px rgba(22,20,15,.10);
+    --ink:#0F172A; --inkSoft:#475569; --muted:#64748B; --faint:#94A3B8;
+    --bone:#F2F4FB; --paper:#FFFFFF; --hair:#E9EBF5; --hairSoft:#F4F5FB;
+    --gold:#7C5CFA; --goldBright:#8B6CFA; --goldSoft:#F0EDFE; --goldEdge:#DDD5FC;
+    --ok:#16A34A; --okSoft:#E9F9EF; --warn:#D97706; --warnSoft:#FEF5E0;
+    --bad:#DC2626; --badSoft:#FDEAEA; --info:#2563EB; --infoSoft:#E8F1FE;
+    --hero:#1B1733; --side:#1B1733; --btnBg:#7C5CFA; --btnFg:#FFFFFF;
+    --goldTint:#F7F5FF; --wm:rgba(124,92,250,.06);
+    --shadow:0 1px 2px rgba(15,23,42,.04), 0 10px 30px rgba(15,23,42,.06);
+    --shadowLg:0 2px 4px rgba(15,23,42,.06), 0 16px 40px rgba(15,23,42,.10);
   }
   [data-amber="dark"] {
-    --ink:#F0EBDF; --inkSoft:#C7C0B0; --muted:#8E887A; --faint:#5E594E;
-    --bone:#15130F; --paper:#1E1B16; --hair:#2E2A22; --hairSoft:#272318;
-    --gold:#C9A648; --goldBright:#E0C06A; --goldSoft:#2E2817; --goldEdge:#4A3F1E;
-    --ok:#5FA886; --okSoft:#1B2922; --warn:#D2A04A; --warnSoft:#2C2415;
-    --bad:#D2705F; --badSoft:#2E1D19; --info:#7FA3C4; --infoSoft:#1C2530;
-    --hero:#0E0C09; --side:#0E0C09; --btnBg:#F0EBDF; --btnFg:#16140F;
-    --goldTint:#252013; --wm:rgba(201,166,72,.06);
-    --shadow:0 1px 2px rgba(0,0,0,.3), 0 6px 18px rgba(0,0,0,.25);
-    --shadowLg:0 2px 4px rgba(0,0,0,.4), 0 16px 40px rgba(0,0,0,.45);
+    --ink:#E7E8F2; --inkSoft:#AEB4C8; --muted:#7E8499; --faint:#565C74;
+    --bone:#0D0D18; --paper:#17172A; --hair:#272742; --hairSoft:#1F1F38;
+    --gold:#8B6CFA; --goldBright:#A78BFA; --goldSoft:#221E3A; --goldEdge:#3A3360;
+    --ok:#4ADE80; --okSoft:#15251C; --warn:#FBBF24; --warnSoft:#2A2210;
+    --bad:#F87171; --badSoft:#2A1717; --info:#60A5FA; --infoSoft:#16203A;
+    --hero:#0A0A16; --side:#0A0A16; --btnBg:#8B6CFA; --btnFg:#FFFFFF;
+    --goldTint:#1A1630; --wm:rgba(139,108,250,.07);
+    --shadow:0 1px 2px rgba(0,0,0,.35), 0 10px 30px rgba(0,0,0,.4);
+    --shadowLg:0 2px 4px rgba(0,0,0,.45), 0 16px 40px rgba(0,0,0,.55);
   }
   [data-amber] * { box-sizing: border-box; }
   [data-amber] button, [data-amber] select { transition: background .18s ease, border-color .18s ease, color .18s ease, transform .12s ease, box-shadow .18s ease; }
@@ -47,7 +47,7 @@ const THEME_CSS = `
   [data-amber] button:active { transform: translateY(0); }
   [data-amber] button:focus-visible, [data-amber] select:focus-visible { outline: 2px solid var(--goldBright); outline-offset: 2px; }
   [data-amber] ::selection { background: var(--goldSoft); }
-  [data-amber] [style*="Sora"] { font-weight: 300; letter-spacing: -0.01em; }
+  [data-amber] [style*="Plus Jakarta"] { font-weight: 800; letter-spacing: -0.015em; }
   @media (prefers-reduced-motion: reduce) { [data-amber] button { transition: none; } [data-amber] button:hover { transform: none; } }
   /* ===== full theme templates (base + accent) ===== */
   [data-accent="emerald"] {
@@ -99,8 +99,8 @@ const THEME_CSS = `
     --shadowLg:0 2px 4px rgba(0,0,0,.4), 0 16px 40px rgba(0,0,0,.45);
   }
 `;
-const DISPLAY = "'Sora', 'Helvetica Neue', sans-serif";
-const UI = "'Instrument Sans', system-ui, -apple-system, sans-serif";
+const DISPLAY = "'Plus Jakarta Sans', system-ui, sans-serif";
+const UI = "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif";
 
 /* ================================ MOCK DATA ============================== */
 const AGENTS = [
@@ -204,7 +204,7 @@ export default function App() {
   const [dark, setDark] = useState(false);
   const [user, setUser] = useState(null); // {name, role, email}
   const [accent, setAccent] = useState("gold");
-  const ACCENTS = [["gold", "Amber Gold", "#B08D2F"], ["emerald", "Emerald", "#1F6B52"],
+  const ACCENTS = [["gold", "Violet", "#7C5CFA"], ["emerald", "Emerald", "#1F6B52"],
     ["sapphire", "Sapphire", "#2C4E78"], ["burgundy", "Burgundy", "#7C2D3E"]];
   const [narrow, setNarrow] = useState(typeof window !== "undefined" && window.innerWidth < 900);
   useEffect(() => {
@@ -213,7 +213,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     const l = document.createElement("link"); l.rel = "stylesheet";
-    l.href = "https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap";
+    l.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap";
     document.head.appendChild(l); return () => { try { document.head.removeChild(l); } catch (e) {} };
   }, []);
   const go = (s) => { setScreen(s); setNavOpen(false); };
@@ -1365,7 +1365,7 @@ function LoginFlow({ onLogin, dark, setDark }) {
             ))}
           </div>
           <div style={{ fontSize: 10.5, color: T.faint, marginTop: 10 }}>In the demo, any 4 digits work as the code.</div>
-          <div style={{ fontSize: 9.5, color: T.faint, marginTop: 6, opacity: .7 }}>Live · auto-deploy connected ✓ · build 2026-06-13</div>
+          <div style={{ fontSize: 9.5, color: T.faint, marginTop: 6, opacity: .7 }}>Live · design B (violet) · build 2026-06-13b</div>
         </div>
       </div>
     </div>
