@@ -2546,7 +2546,7 @@ function SettingsPage() {
 /* Open Leads is served by <LiveLeads initialAgentFilter="open"> via the SCREENS map (real open pool + assign). */
 
 /* ===================== AI KNOWLEDGE BASE (MASTER ADMIN) =================== */
-const KB_CATEGORIES = ["Company Overview","Awards and Recognition","Developer Relationships","Services","Sales Scripts","WhatsApp Templates","Area Knowledge","Project Knowledge","Developer Knowledge","Investment Guidance","Golden Visa Guidance","Internal Policies","CRM Usage","Objection Handling","Compliance / Do Not Say","Market Updates","FAQs","Agent Training","AI Behavior Rules","WhatsApp New Lead Responses","Call Conversion Scripts","Client Qualification","Off-Plan Sales Knowledge","Ready Property Knowledge","Luxury Property Knowledge","Villa and Townhouse Knowledge","Holiday Home Knowledge","Dubai Market Knowledge","Golden Visa Knowledge","Community Knowledge","Follow-Up Scripts","Meeting and Site Visit Scripts","EOI and Booking Process","Closing Language","Compliance and Do-Not-Say Rules","Master Prompt / AI System Behavior"];
+const KB_CATEGORIES = ["Founder's Knowledge","Company Overview","Awards and Recognition","Developer Relationships","Services","Sales Scripts","WhatsApp Templates","Area Knowledge","Project Knowledge","Developer Knowledge","Investment Guidance","Golden Visa Guidance","Internal Policies","CRM Usage","Objection Handling","Compliance / Do Not Say","Market Updates","FAQs","Agent Training","AI Behavior Rules","WhatsApp New Lead Responses","Call Conversion Scripts","Client Qualification","Off-Plan Sales Knowledge","Ready Property Knowledge","Luxury Property Knowledge","Villa and Townhouse Knowledge","Holiday Home Knowledge","Dubai Market Knowledge","Golden Visa Knowledge","Community Knowledge","Follow-Up Scripts","Meeting and Site Visit Scripts","EOI and Booking Process","Closing Language","Compliance and Do-Not-Say Rules","Master Prompt / AI System Behavior"];
 const KB_VIS = [["all","All mentors"],["agent_ok","Agent AI allowed"],["ambreen_ai","Ambreen AI only"],["saad_ai","Saad AI only"],["ibrahim_ai","Ibrahim AI only"],["admin_only","Master/Admin AI only"]];
 const visLabel = (v) => (KB_VIS.find((x) => x[0] === v) || ["", v])[1];
 const kbInp = { width: "100%", padding: "9px 11px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontSize: 13, fontFamily: UI, boxSizing: "border-box" };
@@ -2599,6 +2599,77 @@ function KbEditor({ item, onSave, onCancel, saving, err }) {
   );
 }
 
+function FounderUpdateModal({ onSave, onCancel, saving, err }) {
+  const today = dubaiToday();
+  const [f, setF] = useState({ weekOf: today, title: "", marketSummary: "", whatChanged: "", buyerSentiment: "", launchActivity: "", developerFocus: "", areasFocus: "", projectsPush: "", projectsCareful: "", talkingPoints: "", whatsappScript: "", objectionHandling: "", doNotSay: "", priority: 1, visibility: "agent_ok", review_date: "" });
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const lbl = { fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 5, display: "block" };
+  const compose = () => {
+    const L = ["Founder market update for the week of " + (f.weekOf || today) + "."];
+    const add = (label, v) => { if (v && v.trim()) L.push(label + ": " + v.trim()); };
+    add("Market summary", f.marketSummary); add("What changed this week", f.whatChanged);
+    add("Buyer sentiment", f.buyerSentiment); add("Launch activity", f.launchActivity);
+    add("Developer focus", f.developerFocus); add("Areas to focus", f.areasFocus);
+    add("Projects to push", f.projectsPush); add("Projects to be careful with", f.projectsCareful);
+    add("Agent talking points", f.talkingPoints); add("Suggested WhatsApp", f.whatsappScript);
+    add("Client objection handling", f.objectionHandling); add("Do NOT say", f.doNotSay);
+    L.push("(Amber Homes internal founder view — not a guarantee. Verify price/availability before promising anything to a client.)");
+    return L.join("\n");
+  };
+  const submit = () => {
+    const title = f.title.trim() || ("Founder Update — " + (f.weekOf || today));
+    const tags = ["founder update", "weekly market update", "dubai market", f.areasFocus, f.developerFocus, f.projectsPush].filter(Boolean).join(", ").toLowerCase().slice(0, 300);
+    onSave({ title, content: compose(), visibility: f.visibility, priority: f.priority, status: "active", source: "Founder Internal View", tags, review_date: f.review_date });
+  };
+  const fields = [
+    ["marketSummary", "Market summary", "Your one-paragraph read on the Dubai market this week"],
+    ["whatChanged", "What changed this week", "New launches, price moves, sentiment shifts, regulation, regional events"],
+    ["buyerSentiment", "Buyer sentiment", "Are buyers cautious, value-seeking, urgent, waiting?"],
+    ["launchActivity", "Launch activity", "Launch wave / slowdown, which developers are launching"],
+    ["developerFocus", "Developer focus", "Which developers agents should lean into this week"],
+    ["areasFocus", "Areas to focus", "Communities/areas to push this week"],
+    ["projectsPush", "Projects to push", "Projects worth prioritising"],
+    ["projectsCareful", "Projects to be careful with", "Where to be cautious"],
+    ["talkingPoints", "Agent talking points", "The angles agents should use with clients"],
+    ["whatsappScript", "Suggested WhatsApp", "A ready-to-send client message agents can adapt"],
+    ["objectionHandling", "Client objection handling", "How to handle this week's common objections"],
+    ["doNotSay", "Do NOT say", "Claims agents must avoid this week"],
+  ];
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,15,25,.55)", zIndex: 80, display: "grid", placeItems: "center", padding: 16 }} onClick={onCancel}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: "min(680px, 96vw)", maxHeight: "92vh", overflowY: "auto", padding: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 8 }}><Star size={18} color={T.gold} /> Weekly Founder Update</div>
+          <button onClick={onCancel} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", padding: 4 }}><X size={18} /></button>
+        </div>
+        <div style={{ fontSize: 12, color: T.muted, marginBottom: 16, lineHeight: 1.5 }}>This becomes a high-priority Founder's Knowledge entry that Ask Amber uses first. Fill what's relevant — blank fields are skipped. Ask Amber will frame it as your internal view, never as a guarantee.</div>
+        <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 150px" }}><label style={lbl}>Week of</label><input type="date" value={f.weekOf} onChange={(e) => set("weekOf", e.target.value)} style={kbInp} /></div>
+          <div style={{ flex: "2 1 280px" }}><label style={lbl}>Title (optional)</label><input value={f.title} onChange={(e) => set("title", e.target.value)} style={kbInp} placeholder={"Founder Update — " + today} /></div>
+        </div>
+        {fields.map(([k, label, ph]) => (
+          <div key={k} style={{ marginBottom: 11 }}>
+            <label style={lbl}>{label}</label>
+            <textarea value={f[k]} onChange={(e) => set(k, e.target.value)} rows={2} style={{ ...kbInp, resize: "vertical", lineHeight: 1.5 }} placeholder={ph} />
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 140px" }}><label style={lbl}>Priority</label>
+            <select value={f.priority} onChange={(e) => set("priority", e.target.value)} style={kbInp}><option value={1}>High / Urgent</option><option value={2}>Normal</option><option value={3}>Low</option></select></div>
+          <div style={{ flex: "1 1 180px" }}><label style={lbl}>Visibility</label>
+            <select value={f.visibility} onChange={(e) => set("visibility", e.target.value)} style={kbInp}>{KB_VIS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+          <div style={{ flex: "1 1 160px" }}><label style={lbl}>Review date (optional)</label>
+            <input type="date" value={f.review_date} onChange={(e) => set("review_date", e.target.value)} style={kbInp} /></div>
+        </div>
+        {err && <div style={{ background: T.badSoft, color: T.bad, padding: "9px 12px", borderRadius: 9, fontSize: 12.5, marginBottom: 12 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={onCancel} style={{ padding: "10px 16px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, cursor: "pointer", fontWeight: 600, fontFamily: UI }}>Cancel</button>
+          <button onClick={submit} disabled={saving} style={{ padding: "10px 18px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, cursor: saving ? "default" : "pointer", fontWeight: 700, fontFamily: UI, opacity: saving ? .7 : 1, display: "flex", alignItems: "center", gap: 7 }}><Save size={15} /> {saving ? "Publishing…" : "Publish founder update"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 function KnowledgeBase({ user }) {
   const [items, setItems] = useState(null);
   const [q, setQ] = useState("");
@@ -2606,6 +2677,7 @@ function KnowledgeBase({ user }) {
   const [visF, setVisF] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const [editing, setEditing] = useState(null);   // item object | "new" | null
+  const [showFounder, setShowFounder] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
@@ -2649,6 +2721,23 @@ function KnowledgeBase({ user }) {
     finally { setSaving(false); }
   };
 
+  // Weekly Founder Update: composes the structured founder fields into one Founder's Knowledge entry.
+  const saveFounderUpdate = async (form) => {
+    setSaving(true); setErr("");
+    if (!form.title.trim() || !form.content.trim()) { setErr("Add at least a market summary."); setSaving(false); return; }
+    try {
+      const row = { title: form.title.trim(), category: "Founder's Knowledge", content: form.content.trim(),
+        visibility: form.visibility, priority: Number(form.priority) || 1, status: "active",
+        source: "Founder Internal View", tags: form.tags || "founder update, weekly market update",
+        review_date: form.review_date || null, added_by: user.id, updated_by: user.id, updated_at: new Date().toISOString() };
+      const { error } = await supabase.from("ai_knowledge").insert(row);
+      if (error) throw error;
+      await audit("founder_update_added", row);
+      setShowFounder(false); await load();
+    } catch (e) { setErr("Save failed. Founder's Knowledge is editable by Master Admin only."); }
+    finally { setSaving(false); }
+  };
+
   const toggleStatus = async (it) => {
     const ns = it.status === "active" ? "inactive" : "active";
     await supabase.from("ai_knowledge").update({ status: ns, updated_by: user.id, updated_at: new Date().toISOString() }).eq("id", it.id);
@@ -2681,7 +2770,10 @@ function KnowledgeBase({ user }) {
           <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 10 }}><BookOpen size={22} color={T.gold} /> AI Knowledge Base</div>
           <div style={{ color: T.muted, fontSize: 13, marginTop: 4 }}>Verified Amber Homes knowledge that powers Ask Amber. Master Admin only — agents cannot see or edit this.</div>
         </div>
-        <button onClick={() => { setErr(""); setEditing("new"); }} style={{ padding: "11px 18px", borderRadius: 10, border: "none", background: T.btnBg, color: T.btnFg, cursor: "pointer", fontWeight: 700, fontFamily: UI, display: "flex", alignItems: "center", gap: 8, boxShadow: T.shadow }}><Plus size={16} /> Add knowledge</button>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={() => { setErr(""); setShowFounder(true); }} style={{ padding: "11px 16px", borderRadius: 10, border: `1px solid ${T.gold}`, background: T.goldSoft, color: T.gold, cursor: "pointer", fontWeight: 700, fontFamily: UI, display: "flex", alignItems: "center", gap: 8 }}><Star size={15} /> Add Weekly Founder Update</button>
+          <button onClick={() => { setErr(""); setEditing("new"); }} style={{ padding: "11px 18px", borderRadius: 10, border: "none", background: T.btnBg, color: T.btnFg, cursor: "pointer", fontWeight: 700, fontFamily: UI, display: "flex", alignItems: "center", gap: 8, boxShadow: T.shadow }}><Plus size={16} /> Add knowledge</button>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
@@ -2700,6 +2792,7 @@ function KnowledgeBase({ user }) {
         </div>
         <select value={catF} onChange={(e) => setCatF(e.target.value)} style={{ ...kbInp, width: "auto", flex: "0 1 200px" }}><option value="">All categories</option>{KB_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select>
         <select value={visF} onChange={(e) => setVisF(e.target.value)} style={{ ...kbInp, width: "auto", flex: "0 1 180px" }}><option value="">All visibility</option>{KB_VIS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+        <button onClick={() => setCatF(catF === "Founder's Knowledge" ? "" : "Founder's Knowledge")} style={{ padding: "9px 13px", borderRadius: 9, border: `1px solid ${catF === "Founder's Knowledge" ? T.gold : T.hair}`, background: catF === "Founder's Knowledge" ? T.goldSoft : T.paper, color: catF === "Founder's Knowledge" ? T.gold : T.muted, cursor: "pointer", fontSize: 12.5, fontWeight: 700, fontFamily: UI, display: "flex", alignItems: "center", gap: 6 }}><Star size={14} /> Founder's Knowledge</button>
         <button onClick={() => setShowInactive((s) => !s)} style={{ padding: "9px 13px", borderRadius: 9, border: `1px solid ${showInactive ? T.gold : T.hair}`, background: showInactive ? T.goldSoft : T.paper, color: showInactive ? T.gold : T.muted, cursor: "pointer", fontSize: 12.5, fontWeight: 600, fontFamily: UI, display: "flex", alignItems: "center", gap: 6 }}>{showInactive ? <Eye size={14} /> : <EyeOff size={14} />} Inactive</button>
       </div>
 
@@ -2744,6 +2837,7 @@ function KnowledgeBase({ user }) {
       )}
 
       {editing && <KbEditor item={editing} onSave={save} onCancel={() => setEditing(null)} saving={saving} err={err} />}
+      {showFounder && <FounderUpdateModal onSave={saveFounderUpdate} onCancel={() => setShowFounder(false)} saving={saving} err={err} />}
     </div>
   );
 }

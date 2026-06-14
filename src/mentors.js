@@ -188,16 +188,19 @@ export function pickKnowledge(question, items, mentorId, max = 6) {
     for (const w of tokens(k.tags)) if (qTok.has(w)) score += 1.5;
     score += (4 - (k.priority || 2)) * 0.5;
     const compliance = /do not say|compliance/i.test(k.category);
-    return { k, score, compliance };
+    const founder = /founder/i.test(k.category);
+    if (founder && score > 0) score += 4; // Founder's Knowledge is the highest-priority internal guidance
+    return { k, score, compliance, founder };
   });
-  // Always-include compliance items, then top-scoring others.
+  // Founder's Knowledge (relevant) leads, then always-include compliance, then top-scoring others.
+  const founderMatches = scored.filter((s) => s.founder && s.score > 0).sort((a, b) => b.score - a.score).map((s) => s.k);
   const compliance = scored.filter((s) => s.compliance).map((s) => s.k);
-  const others = scored.filter((s) => s.compliance === false && s.score > 0)
+  const others = scored.filter((s) => !s.compliance && !s.founder && s.score > 0)
     .sort((a, b) => b.score - a.score).slice(0, max).map((s) => s.k);
   // If nothing matched, fall back to the highest-priority general items so company
   // questions ("introduce Amber Homes") still get the core profile.
-  let chosen = [...compliance, ...others];
-  if (others.length === 0) {
+  let chosen = [...founderMatches, ...compliance, ...others];
+  if (founderMatches.length === 0 && others.length === 0) {
     const core = pool.filter((k) => !/do not say|compliance/i.test(k.category))
       .sort((a, b) => (a.priority || 2) - (b.priority || 2)).slice(0, 3);
     chosen = [...compliance, ...core];
