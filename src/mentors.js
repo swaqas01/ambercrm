@@ -136,7 +136,7 @@ export async function fetchKnowledge(user) {
   try {
     const isAdmin = user && (user.role === "master_admin" || user.role === "admin" || user.role === "sales_manager");
     let q = supabase.from("ai_knowledge")
-      .select("id,title,category,content,visibility,priority,status,deleted")
+      .select("id,title,category,content,tags,visibility,priority,status,deleted")
       .eq("status", "active").eq("deleted", false)
       .order("priority", { ascending: true });
     const { data, error } = await q;
@@ -183,8 +183,9 @@ export function pickKnowledge(question, items, mentorId, max = 6) {
     const hay = tokens(k.title + " " + k.category + " " + k.content);
     let score = 0;
     for (const w of hay) if (qTok.has(w)) score += 1;
-    // Title hits weigh more; high priority gets a small boost.
+    // Title hits weigh more; tag hits weigh strongly (tags are curated retrieval keywords); high priority gets a small boost.
     for (const w of tokens(k.title)) if (qTok.has(w)) score += 2;
+    for (const w of tokens(k.tags)) if (qTok.has(w)) score += 1.5;
     score += (4 - (k.priority || 2)) * 0.5;
     const compliance = /do not say|compliance/i.test(k.category);
     return { k, score, compliance };
