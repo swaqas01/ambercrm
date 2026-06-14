@@ -1,0 +1,20 @@
+name: crm-storage-backup
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch: {}
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm i @supabase/supabase-js --no-save
+      - name: Replicate storage to backup project
+        env:
+          SOURCE_SUPABASE_URL: ${{ secrets.SOURCE_SUPABASE_URL }}
+          SOURCE_SERVICE_ROLE_KEY: ${{ secrets.SOURCE_SERVICE_ROLE_KEY }}
+          DEST_SUPABASE_URL: ${{ secrets.DEST_SUPABASE_URL }}
+          DEST_SERVICE_ROLE_KEY: ${{ secrets.DEST_SERVICE_ROLE_KEY }}
+        run: node scripts/backups/sync-storage-to-supabase.mjs
