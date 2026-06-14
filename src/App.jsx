@@ -4085,6 +4085,64 @@ const ADMIN_ROLES = ["master_admin", "admin", "sales_manager"];
 // Optional `target` is an agent name (admins) or a project/area term used to scope results.
 // Detect a Lead Type filter in a question. "agent" only counts as a type when it's "agent lead(s)"
 // (so "agent performance" still routes to the performance report, not the Agent lead type).
+// Current Amber Homes launch focus (mirrors the "Upcoming Launches" Founder's Knowledge entry).
+// strong = area/developer/project-specific keywords; weak = generic intent keywords. A lead matches a
+// launch when it hits >=1 strong keyword OR >=2 weak ones. All framed as internal view — verify before sharing.
+const LAUNCHES = [
+  { key: "palm-central", name: "Palm Central", developer: "Nakheel", area: "Palm Jebel Ali",
+    status: "Collecting EOIs · launch expected this month",
+    buyer: "Palm Jebel Ali / waterfront buyers, Golden Visa entry, long-term capital, clients priced out of Palm Jebel Ali villas",
+    pitch: "Long-term Palm Jebel Ali waterfront entry — apartments for buyers priced out of the villas. Don't promise appreciation; verify EOI amount, launch date, starting price and payment plan first.",
+    aliases: /palm central|palm jebel ali|\bpja\b/,
+    strong: ["palm jebel ali", "palm jumeirah", "nakheel", "palm"], weak: ["waterfront", "sea view", "beachfront", "luxury apartment", "golden visa", "investment", "capital appreciation", "dubai islands"] },
+  { key: "yas-orchid", name: "Yas Orchid", developer: "Aldar", area: "Yas Island, Abu Dhabi",
+    status: "Expected to launch on Yas Island, Abu Dhabi",
+    buyer: "Abu Dhabi / Yas Island buyers, Aldar fans, family communities, long-term end-users",
+    pitch: "Abu Dhabi family/end-user play; compare with Yas Acres / Yas Park Gate / Yas Park Views. Verify official name, prices, payment plan, handover and availability.",
+    aliases: /yas orchid|yas island|\byas\b|abu dhabi|aldar/,
+    strong: ["abu dhabi", "yas island", "yas", "aldar", "yas acres", "yas park"], weak: ["family", "townhouse", "villa", "end-user", "end user", "community", "long-term"] },
+  { key: "al-ghadeer", name: "Al Ghadeer Gardens", developer: "(verify)", area: "Dubai–Abu Dhabi border / Dubai South direction",
+    status: "Expected near the Dubai–Abu Dhabi border",
+    buyer: "Affordable family living, Dubai–Abu Dhabi connectivity, Al Maktoum Airport / infrastructure story",
+    pitch: "Connectivity + airport/infrastructure growth story for value-driven family buyers. Verify developer, official name, pricing, payment plan, launch status and exact location.",
+    aliases: /al ghadeer|ghadeer/,
+    strong: ["al ghadeer", "ghadeer"], weak: ["affordable", "family", "dubai south", "abu dhabi", "connectivity", "al maktoum", "airport", "townhouse", "value", "long-term"] },
+  { key: "raw-district", name: "Raw District", developer: "Imtiaz", area: "Sheikh Zayed Road",
+    status: "Launched on Sheikh Zayed Road",
+    buyer: "Sheikh Zayed Road / central Dubai, branded lifestyle, apartment investors",
+    pitch: "Prime SZR location + lifestyle branding for central-Dubai investors. Verify pricing, unit types, payment plan, handover and availability.",
+    aliases: /raw district|imtiaz/,
+    strong: ["sheikh zayed road", "szr", "imtiaz"], weak: ["central dubai", "apartment", "investment", "business bay", "downtown", "urban", "lifestyle", "branded"] },
+  { key: "hayat", name: "Hayat Townhouses", developer: "(verify)", area: "Dubai South",
+    status: "Launching townhouses in Dubai South",
+    buyer: "Townhouse / family buyers, Dubai South, Al Maktoum Airport growth, affordable family community",
+    pitch: "Townhouse/family leads wanting space, community and growth near Al Maktoum Airport. Verify developer, official name, pricing, payment plan, handover and availability.",
+    aliases: /\bhayat\b|dubai south townhouse|townhouse[^.]*dubai south|dubai south[^.]*townhouse/,
+    strong: ["dubai south", "townhouse", "al maktoum"], weak: ["family", "airport", "affordable", "villa", "end-user", "end user", "space", "community", "long-term"] },
+  { key: "emaar-stock", name: "Emaar existing stock", developer: "Emaar", area: "Dubai Hills, Emaar South, The Valley, The Oasis, Dubai Creek Harbour, Downtown",
+    status: "Ready / available Emaar inventory",
+    buyer: "Buyers wanting developer trust, resale liquidity, family communities, safer long-term positioning",
+    pitch: "Safer-developer + resale-liquidity buyers in Dubai Hills, Emaar South, The Valley, The Oasis, Creek Harbour or Downtown — depending on availability. Verify live availability and pricing.",
+    aliases: /emaar/,
+    strong: ["emaar", "dubai hills", "emaar south", "the valley", "the oasis", "dubai creek harbour", "creek harbour", "the oasis"], weak: ["downtown", "family", "resale", "ready", "villa", "townhouse", "apartment", "safer"] },
+  { key: "binghatti-wraith", name: "Binghatti Wraith", developer: "Binghatti", area: "Al Jaddaf",
+    status: "Launching in Al Jaddaf",
+    buyer: "Al Jaddaf, Business Bay/Downtown proximity, branded architecture, apartment investors",
+    pitch: "Central Al Jaddaf + Binghatti branded architecture for apartment investors. Verify launch details, pricing, payment plan, unit mix, handover and availability.",
+    aliases: /binghatti|wraith|al jaddaf|jaddaf/,
+    strong: ["binghatti", "al jaddaf", "jaddaf"], weak: ["business bay", "downtown", "apartment", "branded", "central", "investment"] },
+];
+function resolveLaunch(text) { const t = String(text || "").toLowerCase(); return LAUNCHES.find((x) => x.aliases.test(t)) || null; }
+function leadHay(l) { return [l.area, l.project, l.developer, l.property_type, l.purpose, l.budget, l.notes, l.followup_note, l.nationality, l.language, l.client_name].map((x) => String(x || "").toLowerCase()).join(" • "); }
+function scoreLeadForLaunch(l, launch) {
+  const hay = leadHay(l);
+  const sHits = launch.strong.filter((k) => hay.includes(k));
+  const wHits = launch.weak.filter((k) => hay.includes(k));
+  const qualifies = sHits.length >= 1 || wHits.length >= 2;
+  const score = sHits.length * 2 + wHits.length;
+  const reasons = [...new Set([...sHits, ...wHits])];
+  return { qualifies, score, reasons };
+}
 function parseLeadType(text) {
   const t = String(text || "").toLowerCase();
   if (/\bbuyers?\b/.test(t)) return "Buyer";
@@ -4111,6 +4169,18 @@ function leadIntent(text, role) {
   if (LT === "Agent") t = t.replace(/\bagent(\s+leads?)/g, "$1");
   else if (LT) t = t.replace(/\b(buyer|seller|tenant)s?\b/g, " ");
   if (LT) t = t.replace(/\s+/g, " ").trim();
+
+  // ---- Launch ↔ lead matching (highest-value: connect upcoming launches to real leads) ----
+  const launch = resolveLaunch(text);
+  const whichAgents = /which agents|agents (with|who have|holding|should work)/.test(t);
+  // "match my/company leads to (upcoming) launches" — all launches at once.
+  if (/\bmatch\b[^.]*\blead/.test(t) && /\blaunch/.test(t) && !launch) return { kind: "matchLaunches", target };
+  if ((/launch matching report/.test(t) || /\bleads?\b[^.]*\b(for|to)\b[^.]*\bupcoming\b/.test(t)) && !launch) return { kind: "matchLaunches", target };
+  // a specific launch/project — "who should I pitch X to", "which of my leads fit X", "X leads", "show my X leads"
+  if (launch && (/\b(match|fit|good for|suitable for|pitch|offer|send|recommend)\b/.test(t) || /\blead/.test(t) || /\bclients?\b/.test(t) || /who should/.test(t))) {
+    if (whichAgents) return { kind: "matchLaunch", launchKey: launch.key, byAgent: true, adminOnly: true };
+    return { kind: "matchLaunch", launchKey: launch.key, target };
+  }
 
   // ---- Admin-only report intents (Master Admin / Admin / Sales Manager) ----
   if (/(unassigned|not assigned)\s*leads?/.test(t)) return { kind: "unassigned", adminOnly: true };
@@ -4149,7 +4219,7 @@ async function runLeadQuery(intent, user) {
   const weekAgo = new Date(Date.now() - 7 * 864e5).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
   const { data: { user: au } } = await supabase.auth.getUser();
   const { data, error } = await supabase.from("leads")
-    .select("id, lead_code, lead_no, client_name, area, project, status, temperature, next_followup, last_contacted, phone, budget, purpose, lead_type, is_open, assigned_agent, assigned_agent_name, current_owner, created_by, created_at, created_on")
+    .select("id, lead_code, lead_no, client_name, area, project, developer, property_type, notes, followup_note, nationality, language, status, temperature, next_followup, last_contacted, phone, budget, purpose, lead_type, is_open, assigned_agent, assigned_agent_name, current_owner, created_by, created_at, created_on")
     .limit(2000);
   if (error) throw error;
   let rows = data || [];
@@ -4181,8 +4251,40 @@ async function runLeadQuery(intent, user) {
   const tempSplit = (arr) => { const hot = arr.filter((l) => hotRank(l) <= 1).length, warm = arr.filter((l) => l.temperature === "Warm").length; return `${hot} hot · ${warm} warm · ${arr.length - hot - warm} cold`; };
   const forLbl = scopeLabel ? " for " + scopeLabel : "";
 
-  let picked = [], heading = "";
-  if (intent.kind === "latest") {
+  let picked = [], heading = "", matchInfo = {};
+  if (intent.kind === "matchLaunch") {
+    const launch = LAUNCHES.find((x) => x.key === intent.launchKey) || LAUNCHES[0];
+    const scored = rows.map((l) => ({ l, ...scoreLeadForLaunch(l, launch) })).filter((s) => s.qualifies).sort((a, b) => b.score - a.score || hotRank(a.l) - hotRank(b.l));
+    const setInfo = (arr) => arr.forEach((s) => { matchInfo[s.l.id] = { match: launch.name, pitch: launch.pitch, reason: "Matches: " + (s.reasons.slice(0, 4).join(", ") || launch.area) }; });
+    if (intent.byAgent && !isAgent) {
+      const byAg = {};
+      scored.forEach((s) => { const a = s.l.assigned_agent_name || (s.l.is_open ? "Open pool" : "Unassigned"); (byAg[a] = byAg[a] || { n: 0, hot: 0, overdue: 0 }); byAg[a].n++; if (hotRank(s.l) <= 1) byAg[a].hot++; if (d10(s.l.next_followup) && d10(s.l.next_followup) < today && s.l.status !== "Closed Won" && s.l.status !== "Closed Lost") byAg[a].overdue++; });
+      const top = Object.entries(byAg).sort((a, b) => b[1].n - a[1].n);
+      heading = top.length
+        ? `${launch.name} (${launch.developer}, ${launch.area}) — ${scored.length} matching lead${scored.length > 1 ? "s" : ""} across ${top.length} agent${top.length > 1 ? "s" : ""}:\n` + top.map(([a, s]) => `• ${a} — ${s.n} lead${s.n > 1 ? "s" : ""} (${s.hot} hot · ${s.overdue} overdue)`).join("\n") + `\n\nPitch: ${launch.pitch}\n(Founder's Knowledge — verify launch details before sharing.)`
+        : `No leads match ${launch.name} yet.`;
+      picked = scored.slice(0, 8).map((s) => s.l); setInfo(scored.slice(0, 8));
+    } else {
+      picked = scored.map((s) => s.l); setInfo(scored);
+      heading = scored.length
+        ? `${launch.name} — ${launch.developer} · ${launch.area} · ${launch.status}.\nBest buyer: ${launch.buyer}.\n${scored.length} of ${isAgent ? "your" : "the"} leads look like a fit — pitch angle: ${launch.pitch}\n(Founder's Knowledge — internal view; verify launch details before sharing with clients.)`
+        : `${launch.name} — ${launch.developer} · ${launch.area}. No clearly-matching ${isAgent ? "leads of yours" : "leads"} yet. Best buyer: ${launch.buyer}. (Founder's Knowledge — verify launch details before sharing.)`;
+    }
+  } else if (intent.kind === "matchLaunches") {
+    const perLaunch = {}; LAUNCHES.forEach((x) => { perLaunch[x.key] = []; });
+    rows.forEach((l) => {
+      let best = null;
+      LAUNCHES.forEach((x) => { const sc = scoreLeadForLaunch(l, x); if (sc.qualifies && (!best || sc.score > best.score)) best = { launch: x, ...sc }; });
+      if (best) { perLaunch[best.launch.key].push({ l, ...best }); matchInfo[l.id] = { match: best.launch.name, pitch: best.launch.pitch, reason: "Best fit " + best.launch.name + ": " + (best.reasons.slice(0, 3).join(", ") || best.launch.area) }; }
+    });
+    const lines = LAUNCHES.map((x) => { const arr = perLaunch[x.key]; return arr.length ? `• ${x.name} (${x.developer}) — ${arr.length} lead${arr.length > 1 ? "s" : ""}` : null; }).filter(Boolean);
+    const all = []; Object.values(perLaunch).forEach((arr) => arr.forEach((s) => all.push(s)));
+    all.sort((a, b) => b.score - a.score || hotRank(a.l) - hotRank(b.l));
+    picked = all.slice(0, 8).map((s) => s.l);
+    heading = all.length
+      ? `${isAgent ? "Your" : "Company"} leads matched to current launches (Founder's Knowledge):\n` + lines.join("\n") + `\n\nShowing the strongest ${Math.min(8, picked.length)} below. Ask "who should I pitch <project> to" for a full per-launch list. Verify launch details before sharing.`
+      : `I couldn't match ${isAgent ? "your" : "the"} leads to the current launches yet. Add area/project interest to leads, or ask about a specific launch.`;
+  } else if (intent.kind === "latest") {
     picked = [...rows].sort(byNew).slice(0, 1);
     heading = picked.length ? `Your latest lead${forLbl} is below.` : `No leads found${forLbl}.`;
   } else if (intent.kind === "overdue") {
@@ -4267,15 +4369,56 @@ async function runLeadQuery(intent, user) {
     if (l.project) bits.push("interest: " + l.project);
     return bits.join(" · ") || "Worth a touch";
   };
-  const leads = picked.slice(0, 8).map((l) => ({
-    id: l.id, name: l.client_name || "Lead", code: l.lead_code || l.lead_no || "", project: l.project || l.area || "—",
-    status: l.is_open ? "Open" : (l.status || "—"), temp: l.temperature || "—", budget: l.budget || "",
-    due: fmtDue(l.next_followup), phone: l.phone || "", reason: reasonFor(l),
-  }));
+  const leads = picked.slice(0, 8).map((l) => {
+    const mi = matchInfo[l.id];
+    return {
+      id: l.id, name: l.client_name || "Lead", code: l.lead_code || l.lead_no || "", project: l.project || l.area || "—",
+      status: l.is_open ? "Open" : (l.status || "—"), temp: l.temperature || "—", budget: l.budget || "",
+      due: fmtDue(l.next_followup), phone: l.phone || "", lead_type: l.lead_type || "Buyer",
+      reason: mi ? mi.reason : reasonFor(l), match: mi ? mi.match : null, pitch: mi ? mi.pitch : null,
+    };
+  });
   if (intent.leadType && heading && !new RegExp(intent.leadType, "i").test(heading)) heading = intent.leadType + " leads — " + heading;
   return { heading, leads };
 }
 
+// Lightweight, safe markdown renderer for Ask Amber answers: **bold**, headings (#),
+// bullet/numbered lists, clean paragraphs and line breaks. No raw markdown shown, no lone
+// punctuation lines, and long tokens wrap instead of overflowing on mobile.
+function richInline(s, keyBase) {
+  const parts = []; const re = /\*\*([^*]+)\*\*|__([^_]+)__/g; let last = 0, m, idx = 0;
+  while ((m = re.exec(s))) {
+    if (m.index > last) parts.push(s.slice(last, m.index));
+    parts.push(<strong key={keyBase + "-" + idx++}>{m[1] || m[2]}</strong>);
+    last = re.lastIndex;
+  }
+  if (last < s.length) parts.push(s.slice(last));
+  return parts;
+}
+function RichText({ text }) {
+  const lines = String(text || "").split("\n");
+  const blocks = []; let list = null;
+  const flush = () => { if (list) { blocks.push(list); list = null; } };
+  lines.forEach((raw) => {
+    const t = raw.trim();
+    if (!t) { flush(); return; }
+    if (/^[•·.\-–—*_=]+$/.test(t)) return; // drop lone punctuation / divider lines
+    const h = t.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { flush(); blocks.push({ type: "h", level: h[1].length, text: h[2] }); return; }
+    const b = t.match(/^[-*•]\s+(.*)$/);
+    if (b) { if (!list || list.type !== "ul") { flush(); list = { type: "ul", items: [] }; } list.items.push(b[1]); return; }
+    const o = t.match(/^(\d+)[.)]\s+(.*)$/);
+    if (o) { if (!list || list.type !== "ol") { flush(); list = { type: "ol", items: [] }; } list.items.push(o[2]); return; }
+    flush(); blocks.push({ type: "p", text: t });
+  });
+  flush();
+  return <div style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>{blocks.map((bl, i) => {
+    if (bl.type === "h") return <div key={i} style={{ fontWeight: 800, fontSize: bl.level <= 1 ? 14 : 13.2, margin: i ? "9px 0 3px" : "0 0 3px", color: T.ink }}>{richInline(bl.text, i)}</div>;
+    if (bl.type === "ul") return <ul key={i} style={{ margin: "4px 0", paddingLeft: 18 }}>{bl.items.map((it, j) => <li key={j} style={{ marginBottom: 2 }}>{richInline(it, i + "-" + j)}</li>)}</ul>;
+    if (bl.type === "ol") return <ol key={i} style={{ margin: "4px 0", paddingLeft: 18 }}>{bl.items.map((it, j) => <li key={j} style={{ marginBottom: 2 }}>{richInline(it, i + "-" + j)}</li>)}</ol>;
+    return <p key={i} style={{ margin: i ? "5px 0 0" : 0 }}>{richInline(bl.text, i)}</p>;
+  })}</div>;
+}
 function AskAmber({ narrow, user, openLead }) {
   const [open, setOpen] = useState(false);
   const [mentor, setMentor] = useState(null);     // chosen mentor object
@@ -4441,8 +4584,9 @@ function AskAmber({ narrow, user, openLead }) {
             <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: m.role === "user" ? "flex-end" : "flex-start", marginBottom: 9 }}>
               <div style={{ maxWidth: "88%", background: m.role === "user" ? T.btnBg : T.paper,
                 color: m.role === "user" ? T.btnFg : T.ink, border: m.role === "user" ? "none" : `1px solid ${T.hair}`,
-                borderRadius: 13, padding: "9px 12px", fontSize: 12.8, lineHeight: 1.55, whiteSpace: "pre-wrap",
-                boxShadow: m.role === "user" ? "none" : T.shadow }}>{m.text}</div>
+                borderRadius: 13, padding: "9px 12px", fontSize: 12.8, lineHeight: 1.55, whiteSpace: m.role === "user" ? "pre-wrap" : "normal",
+                overflowWrap: "anywhere", wordBreak: "break-word",
+                boxShadow: m.role === "user" ? "none" : T.shadow }}>{m.role === "user" ? m.text : <RichText text={m.text} />}</div>
               {m.sources && m.sources.length > 0 && (
                 <div style={{ maxWidth: "88%", marginTop: 4, fontSize: 10.5, color: T.faint, display: "flex", alignItems: "center", gap: 4, paddingLeft: 2 }}>
                   <BookOpen size={11} /> Based on: {m.sources.join(" · ")}
@@ -4461,7 +4605,9 @@ function AskAmber({ narrow, user, openLead }) {
                           <div style={{ fontSize: 10.5, fontWeight: 700, color: tcol, whiteSpace: "nowrap" }}>{ld.temp}</div>
                         </div>
                         <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{ld.project} · {ld.status}{ld.budget ? " · " + ld.budget : ""} · {ld.due}</div>
+                        {ld.match && <div style={{ fontSize: 10.5, fontWeight: 700, color: T.gold, marginTop: 4, display: "inline-flex", alignItems: "center", gap: 4 }}><Sparkle size={11} /> Pitch: {ld.match}</div>}
                         <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3, lineHeight: 1.4 }}>{ld.reason}</div>
+                        {ld.pitch && <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 3, lineHeight: 1.4, background: T.bone, borderRadius: 8, padding: "5px 8px" }}>{ld.pitch}</div>}
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
                           <button onClick={() => { logLeadAction("open", ld); if (openLead) { openLead(ld.id); setOpen(false); } }} style={cardBtn}>Open Lead</button>
                           {ph && <button onClick={() => { logLeadAction("whatsapp", ld); window.open(waHref(ld.phone), "_blank"); }} style={{ ...cardBtn, borderColor: WA, color: WA }}><MessageCircle size={11} /> WhatsApp</button>}
@@ -4479,7 +4625,7 @@ function AskAmber({ narrow, user, openLead }) {
         </div>
         {msgs.filter((m) => m.role === "user").length === 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 14px 10px", background: T.bone }}>
-            {["What should I focus on today?", "Show me my hot leads", "Draft a WhatsApp follow-up"].map((s) => (
+            {["What's launching soon?", "Match my leads to upcoming launches", "What should I focus on today?", "Show me my hot leads", "Draft a WhatsApp follow-up"].map((s) => (
               <button key={s} onClick={() => send(s)} style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold,
                 borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>{s}</button>))}
           </div>
