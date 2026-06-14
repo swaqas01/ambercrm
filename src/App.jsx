@@ -22,9 +22,10 @@ const T = {
   hero: "var(--hero)", side: "var(--side)", btnBg: "var(--btnBg)", btnFg: "var(--btnFg)",
   goldTint: "var(--goldTint)", wm: "var(--wm)", shadow: "var(--shadow)", shadowLg: "var(--shadowLg)",
 };
+const WA = "#25D366"; // official WhatsApp green — used for all WhatsApp actions in both themes
 const THEME_CSS = `
   html, body { background:#130a26; }
-  [data-amber] button { font-family:'Manrope', system-ui, -apple-system, sans-serif; font-weight:600; }
+  [data-amber] button { font-family:'Lato', system-ui, -apple-system, sans-serif; font-weight:700; }
   [data-amber] {
     --ink:#0F172A; --inkSoft:#334155; --muted:#64748B; --faint:#94A3B8;
     --bone:#F8FAFC; --paper:#FFFFFF; --hair:#E5E7EB; --hairSoft:#F1F5F9;
@@ -109,8 +110,8 @@ const THEME_CSS = `
     --shadowLg:0 2px 4px rgba(0,0,0,.4), 0 16px 40px rgba(0,0,0,.45);
   }
 `;
-const DISPLAY = "'Cormorant Garamond', Georgia, 'Times New Roman', serif";
-const UI = "'Manrope', system-ui, -apple-system, sans-serif";
+const DISPLAY = "'Lato', system-ui, -apple-system, sans-serif";
+const UI = "'Lato', system-ui, -apple-system, sans-serif";
 
 /* ===== Premium login / auth screen styles (dark + violet, responsive) ===== */
 const LOGIN_CSS = `
@@ -150,7 +151,7 @@ const LOGIN_CSS = `
   font-size:11.5px;font-weight:700;letter-spacing:.09em;margin-bottom:16px;}
 .al-pill svg{color:#c4a5f7;}
 .al-h1{margin:0 0 14px;font-family:${DISPLAY};font-weight:600;color:#fff;line-height:1.06;
-  font-size:44px;letter-spacing:0;}
+  font-size:38px;letter-spacing:-.01em;}
 .al-grad{background:linear-gradient(92deg,#e6c9fb,#ad8cf3 48%,#7d72f0);-webkit-background-clip:text;background-clip:text;color:transparent;}
 .al-white{color:#fff;}
 .al-welcome-d{display:none;}
@@ -176,7 +177,7 @@ const LOGIN_CSS = `
 .al-lockcircle svg{color:#c0a3f6;}
 .al-card-head{display:none;text-align:center;margin-bottom:18px;}
 .al-stage-head{display:block;text-align:center;margin-bottom:18px;}
-.al-card-title{font-size:25px;font-weight:600;color:#fff;letter-spacing:0;font-family:${DISPLAY};}
+.al-card-title{font-size:22px;font-weight:700;color:#fff;letter-spacing:-.01em;font-family:${DISPLAY};}
 .al-card-desc{font-size:13px;color:#9d96b8;margin-top:6px;line-height:1.45;}
 .al-label{display:block;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#9b94b8;margin:0 0 7px;}
 .al-field{position:relative;display:flex;align-items:center;margin-bottom:16px;
@@ -244,7 +245,7 @@ const LOGIN_CSS = `
     gap:56px;align-items:center;min-height:100vh;padding:48px 46px;}
   .al-wrap-solo{display:flex;justify-content:center;align-items:center;max-width:560px;}
   .al-left{text-align:left;}
-  .al-h1{font-size:68px;margin-bottom:18px;letter-spacing:0;}
+  .al-h1{font-size:56px;margin-bottom:18px;letter-spacing:-.015em;}
   .al-sub{margin-left:0;font-size:15.5px;}
   .al-welcome-d{display:inline;}
   .al-welcome-m{display:none;}
@@ -1120,7 +1121,7 @@ function AgentDash({ go, user, openLead }) {
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button onClick={() => openLead && openLead(f.lead_id)} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11 }}>Open</button>
-                    {f.lead?.phone && <button title="WhatsApp" onClick={() => window.open("https://wa.me/" + digitsOf(f.lead.phone), "_blank")} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11, borderColor: T.ok, color: T.ok }}><MessageCircle size={12} /></button>}
+                    {f.lead?.phone && <button title="WhatsApp" onClick={() => window.open("https://wa.me/" + digitsOf(f.lead.phone), "_blank")} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11, borderColor: WA, color: WA }}><MessageCircle size={12} /></button>}
                     {f.lead?.phone && <button title="Call" onClick={() => { window.location.href = "tel:" + digitsOf(f.lead.phone); }} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11 }}><Phone size={12} /></button>}
                   </div>
                 </div>
@@ -1158,7 +1159,7 @@ function AgentDash({ go, user, openLead }) {
                 {l.phone && <a href={`https://wa.me/${String(l.phone).replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
                   onClick={(e) => { e.stopPropagation(); logAction("whatsapp", l, user && user.id); }}
                   style={{ width: 34, height: 34, borderRadius: 9, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
-                  <MessageCircle size={15} color={T.ok} /></a>}
+                  <MessageCircle size={15} color={WA} /></a>}
                 {l.phone && <a href={`tel:${String(l.phone).replace(/\D/g, "")}`}
                   onClick={(e) => { e.stopPropagation(); logAction("call", l, user && user.id); }}
                   style={{ width: 34, height: 34, borderRadius: 9, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
@@ -1210,7 +1211,7 @@ function FocusList({ title, items, go, onClose }) {
         <Av name={l.client_name} size={26} />
         <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{l.client_name}</span>
         {l.phone && <a href={`https://wa.me/${String(l.phone).replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
-          style={{ fontSize: 11.5, color: T.ok, fontWeight: 700, textDecoration: "none" }}>WhatsApp</a>}
+          style={{ fontSize: 11.5, color: WA, fontWeight: 700, textDecoration: "none" }}>WhatsApp</a>}
       </div>
     ))}
   </div>;
@@ -1493,8 +1494,8 @@ function LeadDetail({ leadId, user, go }) {
     </div>;
   };
   const Btn = ({ icon: Ic, label, onClick, tone }) => <button onClick={onClick} style={{ flex: 1, minWidth: 84, display: "flex", flexDirection: "column",
-    alignItems: "center", gap: 5, padding: "12px 8px", borderRadius: 12, border: `1px solid ${tone === "ok" ? T.ok : tone === "gold" ? T.goldEdge : T.hair}`,
-    background: tone === "ok" ? T.okSoft : tone === "gold" ? T.goldSoft : T.paper, color: tone === "ok" ? T.ok : tone === "gold" ? T.gold : T.ink, cursor: "pointer", fontFamily: UI, fontSize: 11.5, fontWeight: 700 }}>
+    alignItems: "center", gap: 5, padding: "12px 8px", borderRadius: 12, border: `1px solid ${tone === "wa" ? WA : tone === "ok" ? T.ok : tone === "gold" ? T.goldEdge : T.hair}`,
+    background: tone === "wa" ? "rgba(37,211,102,.12)" : tone === "ok" ? T.okSoft : tone === "gold" ? T.goldSoft : T.paper, color: tone === "wa" ? WA : tone === "ok" ? T.ok : tone === "gold" ? T.gold : T.ink, cursor: "pointer", fontFamily: UI, fontSize: 11.5, fontWeight: 700 }}>
     <Ic size={17} /> {label}</button>;
 
   return <div>
@@ -1526,7 +1527,7 @@ function LeadDetail({ leadId, user, go }) {
     <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
       {!revealed && <Btn icon={Eye} label="View Number" onClick={reveal} />}
       {revealed && lead.phone && <Btn icon={Phone} label="Call" onClick={() => { logAction("call", lead, me && me.id); markContacted(); window.location.href = "tel:" + digits(lead.phone); }} />}
-      {lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="ok" onClick={() => { logAction("whatsapp", lead, me && me.id); markContacted(); window.open("https://wa.me/" + digits(lead.phone), "_blank"); }} />}
+      {lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="wa" onClick={() => { logAction("whatsapp", lead, me && me.id); markContacted(); window.open("https://wa.me/" + digits(lead.phone), "_blank"); }} />}
       <Btn icon={Calendar} label="Schedule Follow-Up" onClick={() => openSchedule(null)} />
       {canReassign && <Btn icon={UserPlus} label="Change Agent" tone="gold" onClick={() => { setReTo(lead.assigned_agent || ""); setReReason(""); setErr2(""); setReOpen(true); }} />}
       {canEdit && <Btn icon={editing ? X : Pencil} label={editing ? "Cancel" : "Edit details"} tone="gold" onClick={() => editing ? setEditing(false) : startEdit()} />}
@@ -3985,7 +3986,7 @@ function AskAmber({ narrow, user, openLead }) {
                         <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3, lineHeight: 1.4 }}>{ld.reason}</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
                           <button onClick={() => { logLeadAction("open", ld); if (openLead) { openLead(ld.id); setOpen(false); } }} style={cardBtn}>Open Lead</button>
-                          {ph && <button onClick={() => { logLeadAction("whatsapp", ld); window.open("https://wa.me/" + ph, "_blank"); }} style={{ ...cardBtn, borderColor: T.ok, color: T.ok }}><MessageCircle size={11} /> WhatsApp</button>}
+                          {ph && <button onClick={() => { logLeadAction("whatsapp", ld); window.open("https://wa.me/" + ph, "_blank"); }} style={{ ...cardBtn, borderColor: WA, color: WA }}><MessageCircle size={11} /> WhatsApp</button>}
                           {ph && <button onClick={() => { logLeadAction("call", ld); window.location.href = "tel:" + ph; }} style={cardBtn}><Phone size={11} /> Call</button>}
                           <button onClick={() => draftFor(ld)} style={cardBtn}><Sparkle size={11} /> Draft message</button>
                         </div>

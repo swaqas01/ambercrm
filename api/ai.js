@@ -35,10 +35,10 @@ FORMAT: Keep every reply workplace-safe, professional, concise and in plain text
 // raise confidence by pulling from approved sources instead of general memory.
 const WEB_RESEARCH = `
 
-=== WEB RESEARCH MODE (ENABLED by Master Admin) ===
+=== WEB RESEARCH MODE (ACTIVE) ===
 You have a web_search tool RESTRICTED to Amber Homes' approved sources only. Source hierarchy: 1) Amber Homes Knowledge Base above (highest — if it answers, use it and do NOT search; internal approved knowledge supersedes the web, and never disclose private/internal details unless agent-visible). 2) Official government / DLD (laws, RERA, project status, transactions, Golden Visa rules). 3) Official developer sites (project details, launches, payment plans, handover, amenities). 4) Approved portals / market-data for discovery and comparison only — never final truth unless confirmed by DLD or developer. 5) Approved news for market context only.
 
-When a project or topic is NOT in the knowledge section, prefer an approved web source over general memory, then give a SHORT useful answer.
+When a project or topic is NOT in the knowledge section, prefer an approved web source over general memory, then give a SHORT useful answer. Do NOT dead-end by replying that something is "not in our knowledge base" — if the KB lacks it, SEARCH the approved sources and answer with the best available info. Only say you could not find it if BOTH the KB and an approved web search return nothing reliable, and say clearly what you could not verify. For a project, try to give developer, location, property type, and (if found) starting price, payment plan and handover — labelling portal-sourced figures as indicative/reported and to be verified before sending to a client.
 
 Every answer that uses the web MUST end with two lines, exactly:
 Confidence: High | Medium | Low
@@ -68,25 +68,48 @@ REFUSAL LINE (use in your voice for true off-topic/inappropriate): "Let's keep i
   },
 };
 
-// --- Server-side web-research config (whitelist + global toggle), cached 60s. ---
-let _webCache = { at: 0, enabled: false, domains: [] };
+// Approved sources Ask Amber may search when the KB lacks an answer. Baked in so web
+// research works out of the box. Master Admin can still override via the database:
+//   - app_settings.web_research_enabled = 'false'  -> kill switch (turns web off)
+//   - ai_sources rows (active=true)                -> custom whitelist REPLACES these defaults
+const DEFAULT_SOURCES = [
+  // Government / DLD / official
+  "dubailand.gov.ae", "dld.gov.ae", "dubairest.gov.ae", "gdrfad.gov.ae", "u.ae", "dubai.ae",
+  // Major Dubai developers (official sites)
+  "emaar.com", "properties.emaar.com", "nakheel.com", "meraas.com", "meraas.ae", "dubaiholding.com",
+  "damacproperties.com", "sobharealty.com", "aldar.com", "ellingtonproperties.ae", "danubeproperties.com",
+  "azizidevelopments.com", "binghatti.com", "omniyat.com", "selectgroup.ae", "deyaar.ae", "dubaiproperties.ae",
+  // Approved portals / market data (discovery + comparison, not final truth)
+  "propertyfinder.ae", "bayut.com", "dxbinteract.com", "propertymonitor.com", "propsearch.ae", "reidin.com", "dubizzle.com",
+  // Approved news / market context
+  "arabianbusiness.com", "gulfnews.com", "khaleejtimes.com", "zawya.com", "thenationalnews.com",
+];
+
+// --- Server-side web-research config, cached 60s. Default ON with approved sources;
+// the database (if configured) can disable it or supply a custom whitelist. ---
+let _webCache = { at: 0, enabled: true, domains: DEFAULT_SOURCES };
 async function getWebConfig() {
   const now = Date.now();
   if (now - _webCache.at < 60000) return _webCache;
-  let enabled = false, domains = [];
+  let enabled = true, domains = DEFAULT_SOURCES;
   try {
     const h = { apikey: ANON_KEY, Authorization: "Bearer " + ANON_KEY };
+    // Optional kill switch: only an explicit 'false' turns web research off.
     const sres = await fetch(SUPABASE_URL + "/rest/v1/app_settings?key=eq.web_research_enabled&select=value", { headers: h });
-    const sj = await sres.json();
-    enabled = Array.isArray(sj) && sj[0] && String(sj[0].value).toLowerCase() === "true";
-    if (enabled) {
-      const dres = await fetch(SUPABASE_URL + "/rest/v1/ai_sources?active=eq.true&select=domain", { headers: h });
-      const dj = await dres.json();
-      domains = (Array.isArray(dj) ? dj : []).map((r) => String(r.domain || "").trim().toLowerCase()
-        .replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "")).filter(Boolean).slice(0, 60);
+    if (sres.ok) {
+      const sj = await sres.json();
+      if (Array.isArray(sj) && sj[0] && String(sj[0].value).toLowerCase() === "false") enabled = false;
     }
-  } catch (e) { enabled = false; domains = []; }
-  _webCache = { at: now, enabled: enabled && domains.length > 0, domains };
+    // Optional custom whitelist: if Master Admin has added active sources, they replace the defaults.
+    const dres = await fetch(SUPABASE_URL + "/rest/v1/ai_sources?active=eq.true&select=domain", { headers: h });
+    if (dres.ok) {
+      const dj = await dres.json();
+      const custom = (Array.isArray(dj) ? dj : []).map((r) => String(r.domain || "").trim().toLowerCase()
+        .replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "")).filter(Boolean);
+      if (custom.length) domains = custom.slice(0, 60);
+    }
+  } catch (e) { /* tables may not exist yet — keep the baked-in defaults */ }
+  _webCache = { at: now, enabled, domains };
   return _webCache;
 }
 
@@ -129,7 +152,9 @@ export default async function handler(req, res) {
 
     // Resilience: if web research is on but the plan/model rejects the web_search tool,
     // retry once WITHOUT the tool so Ask Amber still answers (from KB + careful guidance).
+    let webBlocked = false;
     if (web.enabled && body.tools && (r.status >= 400 || (data && data.type === "error"))) {
+      webBlocked = true;
       delete body.tools;
       body.max_tokens = 700;
       try {
@@ -140,7 +165,8 @@ export default async function handler(req, res) {
     }
 
     // Tell the client whether web research was available + how many domains were in scope.
-    return res.status(r.status).json({ ...data, model: MODEL, web_enabled: !!web.enabled, web_domains: web.enabled ? web.domains.length : 0 });
+    // web_blocked=true means the API plan refused the web_search tool (an account/plan issue, not a code one).
+    return res.status(r.status).json({ ...data, model: MODEL, web_enabled: !!web.enabled, web_domains: web.enabled ? web.domains.length : 0, web_blocked: webBlocked });
   } catch (e) {
     return res.status(500).json({ error: "AI request failed" });
   }
