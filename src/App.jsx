@@ -616,7 +616,7 @@ export default function App() {
     if (user && screen !== "lead" && screen !== "dealdetail") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <Performance go={go} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -764,7 +764,67 @@ function GoldBtn({ children, ghost, onClick, ...rest }) {
 }
 
 /* ============================ 1 ADMIN DASHBOARD ========================== */
-function AdminDash({ go }) {
+function BackupExport({ user }) {
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  if (!user || user.role !== "master_admin") return null;
+  const dl = (name, text, type) => {
+    const blob = new Blob([text], { type }); const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
+  };
+  const csv = (rows) => {
+    if (!rows || !rows.length) return "";
+    const cols = Object.keys(rows[0]);
+    const cell = (v) => (v == null ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v))).replace(/"/g, '""');
+    return cols.join(",") + "\n" + rows.map((r) => cols.map((c) => '"' + cell(r[c]) + '"').join(",")).join("\n");
+  };
+  const fetchAll = async (table) => {
+    let out = [], from = 0;
+    for (;;) {
+      const { data, error } = await supabase.from(table).select("*").range(from, from + 999);
+      if (error) throw error;
+      out = out.concat(data || []);
+      if (!data || data.length < 1000) break;
+      from += 1000;
+    }
+    return out;
+  };
+  const logExport = (what, n) => { try { supabase.from("admin_audit").insert({ action: "data_export", performed_by: user.id, detail: what, new_value: { rows: n } }); } catch (e) {} };
+  const run = async (key) => {
+    setBusy(key); setMsg("");
+    try {
+      const ts = new Date().toISOString().slice(0, 10);
+      if (key === "leads") { const r = await fetchAll("leads"); dl("amber-leads-" + ts + ".csv", csv(r), "text/csv"); logExport("leads_csv", r.length); setMsg("Exported " + r.length + " leads (CSV)."); }
+      else if (key === "deals") { const r = await fetchAll("deals"); dl("amber-deals-" + ts + ".csv", csv(r), "text/csv"); logExport("deals_csv", r.length); setMsg("Exported " + r.length + " deals (CSV)."); }
+      else if (key === "activity") { const r = await fetchAll("lead_activity"); dl("amber-activity-" + ts + ".csv", csv(r), "text/csv"); logExport("activity_csv", r.length); setMsg("Exported " + r.length + " activity rows (CSV)."); }
+      else if (key === "kb") { const r = await fetchAll("ai_knowledge"); dl("amber-knowledge-" + ts + ".json", JSON.stringify(r, null, 2), "application/json"); logExport("knowledge_json", r.length); setMsg("Exported " + r.length + " knowledge entries (JSON)."); }
+      else if (key === "founder") { const all = await fetchAll("ai_knowledge"); const r = all.filter((x) => /founder/i.test(x.category || "")); dl("amber-founders-knowledge-" + ts + ".json", JSON.stringify(r, null, 2), "application/json"); logExport("founder_json", r.length); setMsg("Exported " + r.length + " Founder's Knowledge entries (JSON)."); }
+      else if (key === "all") {
+        const tables = ["profiles", "leads", "lead_activity", "lead_comments", "lead_ownership_history", "follow_ups", "lead_reveals", "security_alerts", "open_leads_settings", "app_settings", "deals", "deal_activity", "hot_resale_deals", "projects", "project_files", "ai_knowledge", "ai_sources", "notifications", "admin_audit"];
+        const dump = {}; let total = 0;
+        for (const t of tables) { try { const r = await fetchAll(t); dump[t] = r; total += r.length; } catch (e) { dump[t] = { error: String((e && e.message) || e) }; } }
+        dump._manifest = { created_at: new Date().toISOString(), tables: Object.fromEntries(tables.map((t) => [t, Array.isArray(dump[t]) ? dump[t].length : "error"])) };
+        dl("amber-crm-full-backup-" + ts + ".json", JSON.stringify(dump), "application/json"); logExport("full_json", total); setMsg("Exported " + total + " rows across " + tables.length + " tables (JSON).");
+      }
+    } catch (e) { setMsg("Export failed: " + ((e && e.message) || "error") + ". Please try again."); }
+    setBusy("");
+  };
+  const BTNS = [["leads", "Leads (CSV)"], ["deals", "Deals (CSV)"], ["activity", "Activity log (CSV)"], ["kb", "Knowledge base (JSON)"], ["founder", "Founder's Knowledge (JSON)"], ["all", "Everything (JSON)"]];
+  return (
+    <div style={{ ...card, padding: 18, marginTop: 18 }}>
+      <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 4 }}>Backup / Export <span style={{ fontSize: 10.5, color: T.muted, fontWeight: 700 }}>· Master Admin only</span></div>
+      <div style={{ fontSize: 12, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>Download a snapshot of CRM data. Files contain private client data — store them in a secure, private location and never share publicly. Every export is logged.</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {BTNS.map(([k, lbl]) => (
+          <button key={k} onClick={() => run(k)} disabled={!!busy} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold, opacity: busy && busy !== k ? 0.5 : 1 }}>{busy === k ? "Exporting…" : lbl}</button>
+        ))}
+      </div>
+      {msg ? <div style={{ fontSize: 12, color: T.inkSoft, marginTop: 10, fontWeight: 600 }}>{msg}</div> : null}
+    </div>
+  );
+}
+
+function AdminDash({ go, user }) {
   const [leads, setLeads] = useState(null);
   const [acts, setActs] = useState([]);
   const [profs, setProfs] = useState([]);
@@ -1022,6 +1082,7 @@ function AdminDash({ go }) {
         </button>
       ))}
     </div>
+    <BackupExport user={user} />
   </div>;
 }
 

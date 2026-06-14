@@ -1,0 +1,30 @@
+# Example GitHub Action: nightly Amber CRM backup to an encrypted destination.
+# Put this at .github/workflows/backup.yml IN A PRIVATE REPO ONLY.
+# Set repository SECRETS (Settings -> Secrets and variables -> Actions):
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and your destination creds (e.g. AWS_* or R2_*).
+# NEVER print secrets and NEVER commit backup output back to the repo.
+name: crm-backup
+on:
+  schedule:
+    - cron: "0 1 * * *"   # 01:00 UTC daily
+  workflow_dispatch: {}
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm i @supabase/supabase-js --no-save
+      - name: Export database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/backups/backup-database.mjs ./_backup
+      - name: Export storage
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/backups/backup-storage.mjs ./_backup
+      # Upload ./_backup to encrypted private storage here (e.g. aws s3 cp --sse, or rclone to R2/GCS).
+      # Do NOT use actions/upload-artifact for client data on a public repo.

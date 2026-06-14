@@ -1,0 +1,10 @@
+{
+  "created_at": "ISO-8601 timestamp (auto-filled by the script)",
+  "source": "https://<project>.supabase.co",
+  "tables": [
+    { "table": "leads", "rows": 0, "sha256": "<hex>" },
+    { "table": "profiles", "rows": 0, "sha256": "<hex>" }
+  ],
+  "buckets": { "avatars": 0, "project-files": 0, "deal-docs": 0 },
+  "notes": "Store with the backup. Use row counts + sha256 to verify integrity before trusting a restore."
+}
