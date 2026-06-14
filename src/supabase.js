@@ -30,7 +30,7 @@ const SCREEN_ACCESS = {
   master_admin: "ALL",
   admin:        ["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","security","matching","score","careers","commission","settings","deals","dealdetail"],
   sales_manager:["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","matching","score","settings","deals","dealdetail"],
-  agent:        ["projects","hotdeals","agent","live","lead","deals","dealdetail"],
+  agent:        ["projects","hotdeals","agent","live","open","lead","deals","dealdetail"],
   marketing:    ["projects","admin","live","open","lead","settings"],
   accounts:     ["projects","admin","commission","lead","settings"],
 };

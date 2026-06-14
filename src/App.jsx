@@ -1506,6 +1506,10 @@ function LeadDetail({ leadId, user, go, openLead }) {
   const [err, setErr] = useState("");
   const [err2, setErr2] = useState("");
   const [revealed, setRevealed] = useState(false);
+  const [revealMsg, setRevealMsg] = useState("");          // quota / pause / low-balance notice
+  const [openModal, setOpenModal] = useState(false);        // "Mark as Open" reason dialog
+  const [openReason, setOpenReason] = useState("");
+  const [openBusy, setOpenBusy] = useState(false);
   const [newComment, setNewComment] = useState("");
   const [sched, setSched] = useState(false);
   const [schedDate, setSchedDate] = useState("");
@@ -1553,6 +1557,8 @@ function LeadDetail({ leadId, user, go, openLead }) {
   const LOCKED_FOR_AGENT = ["client_name", "phone", "whatsapp", "email", "source"];
   const LABELS = {}; [].concat(...Object.values(GROUPS)).forEach((d) => { LABELS[d[0]] = d[1]; });
   const isAssignedAgent = user && user.role === "agent" && lead && (lead.assigned_agent === user.id || lead.created_by === user.id);
+  // For an open-pool lead the agent does NOT own, contact must be revealed (logged + quota) before use.
+  const mustRevealOpen = lead && lead.is_open === true && !isAdmin && !(user && (lead.assigned_agent === user.id || lead.created_by === user.id || lead.current_owner === user.id));
   const canEditAll = isAdmin;
   const canEdit = canEditAll || isAssignedAgent;
   const editableKeys = canEditAll ? ALL_KEYS : AGENT_KEYS;
@@ -1595,7 +1601,35 @@ function LeadDetail({ leadId, user, go, openLead }) {
 
   const leadIdFmt = lead.lead_no ? "L" + String(lead.lead_no).padStart(3, "0") : (lead.lead_code || "—");
   const digits = (p) => String(p || "").replace(/\D/g, "");
-  const reveal = () => { setRevealed(true); logAction("view_number", lead, me && me.id); markContacted(); };
+  const reveal = async () => {
+    setRevealMsg("");
+    const { data, error } = await supabase.rpc("reveal_contact", { p_lead_id: lead.id });
+    if (error) { setRevealed(true); logAction("view_number", lead, me && me.id); markContacted(); return; }  // pre-migration fallback
+    if (data && data.error) { setRevealMsg(data.error === "forbidden" ? "You don't have access to this lead's contact details." : "Couldn't reveal this contact. Please try again."); return; }
+    if (data && data.blocked) {
+      setRevealMsg(data.reason === "quota"
+        ? "You have reached your weekly contact reveal limit. Please speak to your manager."
+        : "Contact reveals are paused on your account. Please speak to your manager.");
+      return;
+    }
+    if (data && (data.phone || data.whatsapp || data.email)) setLead((l) => ({ ...l, phone: data.phone || l.phone, whatsapp: data.whatsapp || l.whatsapp, email: data.email || l.email }));
+    setRevealed(true); markContacted();
+    if (data && data.warn && data.remaining != null) setRevealMsg("Heads up — " + data.remaining + " contact reveals left this week.");
+  };
+  const doMarkOpen = async () => {
+    setOpenBusy(true);
+    const { data, error } = await supabase.rpc("mark_lead_open", { p_lead_id: lead.id, p_reason: openReason || null });
+    setOpenBusy(false);
+    if (error || (data && data.error)) { setOpenModal(false); setErr2(data && data.error === "locked_status" ? "This lead's status doesn't allow releasing it to Open Leads." : (data && data.error === "disabled" ? "Marking leads open is currently disabled by your admin." : "Couldn't mark this lead as open. Please try again.")); return; }
+    setOpenModal(false); go("live");
+  };
+  const doAssignSelf = async () => {
+    setOpenBusy(true);
+    const { data, error } = await supabase.rpc("assign_open_lead", { p_lead_id: lead.id });
+    setOpenBusy(false);
+    if (error || (data && data.error)) { setErr2(data && data.error === "not_open" ? "This lead is no longer in the open pool." : (data && data.error === "paused" ? "Assignments are paused on your account. Please speak to your manager." : (data && data.error === "disabled" ? "Self-assigning open leads is currently disabled by your admin." : "Couldn't assign this lead. Please try again."))); return; }
+    loadAll();
+  };
   const askAmberLead = () => {
     try { supabase.from("admin_audit").insert({ action: "ask_amber_lead_opened", performed_by: me && me.id, detail: (lead && (lead.client_name || lead.lead_code)) || null, new_value: { lead_id: lead && lead.id, project: (lead && lead.project) || null } }); } catch (e) {}
     const prompt = "Help me approach this client. Use only the lead details and approved project knowledge — do not invent project details. Lead: " + (lead.client_name || "—")
@@ -1827,13 +1861,31 @@ function LeadDetail({ leadId, user, go, openLead }) {
     <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
       {!revealed && <Btn icon={Eye} label="View Number" onClick={reveal} />}
       {revealed && lead.phone && <Btn icon={Phone} label="Call" onClick={() => { logAction("call", lead, me && me.id); markContacted(); window.location.href = telHref(lead.phone); }} />}
-      {lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="wa" onClick={() => { logAction("whatsapp", lead, me && me.id); markContacted(); window.open(waHref(lead.phone), "_blank"); }} />}
+      {(revealed || !mustRevealOpen) && lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="wa" onClick={() => { logAction("whatsapp", lead, me && me.id); markContacted(); window.open(waHref(lead.phone), "_blank"); }} />}
       {revealed && lead.email && <Btn icon={Mail} label="Email" onClick={() => { logAction("email", lead, me && me.id); markContacted(); window.location.href = "mailto:" + lead.email; }} />}
+      {user && user.role === "agent" && lead.is_open && <Btn icon={UserPlus} label="Assign to Me" tone="ok" onClick={doAssignSelf} />}
       <Btn icon={Calendar} label="Schedule Follow-Up" onClick={() => openSchedule(null)} />
       {canReassign && <Btn icon={UserPlus} label="Change Agent" tone="gold" onClick={() => { setReTo(lead.assigned_agent || ""); setReReason(""); setErr2(""); setReOpen(true); }} />}
+      {user && user.role === "agent" && isAssignedAgent && !lead.is_open && lead.status !== "Closed Won" && <Btn icon={Unlock} label="Mark as Open" tone="gold" onClick={() => { setOpenReason(""); setErr2(""); setOpenModal(true); }} />}
       {canEdit && <Btn icon={editing ? X : Pencil} label={editing ? "Cancel" : "Edit details"} tone="gold" onClick={() => editing ? setEditing(false) : startEdit()} />}
       {canEdit && lead.status !== "Closed Won" && <Btn icon={Coins} label="Close deal" tone="ok" onClick={() => setShowDeal(true)} />}
     </div>
+    {revealMsg && <div style={{ ...card, padding: "10px 14px", marginTop: 10, borderColor: T.warnSoft, background: T.warnSoft, color: T.warn, fontSize: 12.5, fontWeight: 600 }}>{revealMsg}</div>}
+
+    {openModal && <Modal title="Mark lead as Open" onClose={() => setOpenModal(false)}>
+      <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>This releases the lead into the Open Leads pool for another agent to pick up. You'll no longer be assigned to it, and this is recorded in the lead history.</div>
+      <label style={{ display: "block", marginBottom: 14 }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Reason (optional)</span>
+        <select value={openReason} onChange={(e) => setOpenReason(e.target.value)} style={inp}>
+          <option value="">Select a reason…</option>
+          {["Not responsive", "Budget mismatch", "Not interested", "Wrong inquiry", "Another agent should try", "Other"].map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+      </label>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={() => setOpenModal(false)} style={{ ...miniBtn() }}>Cancel</button>
+        <button onClick={doMarkOpen} disabled={openBusy} style={{ background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 9, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, opacity: openBusy ? .6 : 1 }}>{openBusy ? "Working…" : "Mark as Open"}</button>
+      </div>
+    </Modal>}
 
     {showDeal && <DealSubmit lead={lead} user={user} onClose={() => setShowDeal(false)} onDone={() => { setShowDeal(false); go("deals"); }} />}
 
@@ -5030,7 +5082,9 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     if (error) { try { console.error("[Leads load failed]", { page: "leads", user: au && au.id, email: au && au.email, isAgent: !!isAgent, code: error.code, message: error.message, details: error.details, hint: error.hint, at: new Date().toISOString() }); } catch (e) {} setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); return; }
     let rows = data || [];
     // Agents: show only leads actually assigned to or created by them (RLS also returns the open pool — exclude that here).
-    if (isAgent && au) rows = rows.filter((l) => l.assigned_agent === au.id || l.current_owner === au.id || l.created_by === au.id);
+    if (isAgent && au) rows = (initialAgentFilter === "open")
+      ? rows.filter((l) => l.is_open === true)
+      : rows.filter((l) => l.assigned_agent === au.id || l.current_owner === au.id || l.created_by === au.id);
     setLeads(rows);
     if (!isAgent) {
       try { const { data: ag } = await supabase.from("profiles").select("id, full_name, role, active").order("full_name"); setAgents(ag || []); } catch (e) {}
@@ -5286,6 +5340,9 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                   {l.next_followup || "—"}</span>
                 <Chip tone={l.is_open ? "gold" : l.temperature === "Hot" || l.temperature === "Very Hot" ? "bad" : "info"}>{l.is_open ? "Open" : l.status}</Chip>
                 <span style={{ display: "flex", gap: 6 }}>
+                  {l.is_open ? (
+                    <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 9px", display: "inline-flex", alignItems: "center", gap: 4 }}><Lock size={11} /> Reveal inside</span>
+                  ) : <>
                   {l.phone && <a href={waHref(l.phone)} target="_blank" rel="noreferrer" title="WhatsApp"
                     onClick={(e) => { e.stopPropagation(); logAction("whatsapp", l, me && me.id); }}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
@@ -5294,6 +5351,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                     onClick={(e) => { e.stopPropagation(); logAction("call", l, me && me.id); }}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
                     <Phone size={13} color={T.inkSoft} /></a>}
+                  </>}
                 </span>
               </div>
             ) : (
