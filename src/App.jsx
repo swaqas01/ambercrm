@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Component } from "react";
-import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall } from "./supabase.js";
+import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall, resolveRole } from "./supabase.js";
 import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, isPureGreeting, categorize, logAi, fetchKnowledge, pickKnowledge } from "./mentors.js";
 import {
   BookOpen, Pencil, Trash2, Save, Check,
@@ -442,12 +442,13 @@ export default function App() {
         if (session?.user && mounted) {
           const { data: prof } = await supabase.from("profiles").select("full_name, role, active, force_password_change, first_login, password_expires_at").eq("id", session.user.id).single();
           if (prof && prof.active !== false) {
-            const ri = roleInfo(prof.role);
+            const role = resolveRole(session.user.email, prof.role);
+            const ri = roleInfo(role);
             const expired = !!(prof.password_expires_at && new Date(prof.password_expires_at).getTime() < Date.now());
-            setUser({ name: prof.full_name || session.user.email, email: session.user.email, role: prof.role,
+            setUser({ name: prof.full_name || session.user.email, email: session.user.email, role,
               roleLabel: ri.label, id: session.user.id, mustChangePw: !!prof.force_password_change || !!prof.first_login || expired });
             let initial = ri.home === "agent" ? "agent" : "admin";
-            try { const saved = sessionStorage.getItem("amber_screen"); if (saved && saved !== "lead" && saved !== "dealdetail" && canOpen(prof.role, saved)) initial = saved; } catch (e) {}
+            try { const saved = sessionStorage.getItem("amber_screen"); if (saved && saved !== "lead" && saved !== "dealdetail" && canOpen(role, saved)) initial = saved; } catch (e) {}
             setScreen(initial);
             stampLogin(session.user.id);
           } else if (prof && prof.active === false) { await supabase.auth.signOut(); }
@@ -1485,16 +1486,18 @@ function LeadDetail({ leadId, user, go }) {
     <div style={{ fontSize: 13, color: "#fff", marginTop: 2, fontWeight: 600 }}>{v}</div></div>;
 
   // One field: shows an editable control in edit mode (if permitted), else the value with a clean "Not added yet".
-  const FieldRow = ({ def }) => {
-    const [key, label, type, opts] = def;
-    const canThis = editing && editableKeys.includes(key);
-    const val = lead[key];
-    return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13, gap: 12 }}>
-      <span style={{ color: T.muted, flexShrink: 0, display: "flex", alignItems: "center", gap: 5 }}>{label}{user && user.role === "agent" && LOCKED_FOR_AGENT.includes(key) && <Lock size={11} color={T.faint} />}</span>
+  // Plain function (NOT an inline component) so the <input>/<select> reconciles by
+  // stable DOM type and never remounts on re-render — keystrokes keep focus.
+  const fieldRow = (def) => {
+    const [fkey, label, type, opts] = def;
+    const canThis = editing && editableKeys.includes(fkey);
+    const val = lead[fkey];
+    return <div key={fkey} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13, gap: 12 }}>
+      <span style={{ color: T.muted, flexShrink: 0, display: "flex", alignItems: "center", gap: 5 }}>{label}{user && user.role === "agent" && LOCKED_FOR_AGENT.includes(fkey) && <Lock size={11} color={T.faint} />}</span>
       {canThis ? (
-        type === "select" ? <select value={form[key] || ""} onChange={(e) => setF(key, e.target.value)} style={{ ...inp, maxWidth: 200 }}>
+        type === "select" ? <select value={form[fkey] || ""} onChange={(e) => setF(fkey, e.target.value)} style={{ ...inp, maxWidth: 200 }}>
           <option value="">—</option>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>
-        : <input type={type === "date" ? "date" : "text"} value={form[key] || ""} onChange={(e) => setF(key, e.target.value)} style={{ ...inp, maxWidth: 200 }} />
+        : <input type={type === "date" ? "date" : "text"} value={form[fkey] || ""} onChange={(e) => setF(fkey, e.target.value)} style={{ ...inp, maxWidth: 200 }} />
       ) : <span style={{ fontWeight: 600, textAlign: "right", color: val ? T.ink : T.faint }}>{val || "Not added yet"}</span>}
     </div>;
   };
@@ -1554,22 +1557,22 @@ function LeadDetail({ leadId, user, go }) {
       {/* contact + status */}
       <div style={{ ...card, padding: 16 }}>
         <SectionMini>Contact information</SectionMini>
-        {revealed ? GROUPS.contact.map((d) => <FieldRow key={d[0]} def={d} />)
-          : <><FieldRow def={["client_name", "Client name", "text"]} />
+        {revealed ? GROUPS.contact.map((d) => fieldRow(d))
+          : <>{fieldRow(["client_name", "Client name", "text"])}
               <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13 }}><span style={{ color: T.muted }}>Phone</span><span style={{ fontWeight: 600 }}>•••••• (View Number)</span></div>
               <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13 }}><span style={{ color: T.muted }}>WhatsApp</span><span style={{ fontWeight: 600 }}>••••••</span></div>
               <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13 }}><span style={{ color: T.muted }}>Email</span><span style={{ fontWeight: 600 }}>••••••</span></div></>}
         <div style={{ height: 14 }} />
         <SectionMini>Lead status</SectionMini>
-        {GROUPS.meta.filter((d) => canEditAll || d[0] !== "source").map((d) => <FieldRow key={d[0]} def={d} />)}
+        {GROUPS.meta.filter((d) => canEditAll || d[0] !== "source").map((d) => fieldRow(d))}
       </div>
       {/* client profile + investment */}
       <div style={{ ...card, padding: 16 }}>
         <SectionMini>Client profile</SectionMini>
-        {GROUPS.profile.map((d) => <FieldRow key={d[0]} def={d} />)}
+        {GROUPS.profile.map((d) => fieldRow(d))}
         <div style={{ height: 14 }} />
         <SectionMini>Investment requirement</SectionMini>
-        {GROUPS.invest.map((d) => <FieldRow key={d[0]} def={d} />)}
+        {GROUPS.invest.map((d) => fieldRow(d))}
       </div>
     </div>
 
@@ -3754,6 +3757,7 @@ function leadIntent(text, role) {
 
   // ---- Admin-only report intents (Master Admin / Admin / Sales Manager) ----
   if (/(unassigned|not assigned)\s*leads?/.test(t)) return { kind: "unassigned", adminOnly: true };
+  if (isAdmin && (/agent (performance|leaderboard|ranking|scoreboard|stats|numbers)|team performance|(all|every|each|everyone'?s?|the team'?s?)\s*(agents?\s*)?(performance|stats|numbers|leaderboard|ranking|scoreboard)|how (is|are) (the )?(team|agents?|everyone) (doing|performing)|performance (of|across) (all )?(agents?|the team)/.test(t))) return { kind: "perfAll", adminOnly: true };
   if (/(which|what) projects?.*(most|top).*leads?|top projects? by leads?|projects? with (the )?most leads?|project lead summary/.test(t)) return { kind: "topProjects", adminOnly: true, target };
   if (/agents?/.test(t) && /(not|aren'?t|isn'?t|haven'?t|hasn'?t)\b.*follow|who.*follow.?ups?/.test(t)) return { kind: "laggards", adminOnly: true };
   if (target && /(performance|how (is|are).*doing|stats|numbers|conversion report)/.test(t)) return { kind: "perf", adminOnly: true, target };
@@ -3767,6 +3771,8 @@ function leadIntent(text, role) {
   if (/hot leads?|hottest lead|which (leads?|clients?) (should i|to|do i) (call|contact|message|chase)|who (should i|to|do i) (call|message|contact)|which lead.*first|who.*call first/.test(t)) return { kind: "hot", target };
   if (/plan my day|what should i (focus on|do|prioriti[sz]e) today|plan my today/.test(t)) return { kind: "plan" };
   if (/(which (of my )?leads? need)|leads? need (attention|action|a follow|to follow|follow)|which leads? to work/.test(t)) return { kind: "attention", target };
+  if (/(created|added|new)\b.*\btoday\b|leads? (created |added )?today|today'?s leads?/.test(t)) return { kind: "today", target };
+  if (!target && (/\ball\b[^.]*\bleads?\b|\bevery\b[^.]*\blead|\bentire\b[^.]*\bleads?\b|company.?wide leads?|all (the )?company leads?|total leads?|how many leads|leads? (overview|summary|breakdown|count)|^\s*(show|list|get)( me)?( the| all)? leads\s*$/.test(t))) return { kind: "all", target: "" };
   if (target && /\blead/.test(t)) return { kind: "list", target };
   return null;
 }
@@ -3857,6 +3863,19 @@ async function runLeadQuery(intent, user) {
     picked = [...rows].sort((a, b) => hotRank(a) - hotRank(b) || byNew(a, b));
     if (!isAgent && rows.length) heading = `${rows.length} lead${rows.length > 1 ? "s" : ""} for ${scopeLabel} · ${tempSplit(rows)} · ${overdueOf(open).length} overdue.` + (picked.length > 8 ? " Showing top 8:" : "");
     else heading = picked.length ? `Your leads for ${scopeLabel}:` : `No leads found for ${scopeLabel}.`;
+  } else if (intent.kind === "all") {
+    picked = [...rows].sort((a, b) => hotRank(a) - hotRank(b) || byNew(a, b));
+    const won = rows.filter((l) => l.status === "Closed Won").length, lost = rows.filter((l) => l.status === "Closed Lost").length;
+    heading = rows.length ? `${rows.length} ${isAgent ? "" : "total "}lead${rows.length > 1 ? "s" : ""}${forLbl} · ${tempSplit(rows)} · ${overdueOf(open).length} overdue · ${won} won / ${lost} lost.` + (picked.length > 8 ? " Showing the 8 highest-priority:" : "") : `No leads found${forLbl}.`;
+  } else if (intent.kind === "today") {
+    picked = rows.filter((l) => createdOf(l) === today).sort(byNew);
+    heading = picked.length ? `${picked.length} lead${picked.length > 1 ? "s" : ""} created today${forLbl}:` : `No leads created today${forLbl}.`;
+  } else if (intent.kind === "perfAll") {
+    const byAg = {};
+    rows.forEach((l) => { const a = l.assigned_agent_name || "Unassigned"; (byAg[a] = byAg[a] || { total: 0, hot: 0, overdue: 0, won: 0, lost: 0 }); const live = l.status !== "Closed Won" && l.status !== "Closed Lost"; byAg[a].total++; if (hotRank(l) <= 1 && live) byAg[a].hot++; if (d10(l.next_followup) && d10(l.next_followup) < today && live) byAg[a].overdue++; if (l.status === "Closed Won") byAg[a].won++; if (l.status === "Closed Lost") byAg[a].lost++; });
+    const rowsA = Object.entries(byAg).sort((a, b) => b[1].won - a[1].won || b[1].total - a[1].total).slice(0, 15);
+    heading = rowsA.length ? "Agent performance (leads · hot · overdue · won/lost):\n" + rowsA.map(([a, s]) => `• ${a} — ${s.total} leads · ${s.hot} hot · ${s.overdue} overdue · ${s.won}W/${s.lost}L`).join("\n") : "No agent data yet.";
+    picked = [];
   } else { // plan
     const overdue = overdueOf(open).sort(byDue); const due = open.filter((l) => d10(l.next_followup) === today); const hot = open.filter((l) => hotRank(l) <= 1 && d10(l.next_followup) !== today && !overdue.includes(l));
     const seen = new Set(); picked = []; [...overdue, ...due, ...hot].forEach((l) => { if (!seen.has(l.id)) { seen.add(l.id); picked.push(l); } });
@@ -4137,8 +4156,9 @@ function LoginFlow({ onLogin }) {
     const { data: prof } = await supabase.from("profiles").select("full_name, role, active").eq("id", uid).single();
     if (!prof) { setErr("No profile found for this account. Contact your admin."); setBusy(false); return; }
     if (prof.active === false) { await supabase.auth.signOut(); setErr("Your account is inactive. Please contact admin."); setBusy(false); return; }
-    const ri = roleInfo(prof.role); stampLogin(uid);
-    onLogin({ name: prof.full_name || email, email, role: prof.role, roleLabel: ri.label, home: ri.home, id: uid, mustChangePw: false });
+    const role = resolveRole(email, prof.role);
+    const ri = roleInfo(role); stampLogin(uid);
+    onLogin({ name: prof.full_name || email, email, role, roleLabel: ri.label, home: ri.home, id: uid, mustChangePw: false });
   };
   const establish = async (token_hash, mustChange) => {
     const { data, error } = await supabase.auth.verifyOtp({ token_hash, type: "magiclink" });
@@ -4890,8 +4910,9 @@ function HotDealForm({ initial, me, onClose, onSaved }) {
       setErr(/permission|protected|allowed/i.test(e.message || "") ? "You can't submit this deal right now." : "Unable to save the deal. Please try again.");
     }
   };
-  const Field = ({ k, label, type, opts, area, ph }) => (
-    <div><span style={lbl}>{label}</span>
+  // plain function (not an inline component) -> inputs reconcile by DOM type, no remount, focus preserved
+  const field = ({ k, label, type, opts, area, ph }) => (
+    <div key={k}><span style={lbl}>{label}</span>
       {opts ? <select value={f[k] || ""} onChange={(e) => set(k, e.target.value)} style={{ ...inp, background: T.paper }}>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>
         : area ? <textarea value={f[k] || ""} onChange={(e) => set(k, e.target.value)} rows={2} placeholder={ph || ""} style={{ ...inp, resize: "vertical" }} />
           : <input type={type || "text"} value={f[k] || ""} onChange={(e) => set(k, e.target.value)} placeholder={ph || ""} style={inp} />}</div>
@@ -4899,32 +4920,32 @@ function HotDealForm({ initial, me, onClose, onSaved }) {
   return <Modal title={initial && initial.id ? "Edit hot resale deal" : "Post a hot resale deal"} onClose={onClose}>
     <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>Your deal goes to an admin for approval before it appears to the team. Posting as <b style={{ color: T.ink }}>{me.name}</b>.</div>
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-      <Field k="project_name" label="Project name *" ph="e.g. Palm Jebel Ali Villas" />
-      <Field k="area" label="Location / area *" ph="e.g. Dubai Hills Estate" />
-      <Field k="property_type" label="Property type *" opts={PROP_TYPES} />
-      <Field k="bedrooms" label="Bedrooms" ph="e.g. 3 BR" />
-      <Field k="price" label="Price *" ph="e.g. AED 4.2M" />
-      <Field k="expiry_date" label="Expiry date" type="date" />
+      {field({ k:"project_name", label:"Project name *", ph:"e.g. Palm Jebel Ali Villas" })}
+      {field({ k:"area", label:"Location / area *", ph:"e.g. Dubai Hills Estate" })}
+      {field({ k:"property_type", label:"Property type *", opts:PROP_TYPES })}
+      {field({ k:"bedrooms", label:"Bedrooms", ph:"e.g. 3 BR" })}
+      {field({ k:"price", label:"Price *", ph:"e.g. AED 4.2M" })}
+      {field({ k:"expiry_date", label:"Expiry date", type:"date" })}
     </div>
-    <Field k="deal_summary" label="Deal summary *" area ph="One or two lines a buyer would care about." />
-    <Field k="why_hot" label="Why it's a hot deal *" area ph="Below market? Motivated seller? Rare unit?" />
-    <Field k="contact_note" label="Contact / internal note" area ph="Seller contact or internal note (not shown publicly)." />
+    {field({ k:"deal_summary", label:"Deal summary *", area:true, ph:"One or two lines a buyer would care about." })}
+    {field({ k:"why_hot", label:"Why it's a hot deal *", area:true, ph:"Below market? Motivated seller? Rare unit?" })}
+    {field({ k:"contact_note", label:"Contact / internal note", area:true, ph:"Seller contact or internal note (not shown publicly)." })}
     <button onClick={() => setMore((m) => !m)} style={{ ...miniBtn(), marginTop: 12, padding: "7px 12px", fontSize: 12 }}>{more ? "− Hide" : "+ Add"} optional details</button>
     {more && <div style={{ marginTop: 6 }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field k="unit_number" label="Unit number" />
-        <Field k="size_sqft" label="Size (sqft)" />
-        <Field k="view" label="View" />
-        <Field k="floor" label="Floor" />
-        <Field k="occupancy" label="Occupancy" opts={["", "Vacant", "Rented", "Vacant on transfer"]} />
-        <Field k="seller_urgency" label="Seller urgency" opts={["", "Low", "Medium", "High", "Distressed"]} />
-        <Field k="last_txn" label="Last transaction comp" />
-        <Field k="market_price" label="Market price comp" />
-        <Field k="expected_roi" label="Expected ROI / yield" />
-        <Field k="listing_link" label="External listing link" />
+        {field({ k:"unit_number", label:"Unit number" })}
+        {field({ k:"size_sqft", label:"Size (sqft)" })}
+        {field({ k:"view", label:"View" })}
+        {field({ k:"floor", label:"Floor" })}
+        {field({ k:"occupancy", label:"Occupancy", opts:["", "Vacant", "Rented", "Vacant on transfer"] })}
+        {field({ k:"seller_urgency", label:"Seller urgency", opts:["", "Low", "Medium", "High", "Distressed"] })}
+        {field({ k:"last_txn", label:"Last transaction comp" })}
+        {field({ k:"market_price", label:"Market price comp" })}
+        {field({ k:"expected_roi", label:"Expected ROI / yield" })}
+        {field({ k:"listing_link", label:"External listing link" })}
       </div>
-      <Field k="client_suitability" label="Client suitability" area ph="Who is this perfect for?" />
-      <Field k="whatsapp_pitch" label="WhatsApp pitch text" area ph="Leave blank and the CRM will generate one." />
+      {field({ k:"client_suitability", label:"Client suitability", area:true, ph:"Who is this perfect for?" })}
+      {field({ k:"whatsapp_pitch", label:"WhatsApp pitch text", area:true, ph:"Leave blank and the CRM will generate one." })}
     </div>}
     {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginTop: 12 }}>{err}</div>}
     <div style={{ display: "flex", gap: 8, marginTop: 16 }}>

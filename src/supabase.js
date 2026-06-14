@@ -16,6 +16,15 @@ const ROLES = {
 };
 export function roleInfo(dbRole) { return ROLES[dbRole] || { label: "Agent", home: "agent" }; }
 
+// The one and only Master Admin. This account is ALWAYS treated as master_admin in the
+// app regardless of the role stored in the DB (a code-level safety net so a stale/incorrect
+// profile row can never lock Saad out of admin, the AI Knowledge Base, or Ask Amber).
+// Everyone else keeps exactly the role their profile says — no other account is elevated.
+export const MASTER_ADMIN_EMAIL = "saad@amberhomes.ae";
+export function resolveRole(email, dbRole) {
+  return ((email || "").trim().toLowerCase() === MASTER_ADMIN_EMAIL) ? "master_admin" : dbRole;
+}
+
 // Which sidebar screens each role may open. 'users' is Master-Admin only.
 const SCREEN_ACCESS = {
   master_admin: "ALL",
