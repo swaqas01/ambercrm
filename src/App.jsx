@@ -304,6 +304,118 @@ function normIntl(phone) {
 function telHref(phone) { const d = normIntl(phone); return d ? "tel:+" + d : "tel:"; }
 function waHref(phone) { const d = normIntl(phone); return "https://wa.me/" + d; }
 
+/* ===================== SMART INTERNATIONAL PHONE INPUT ===================== */
+// Curated, broad country set (iso2 + name + dial). Search matches the whole set; the six pinned
+// markets surface first, the rest alphabetical. Flags are derived from the ISO code (no asset files).
+const COUNTRIES = [
+  { iso2: "AE", name: "United Arab Emirates", dial: "971" }, { iso2: "SA", name: "Saudi Arabia", dial: "966" },
+  { iso2: "GB", name: "United Kingdom", dial: "44" }, { iso2: "PK", name: "Pakistan", dial: "92" },
+  { iso2: "IN", name: "India", dial: "91" }, { iso2: "RU", name: "Russia", dial: "7" },
+  { iso2: "AF", name: "Afghanistan", dial: "93" }, { iso2: "AL", name: "Albania", dial: "355" }, { iso2: "DZ", name: "Algeria", dial: "213" },
+  { iso2: "AR", name: "Argentina", dial: "54" }, { iso2: "AM", name: "Armenia", dial: "374" }, { iso2: "AU", name: "Australia", dial: "61" },
+  { iso2: "AT", name: "Austria", dial: "43" }, { iso2: "AZ", name: "Azerbaijan", dial: "994" }, { iso2: "BH", name: "Bahrain", dial: "973" },
+  { iso2: "BD", name: "Bangladesh", dial: "880" }, { iso2: "BY", name: "Belarus", dial: "375" }, { iso2: "BE", name: "Belgium", dial: "32" },
+  { iso2: "BJ", name: "Benin", dial: "229" }, { iso2: "BT", name: "Bhutan", dial: "975" }, { iso2: "BO", name: "Bolivia", dial: "591" },
+  { iso2: "BA", name: "Bosnia and Herzegovina", dial: "387" }, { iso2: "BR", name: "Brazil", dial: "55" }, { iso2: "BG", name: "Bulgaria", dial: "359" },
+  { iso2: "KH", name: "Cambodia", dial: "855" }, { iso2: "CM", name: "Cameroon", dial: "237" }, { iso2: "CA", name: "Canada", dial: "1" },
+  { iso2: "CL", name: "Chile", dial: "56" }, { iso2: "CN", name: "China", dial: "86" }, { iso2: "CO", name: "Colombia", dial: "57" },
+  { iso2: "CR", name: "Costa Rica", dial: "506" }, { iso2: "HR", name: "Croatia", dial: "385" }, { iso2: "CY", name: "Cyprus", dial: "357" },
+  { iso2: "CZ", name: "Czechia", dial: "420" }, { iso2: "DK", name: "Denmark", dial: "45" }, { iso2: "EG", name: "Egypt", dial: "20" },
+  { iso2: "EE", name: "Estonia", dial: "372" }, { iso2: "ET", name: "Ethiopia", dial: "251" }, { iso2: "FI", name: "Finland", dial: "358" },
+  { iso2: "FR", name: "France", dial: "33" }, { iso2: "GE", name: "Georgia", dial: "995" }, { iso2: "DE", name: "Germany", dial: "49" },
+  { iso2: "GH", name: "Ghana", dial: "233" }, { iso2: "GR", name: "Greece", dial: "30" }, { iso2: "HK", name: "Hong Kong", dial: "852" },
+  { iso2: "HU", name: "Hungary", dial: "36" }, { iso2: "IS", name: "Iceland", dial: "354" }, { iso2: "ID", name: "Indonesia", dial: "62" },
+  { iso2: "IQ", name: "Iraq", dial: "964" }, { iso2: "IE", name: "Ireland", dial: "353" }, { iso2: "IL", name: "Israel", dial: "972" },
+  { iso2: "IT", name: "Italy", dial: "39" }, { iso2: "JP", name: "Japan", dial: "81" }, { iso2: "JO", name: "Jordan", dial: "962" },
+  { iso2: "KZ", name: "Kazakhstan", dial: "77" }, { iso2: "KE", name: "Kenya", dial: "254" }, { iso2: "KW", name: "Kuwait", dial: "965" },
+  { iso2: "KG", name: "Kyrgyzstan", dial: "996" }, { iso2: "LV", name: "Latvia", dial: "371" }, { iso2: "LB", name: "Lebanon", dial: "961" },
+  { iso2: "LY", name: "Libya", dial: "218" }, { iso2: "LT", name: "Lithuania", dial: "370" }, { iso2: "LU", name: "Luxembourg", dial: "352" },
+  { iso2: "MY", name: "Malaysia", dial: "60" }, { iso2: "MV", name: "Maldives", dial: "960" }, { iso2: "MT", name: "Malta", dial: "356" },
+  { iso2: "MU", name: "Mauritius", dial: "230" }, { iso2: "MX", name: "Mexico", dial: "52" }, { iso2: "MD", name: "Moldova", dial: "373" },
+  { iso2: "MA", name: "Morocco", dial: "212" }, { iso2: "NP", name: "Nepal", dial: "977" }, { iso2: "NL", name: "Netherlands", dial: "31" },
+  { iso2: "NZ", name: "New Zealand", dial: "64" }, { iso2: "NG", name: "Nigeria", dial: "234" }, { iso2: "NO", name: "Norway", dial: "47" },
+  { iso2: "OM", name: "Oman", dial: "968" }, { iso2: "PS", name: "Palestine", dial: "970" }, { iso2: "PA", name: "Panama", dial: "507" },
+  { iso2: "PH", name: "Philippines", dial: "63" }, { iso2: "PL", name: "Poland", dial: "48" }, { iso2: "PT", name: "Portugal", dial: "351" },
+  { iso2: "QA", name: "Qatar", dial: "974" }, { iso2: "RO", name: "Romania", dial: "40" }, { iso2: "RW", name: "Rwanda", dial: "250" },
+  { iso2: "SN", name: "Senegal", dial: "221" }, { iso2: "RS", name: "Serbia", dial: "381" }, { iso2: "SG", name: "Singapore", dial: "65" },
+  { iso2: "SK", name: "Slovakia", dial: "421" }, { iso2: "SI", name: "Slovenia", dial: "386" }, { iso2: "ZA", name: "South Africa", dial: "27" },
+  { iso2: "KR", name: "South Korea", dial: "82" }, { iso2: "ES", name: "Spain", dial: "34" }, { iso2: "LK", name: "Sri Lanka", dial: "94" },
+  { iso2: "SD", name: "Sudan", dial: "249" }, { iso2: "SE", name: "Sweden", dial: "46" }, { iso2: "CH", name: "Switzerland", dial: "41" },
+  { iso2: "SY", name: "Syria", dial: "963" }, { iso2: "TW", name: "Taiwan", dial: "886" }, { iso2: "TZ", name: "Tanzania", dial: "255" },
+  { iso2: "TH", name: "Thailand", dial: "66" }, { iso2: "TN", name: "Tunisia", dial: "216" }, { iso2: "TR", name: "Turkey", dial: "90" },
+  { iso2: "TM", name: "Turkmenistan", dial: "993" }, { iso2: "UG", name: "Uganda", dial: "256" }, { iso2: "UA", name: "Ukraine", dial: "380" },
+  { iso2: "US", name: "United States", dial: "1" }, { iso2: "UY", name: "Uruguay", dial: "598" }, { iso2: "UZ", name: "Uzbekistan", dial: "998" },
+  { iso2: "VE", name: "Venezuela", dial: "58" }, { iso2: "VN", name: "Vietnam", dial: "84" }, { iso2: "YE", name: "Yemen", dial: "967" },
+  { iso2: "ZM", name: "Zambia", dial: "260" }, { iso2: "ZW", name: "Zimbabwe", dial: "263" },
+];
+const PINNED_ISO = ["AE", "SA", "GB", "PK", "IN", "RU"];
+function flagOf(iso2) { try { return String(iso2 || "").toUpperCase().replace(/[A-Z]/g, (c) => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65)); } catch (e) { return "🏳"; } }
+function dialOf(iso2) { const c = COUNTRIES.find((x) => x.iso2 === iso2); return c ? c.dial : "971"; }
+function digitsOnly(s) { return String(s || "").replace(/\D/g, ""); }
+// Normalize to E.164. International forms (+… or 00…) are trusted; a bare local number gets one trunk
+// zero stripped and the selected country dial code prepended. Matches the documented UAE/PK/UK cases.
+function toE164(raw, dial) {
+  let s = String(raw || "").trim(); if (!s) return "";
+  const compact = s.replace(/[^\d+]/g, "");
+  if (compact.startsWith("+")) return "+" + digitsOnly(compact);
+  let d = digitsOnly(s);
+  if (d.startsWith("00")) return "+" + d.slice(2);
+  if (d.startsWith("0")) d = d.replace(/^0/, "");
+  const dc = digitsOnly(dial || "");
+  return dc ? "+" + dc + d : (d ? "+" + d : "");
+}
+// Split a stored E.164 number back into { iso2, dial, national } by longest dial-code prefix.
+function parseE164(stored) {
+  const e = "+" + digitsOnly(stored);
+  if (e === "+") return { iso2: "AE", dial: "971", national: "" };
+  let best = null;
+  for (const c of COUNTRIES) { const dc = "+" + c.dial; if (e.startsWith(dc) && (!best || dc.length > ("+" + best.dial).length)) best = c; }
+  if (!best) return { iso2: "AE", dial: "971", national: digitsOnly(stored) };
+  return { iso2: best.iso2, dial: best.dial, national: e.slice(("+" + best.dial).length) };
+}
+function SmartPhoneInput({ value, onChange, disabled, placeholder }) {
+  const init = parseE164(value);
+  const [iso, setIso] = useState(init.iso2 || "AE");
+  const [nat, setNat] = useState(init.national || "");
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const wrapRef = useRef(null);
+  useEffect(() => { const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setQ(""); } }; document.addEventListener("mousedown", onDoc); return () => document.removeEventListener("mousedown", onDoc); }, []);
+  const pick = (c) => { setIso(c.iso2); setOpen(false); setQ(""); onChange(toE164(nat, dialOf(c.iso2))); };
+  const onNat = (e) => {
+    const raw = e.target.value;
+    if (/^\s*(\+|00)/.test(raw)) { const e164 = toE164(raw, dialOf(iso)); const p = parseE164(e164); setIso(p.iso2); setNat(p.national); onChange(e164); return; }
+    const cleaned = raw.replace(/[^\d ]/g, ""); setNat(cleaned); onChange(toE164(cleaned, dialOf(iso)));
+  };
+  const pinned = PINNED_ISO.map((i) => COUNTRIES.find((c) => c.iso2 === i)).filter(Boolean);
+  const rest = COUNTRIES.filter((c) => !PINNED_ISO.includes(c.iso2)).sort((a, b) => a.name.localeCompare(b.name));
+  const ql = q.trim().toLowerCase();
+  const filtered = COUNTRIES.filter((c) => c.name.toLowerCase().includes(ql) || c.dial.includes(ql.replace(/\D/g, "")) || c.iso2.toLowerCase() === ql).sort((a, b) => a.name.localeCompare(b.name));
+  const rowList = ql ? filtered : null;
+  const rowBtn = { display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", border: "none", background: "transparent", color: T.ink, padding: "9px 12px", fontSize: 12.8, fontFamily: UI, cursor: "pointer" };
+  const Row = (c) => (<button key={c.iso2} type="button" onClick={() => pick(c)} style={rowBtn}><span style={{ fontSize: 15 }}>{flagOf(c.iso2)}</span><span style={{ flex: 1 }}>{c.name}</span><span style={{ color: T.muted }}>+{c.dial}</span></button>);
+  return (
+    <div ref={wrapRef} style={{ position: "relative", display: "flex", gap: 6, marginTop: 5 }}>
+      <button type="button" disabled={disabled} onClick={() => setOpen((o) => !o)} style={{ display: "flex", alignItems: "center", gap: 5, border: `1px solid ${T.hair}`, background: T.bone, color: T.ink, borderRadius: 10, padding: "10px", fontSize: 13, fontFamily: UI, cursor: disabled ? "default" : "pointer", whiteSpace: "nowrap", opacity: disabled ? .6 : 1 }}>
+        <span style={{ fontSize: 15 }}>{flagOf(iso)}</span><span style={{ color: T.muted }}>+{dialOf(iso)}</span><span style={{ color: T.muted, fontSize: 10 }}>▾</span>
+      </button>
+      <input value={nat} onChange={onNat} disabled={disabled} placeholder={placeholder || "Phone number"} inputMode="tel"
+        style={{ flex: 1, border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, opacity: disabled ? .6 : 1, boxSizing: "border-box" }} />
+      {open && !disabled && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 60, width: "min(330px, 86vw)", background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 12, boxShadow: T.shadow, overflow: "hidden" }}>
+          <div style={{ padding: 8, borderBottom: `1px solid ${T.hair}` }}>
+            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search country or code…" style={{ width: "100%", border: `1px solid ${T.hair}`, borderRadius: 9, padding: "8px 10px", fontSize: 12.5, fontFamily: UI, outline: "none", color: T.ink, background: T.bone, boxSizing: "border-box" }} />
+          </div>
+          <div style={{ maxHeight: 240, overflowY: "auto" }}>
+            {rowList ? (rowList.length ? rowList.map(Row) : <div style={{ padding: "10px 12px", fontSize: 12, color: T.muted }}>No matches</div>)
+              : (<>{pinned.map(Row)}<div style={{ height: 1, background: T.hair, margin: "3px 0" }} />{rest.map(Row)}</>)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ================================ MOCK DATA ============================== */
 const AGENTS = [
   { id: "a1", name: "Derya Altun", initials: "DA", deals: 7, pipeline: 41.2, conv: 18, resp: "11m", leads: 34, score: 92 },
@@ -504,7 +616,7 @@ export default function App() {
     if (user && screen !== "lead" && screen !== "dealdetail") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <Performance go={go} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -1385,7 +1497,7 @@ function FocusList({ title, items, go, onClose }) {
 }
 
 /* ============================= 3 LEAD DETAIL ============================= */
-function LeadDetail({ leadId, user, go }) {
+function LeadDetail({ leadId, user, go, openLead }) {
   const [lead, setLead] = useState(null);
   const [showDeal, setShowDeal] = useState(false);
   const [comments, setComments] = useState([]);
@@ -1400,6 +1512,7 @@ function LeadDetail({ leadId, user, go }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
+  const [dupEdit, setDupEdit] = useState(null);   // duplicate found when an admin changes the phone
   const [reOpen, setReOpen] = useState(false);
   const [reTo, setReTo] = useState("");
   const [reReason, setReReason] = useState("");
@@ -1501,14 +1614,28 @@ function LeadDetail({ leadId, user, go }) {
 
   const startEdit = () => { setForm({ ...lead }); setErr2(""); setEditing(true); };
   const setF = (k, v) => setForm((s) => ({ ...s, [k]: v }));
-  const saveEdit = async () => {
+  const saveEdit = async (overrideDup) => {
     setSaving(true); setErr2("");
     const changes = {};
     editableKeys.forEach((k) => { const nv = form[k] == null ? null : form[k]; const ov = lead[k] == null ? null : lead[k];
       if (String(nv || "") !== String(ov || "")) changes[k] = nv === "" ? null : nv; });
     if (Object.keys(changes).length === 0) { setEditing(false); setSaving(false); return; }
+    // Normalize any contact-number change to E.164, and (admins only reach here) block a phone change
+    // that collides with another lead's number unless explicitly overridden.
+    if (changes.phone != null) changes.phone = toE164(changes.phone);
+    if (changes.whatsapp != null) changes.whatsapp = toE164(changes.whatsapp);
+    if (changes.phone != null && !overrideDup) {
+      const res = await supabase.rpc("check_duplicate_phone", { p_phone: changes.phone });
+      if (!res.error) {
+        if (res.data && res.data.exists && res.data.lead_id && res.data.lead_id !== lead.id) { setDupEdit(res.data); setSaving(false); return; }
+      } else {
+        const { data: hit } = await supabase.from("leads").select("id, lead_code, client_name").eq("phone", changes.phone).neq("id", lead.id).limit(1);
+        if (hit && hit.length) { setDupEdit({ exists: true, lead_id: hit[0].id, lead_code: hit[0].lead_code, client_name: hit[0].client_name }); setSaving(false); return; }
+      }
+    }
     const { error } = await supabase.from("leads").update(changes).eq("id", lead.id);
     if (error) { setErr2(/permission|protected/i.test(error.message || "") ? "You do not have permission to edit one of those fields." : "Could not save your changes. Please try again."); setSaving(false); return; }
+    setDupEdit(null);
     for (const k of Object.keys(changes)) {
       await supabase.from("lead_activity").insert({ lead_id: lead.id, actor_id: me.id, action: "field_change",
         detail: { field: k, label: LABELS[k] || k, from: lead[k] || null, to: changes[k] || null } });
@@ -1657,7 +1784,9 @@ function LeadDetail({ leadId, user, go }) {
     return <div key={fkey} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13, gap: 12 }}>
       <span style={{ color: T.muted, flexShrink: 0, display: "flex", alignItems: "center", gap: 5 }}>{label}{user && user.role === "agent" && LOCKED_FOR_AGENT.includes(fkey) && <Lock size={11} color={T.faint} />}</span>
       {canThis ? (
-        type === "select" ? <select value={form[fkey] || ""} onChange={(e) => setF(fkey, e.target.value)} style={{ ...inp, maxWidth: 200 }}>
+        (fkey === "phone" || fkey === "whatsapp")
+          ? <div style={{ maxWidth: 240, width: "100%" }}><SmartPhoneInput value={form[fkey] || ""} onChange={(v) => setF(fkey, v)} placeholder={label} /></div>
+        : type === "select" ? <select value={form[fkey] || ""} onChange={(e) => setF(fkey, e.target.value)} style={{ ...inp, maxWidth: 200 }}>
           <option value="">—</option>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>
         : <input type={type === "date" ? "date" : "text"} value={form[fkey] || ""} onChange={(e) => setF(fkey, e.target.value)} style={{ ...inp, maxWidth: 200 }} />
       ) : <span style={{ fontWeight: 600, textAlign: "right", color: val ? T.ink : T.faint }}>{val || "Not added yet"}</span>}
@@ -1716,6 +1845,17 @@ function LeadDetail({ leadId, user, go }) {
       </div>
     </div>}
     {err2 && <div style={{ ...card, padding: "10px 14px", marginTop: 10, borderColor: T.badSoft, color: T.bad, fontSize: 12.5 }}>{err2}</div>}
+    {dupEdit && <div style={{ ...card, padding: 12, marginTop: 10, borderColor: T.warnSoft, background: T.warnSoft }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: T.warn }}>That number already belongs to another lead</div>
+      <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 4, lineHeight: 1.5 }}>
+        {(dupEdit.client_name || "—")}{dupEdit.lead_code ? " · " + dupEdit.lead_code : ""}{dupEdit.assigned_agent_name ? " · " + dupEdit.assigned_agent_name : ""}{dupEdit.status ? " · " + dupEdit.status : ""}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+        {dupEdit.lead_id && <button onClick={() => { setDupEdit(null); setEditing(false); if (openLead) openLead(dupEdit.lead_id); }} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Open Existing Lead</button>}
+        <button onClick={() => saveEdit(true)} style={{ ...miniBtn(), borderColor: T.warn, color: T.warn }}>Save anyway</button>
+        <button onClick={() => setDupEdit(null)} style={{ ...miniBtn() }}>Cancel</button>
+      </div>
+    </div>}
 
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14, marginTop: 14 }}>
       {/* contact + status */}
@@ -5185,7 +5325,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                : "Master Admin sees full client contact details. What each person sees is enforced by row-level security; agent reveals are logged."}
     </div>
 
-    {showAdd && <AddLeadModal me={me} user={user} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />}
+    {showAdd && <AddLeadModal me={me} user={user} openLead={openLead} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />}
     {showImport && <ImportModal me={me} onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); load(); }} />}
     {showBulk && <BulkAssignModal count={selIds.length} agents={assignable} onClose={() => setShowBulk(false)} onRun={runBulk} />}
     {toast && <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.ink, color: "#fff", padding: "11px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600, zIndex: 200, boxShadow: T.shadowLg }}>{toast}</div>}
@@ -5201,11 +5341,11 @@ const DUBAI_PROJECTS = ["Palm Jebel Ali","Dubai Hills Estate","Emaar South","The
 const LEAD_TYPES = ["Buyer", "Seller", "Tenant", "Agent"];
 const normPhone = (p) => { if (!p) return ""; let d = String(p).replace(/[^\d+]/g, ""); if (d.startsWith("00")) d = "+" + d.slice(2); else if (!d.startsWith("+")) d = "+" + d; return d; };
 
-function AddLeadModal({ onClose, onSaved, me, user }) {
+function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
   const isAgent = user && user.role === "agent";
   const [mode, setMode] = useState("manual"); // manual | ai
   const [aiText, setAiText] = useState(""); const [aiBusy, setAiBusy] = useState(false); const [aiErr, setAiErr] = useState("");
-  const [f, setF] = useState({ client_name: "", phone: "", email: "", project: "", area: "", budget: "",
+  const [f, setF] = useState({ client_name: "", phone: "", whatsapp: "", waSame: true, email: "", project: "", area: "", budget: "",
     property_type: "", ready_offplan: "", purpose: "", nationality: "", followup_note: "", lead_type: "Buyer",
     assigned_agent_name: isAgent ? (user.name || "") : "" });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
@@ -5233,16 +5373,29 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
 
   const doInsert = async (overrideDup) => {
     setBusy(true); setErr("");
-    const phone = normPhone(f.phone);
-    // duplicate check (phone or email)
+    const phone = toE164(f.phone);                       // already E.164 from SmartPhoneInput; idempotent
+    const whatsapp = f.waSame ? phone : (toE164(f.whatsapp) || phone);
+    // Duplicate fail-safe. Uses a SECURITY DEFINER RPC so an agent's check also catches numbers held by
+    // OTHER agents (which RLS would otherwise hide) — without leaking those leads' details.
     if (!overrideDup) {
-      let dq = supabase.from("leads").select("lead_code, client_name, phone, email").limit(1);
-      const ors = [`phone.eq.${phone}`]; if (f.email.trim()) ors.push(`email.eq.${f.email.trim()}`);
-      const { data: hit } = await supabase.from("leads").select("lead_code, client_name, phone, email")
-        .or(ors.join(",")).limit(1);
-      if (hit && hit.length) {
-        if (isAgent) { setBusy(false); setErr("A lead with this phone/email already exists (" + hit[0].lead_code + "). Ask an admin to add it."); return; }
-        setDup(hit[0]); setBusy(false); return;
+      let dupInfo = null;
+      const res = await supabase.rpc("check_duplicate_phone", { p_phone: phone });
+      if (!res.error) dupInfo = res.data;
+      else {
+        // RPC not deployed yet (migration 23) — fall back to a direct, RLS-scoped lookup.
+        const { data: hit } = await supabase.from("leads")
+          .select("id, lead_code, client_name, assigned_agent_name, status, project, area, created_at")
+          .eq("phone", phone).limit(1);
+        dupInfo = (hit && hit.length)
+          ? { exists: true, mine: true, lead_id: hit[0].id, lead_code: hit[0].lead_code, client_name: hit[0].client_name, assigned_agent_name: hit[0].assigned_agent_name, status: hit[0].status, project: hit[0].project, area: hit[0].area, created_at: hit[0].created_at }
+          : { exists: false };
+      }
+      if (dupInfo && dupInfo.exists) {
+        try { logAi({ user, question: "[duplicate add blocked] " + phone, responseSum: dupInfo.mine ? "own_lead" : (isAgent ? "other_agent" : "admin_view"), category: "crm", status: "blocked" }); } catch (e) {}
+        setBusy(false);
+        if (isAgent && !dupInfo.mine) { setErr("This lead already exists in the CRM. Please speak to your manager."); return; }
+        if (isAgent && dupInfo.mine) { setDup({ kind: "mine", lead_id: dupInfo.lead_id }); return; }
+        setDup({ kind: "admin", ...dupInfo }); return;     // admin: show details + Open Existing / override
       }
     }
     const code = "L-" + Math.random().toString(36).slice(2, 7).toUpperCase();
@@ -5255,7 +5408,7 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
       ? { assigned_agent: myId, current_owner: myId, assigned_agent_name: (user && user.name) || (me && me.full_name) || null, assigned_at: nowIso, is_open: false }
       : { assigned_agent_name: f.assigned_agent_name.trim() || null };
     const payload = {
-      lead_code: code, client_name: f.client_name.trim(), phone, whatsapp: phone, email: f.email.trim() || null,
+      lead_code: code, client_name: f.client_name.trim(), phone, whatsapp, email: f.email.trim() || null,
       project: f.project.trim() || null, area: f.area.trim() || null, budget: f.budget.trim() || null,
       property_type: f.property_type.trim() || null, ready_offplan: f.ready_offplan.trim() || null,
       lead_type: f.lead_type || "Buyer",
@@ -5278,7 +5431,7 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
 
   const save = () => {
     if (!f.client_name.trim()) { setErr("Client name is required."); return; }
-    if (!normPhone(f.phone) || normPhone(f.phone).length < 7) { setErr("Phone number is required to create a lead."); return; }
+    const p = toE164(f.phone); if (!p || digitsOnly(p).length < 8) { setErr("A valid phone number is required to create a lead."); return; }
     setDup(null); doInsert(false);
   };
 
@@ -5321,7 +5474,20 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
       <datalist id="areas">{DUBAI_AREAS.map((a) => <option key={a} value={a} />)}</datalist>
       <datalist id="projects">{DUBAI_PROJECTS.map((p) => <option key={p} value={p} />)}</datalist>
       {field("Client name *", "client_name")}
-      {field("Phone * (required)", "phone", { norm: true, ph: "+9715…" })}
+      <label style={{ display: "block", marginBottom: 6 }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Phone * (required)</span>
+        <SmartPhoneInput value={f.phone} onChange={(v) => set("phone", v)} placeholder="Phone number" />
+      </label>
+      <div style={{ fontSize: 10.5, color: T.faint, margin: "0 0 10px", lineHeight: 1.45 }}>Phone number is used to prevent duplicate leads.</div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: f.waSame ? 12 : 8, cursor: "pointer", fontSize: 12.5, color: T.inkSoft }}>
+        <input type="checkbox" checked={f.waSame} onChange={(e) => set("waSame", e.target.checked)} style={{ width: 15, height: 15 }} /> WhatsApp same as phone
+      </label>
+      {!f.waSame && (
+        <label style={{ display: "block", marginBottom: 12 }}>
+          <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>WhatsApp number</span>
+          <SmartPhoneInput value={f.whatsapp} onChange={(v) => set("whatsapp", v)} placeholder="WhatsApp number" />
+        </label>
+      )}
       {field("Email", "email", { ph: "optional" })}
       <label style={{ display: "block", marginBottom: 10 }}>
         <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Lead type</span>
@@ -5338,10 +5504,22 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
       {field("Follow-up note", "followup_note")}
       {field(isAgent ? "Assigned to (you)" : "Assign to (agent name)", "assigned_agent_name", { disabled: isAgent })}
       {err && <div style={{ color: T.bad, fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>{err}</div>}
-      {dup && <div style={{ ...card, padding: 12, marginBottom: 10, borderColor: T.warnSoft, background: T.warnSoft }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, color: T.warn }}>Possible duplicate lead found</div>
-        <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 3 }}>{dup.lead_code} · {dup.client_name} · {dup.phone}</div>
+      {dup && dup.kind === "mine" && <div style={{ ...card, padding: 12, marginBottom: 10, borderColor: T.warnSoft, background: T.warnSoft }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: T.warn }}>This lead already exists in your leads.</div>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button onClick={() => { if (openLead && dup.lead_id) { openLead(dup.lead_id); onClose(); } }} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Open Lead</button>
+          <button onClick={() => setDup(null)} style={{ ...miniBtn() }}>Cancel</button>
+        </div>
+      </div>}
+      {dup && dup.kind === "admin" && <div style={{ ...card, padding: 12, marginBottom: 10, borderColor: T.warnSoft, background: T.warnSoft }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: T.warn }}>Duplicate found — this number is already on a lead</div>
+        <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 4, lineHeight: 1.5 }}>
+          {(dup.client_name || "—")}{dup.lead_code ? " · " + dup.lead_code : ""}<br />
+          Agent: {dup.assigned_agent_name || "Unassigned"} · Status: {dup.status || "New"}<br />
+          {(dup.project || dup.area) ? ((dup.project || "") + (dup.project && dup.area ? " · " : "") + (dup.area || "")) : "No project/area"}{dup.created_at ? " · created " + new Date(dup.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : ""}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+          {dup.lead_id && <button onClick={() => { if (openLead) { openLead(dup.lead_id); onClose(); } }} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Open Existing Lead</button>}
           <button onClick={() => { setDup(null); doInsert(true); }} style={{ ...miniBtn(), borderColor: T.warn, color: T.warn }}>Create anyway</button>
           <button onClick={() => setDup(null)} style={{ ...miniBtn() }}>Cancel</button>
         </div>
@@ -5357,6 +5535,7 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
 function ImportModal({ onClose, onDone, me }) {
   const [rows, setRows] = useState(null); const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(""); const [done, setDone] = useState(0); const [fileName, setFileName] = useState("");
+  const [result, setResult] = useState(null);   // { created, skipped, invalid } after an import run
 
   // Find a value in a header-keyed row object by fuzzy column-name match (case-insensitive).
   const pickFrom = (obj, names) => {
@@ -5412,19 +5591,32 @@ function ImportModal({ onClose, onDone, me }) {
   };
 
   const run = async () => {
-    if (!rows || !rows.length) return; setBusy(true); setErr(""); let n = 0;
-    for (let i = 0; i < rows.length; i += 50) {
-      const batch = rows.slice(i, i + 50).map((x, j) => ({
+    if (!rows || !rows.length) return; setBusy(true); setErr(""); setDone(0);
+    // Existing numbers (resilient: prefer normalized_phone, else derive from phone). Import defaults
+    // bare local numbers to UAE (+971), matching the server normalizer.
+    let existing = new Set();
+    let ex = await supabase.from("leads").select("normalized_phone").limit(5000);
+    if (ex.error) ex = await supabase.from("leads").select("phone").limit(5000);
+    (ex.data || []).forEach((r) => { const k = r.normalized_phone || toE164(r.phone, "971"); if (k) existing.add(k); });
+    const seen = new Set(); const valid = []; let skipped = 0, invalid = 0;
+    for (const x of rows) {
+      const e164 = toE164(x.phone, "971");
+      if (!e164 || digitsOnly(e164).length < 8) { invalid++; continue; }
+      if (existing.has(e164) || seen.has(e164)) { skipped++; continue; }
+      seen.add(e164); valid.push({ ...x, _e164: e164 });
+    }
+    let created = 0;
+    for (let i = 0; i < valid.length; i += 50) {
+      const batch = valid.slice(i, i + 50).map((x, j) => ({
         lead_code: "L-" + Date.now().toString(36).slice(-4) + (i + j),
-        client_name: x.client_name, phone: x.phone ? "+" + String(x.phone).replace(/\D/g, "") : null,
-        whatsapp: x.phone ? "+" + String(x.phone).replace(/\D/g, "") : null, email: x.email || null,
+        client_name: x.client_name, phone: x._e164, whatsapp: x._e164, email: x.email || null,
         project: x.project || null, area: x.area || null, assigned_agent_name: x.assigned_agent_name || null,
         source: "Import", status: "New", temperature: "Cold" }));
       const { error } = await supabase.from("leads").insert(batch);
-      if (error) { try { console.error("Import failed:", error); } catch (e) {} setErr("Some rows couldn't be imported. Please check the file and try again."); setBusy(false); return; }
-      n += batch.length; setDone(n);
+      if (error) { try { console.error("Import failed:", error); } catch (e) {} setErr("Some rows couldn't be imported after " + created + " saved. Please check the file and try again."); setBusy(false); return; }
+      created += batch.length; setDone(created);
     }
-    setBusy(false); onDone();
+    setResult({ created, skipped, invalid }); setBusy(false);
   };
   return <Modal title="Import leads from file" onClose={onClose}>
     <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>
@@ -5435,9 +5627,17 @@ function ImportModal({ onClose, onDone, me }) {
       Found <b>{rows.length}</b> rows{fileName ? ` in ${fileName}` : ""}. First: {rows[0]?.client_name} · {rows[0]?.project || "—"}</div>}
     {err && <div style={{ color: T.bad, fontSize: 12, fontWeight: 600, marginBottom: 8 }}>{err}</div>}
     {busy && <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 8 }}>Importing… {done} saved</div>}
-    <button onClick={run} disabled={!rows || busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
+    {result ? <>
+      <div style={{ ...card, padding: 12, marginBottom: 12, fontSize: 12.8, lineHeight: 1.7 }}>
+        <div style={{ fontWeight: 700, color: T.ink, marginBottom: 4 }}>Import complete</div>
+        <div style={{ color: T.ok, fontWeight: 700 }}>{result.created} created</div>
+        <div style={{ color: T.warn }}>{result.skipped} skipped (duplicate phone numbers)</div>
+        <div style={{ color: result.invalid ? T.bad : T.muted }}>{result.invalid} skipped (missing/invalid phone)</div>
+      </div>
+      <button onClick={onDone} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Done</button>
+    </> : <button onClick={run} disabled={!rows || busy} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
       borderRadius: 10, padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: rows ? "pointer" : "default",
-      fontFamily: UI, opacity: (!rows || busy) ? .5 : 1 }}>{busy ? "Importing…" : `Import ${rows ? rows.length : ""} leads`}</button>
+      fontFamily: UI, opacity: (!rows || busy) ? .5 : 1 }}>{busy ? "Importing…" : `Import ${rows ? rows.length : ""} leads`}</button>}
   </Modal>;
 }
 
