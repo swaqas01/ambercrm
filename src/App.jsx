@@ -26,26 +26,26 @@ const THEME_CSS = `
   html, body { background:#130a26; }
   [data-amber] button { font-family:'Manrope', system-ui, -apple-system, sans-serif; font-weight:600; }
   [data-amber] {
-    --ink:#2E263D; --inkSoft:#4B465C; --muted:#6E6B7B; --faint:#A5A2B2;
-    --bone:#F4F5FA; --paper:#FFFFFF; --hair:#EAEAEF; --hairSoft:#F3F3F8;
-    --gold:#8C57FF; --goldBright:#9B6BFF; --goldSoft:#F1EAFF; --goldEdge:#E4D7FF;
-    --ok:#56CA00; --okSoft:#EAF8DD; --warn:#FFB400; --warnSoft:#FFF3DA;
-    --bad:#FF4C51; --badSoft:#FFE6E7; --info:#16B1FF; --infoSoft:#E0F4FF;
-    --hero:#2B2C40; --side:#FFFFFF; --btnBg:#8C57FF; --btnFg:#FFFFFF;
-    --goldTint:#F7F3FF; --wm:rgba(140,87,255,.06);
-    --shadow:0 2px 8px rgba(76,78,100,.10); --shadowLg:0 6px 24px rgba(76,78,100,.16);
-    --sideText:#5B5769; --sideActiveText:#FFFFFF; --sideActiveBg:linear-gradient(72deg,#9168FF 0%,#8C57FF 100%); --sideBorder:#ECECF2; --sideBrand:#2E263D;
+    --ink:#0F172A; --inkSoft:#334155; --muted:#64748B; --faint:#94A3B8;
+    --bone:#F8FAFC; --paper:#FFFFFF; --hair:#E5E7EB; --hairSoft:#F1F5F9;
+    --gold:#7C3AED; --goldBright:#9333EA; --goldSoft:#F3E8FF; --goldEdge:#E9D5FF;
+    --ok:#10B981; --okSoft:#D1FAE5; --warn:#F59E0B; --warnSoft:#FEF3C7;
+    --bad:#EF4444; --badSoft:#FEE2E2; --info:#0EA5E9; --infoSoft:#E0F2FE;
+    --hero:#0F172A; --side:#FFFFFF; --btnBg:#7C3AED; --btnFg:#FFFFFF;
+    --goldTint:#FAF5FF; --wm:rgba(124,58,237,.05);
+    --shadow:0 1px 2px rgba(15,23,42,.04), 0 6px 18px rgba(15,23,42,.06); --shadowLg:0 2px 4px rgba(15,23,42,.06), 0 18px 44px rgba(15,23,42,.10);
+    --sideText:#475569; --sideActiveText:#7C3AED; --sideActiveBg:#F3E8FF; --sideBorder:#EAECF1; --sideBrand:#0F172A;
   }
   [data-amber="dark"] {
-    --ink:#E7E3FC; --inkSoft:#D5D2E8; --muted:#A9A6C0; --faint:#6E6B8C;
-    --bone:#28243D; --paper:#312D4B; --hair:#3B3759; --hairSoft:#353150;
-    --gold:#9E72FF; --goldBright:#B492FF; --goldSoft:#3A335A; --goldEdge:#4D4673;
-    --ok:#56CA00; --okSoft:#22300F; --warn:#FFB400; --warnSoft:#33290F;
-    --bad:#FF4C51; --badSoft:#3A1B1D; --info:#16B1FF; --infoSoft:#0F2A3A;
-    --hero:#232132; --side:#2B2940; --btnBg:#8C57FF; --btnFg:#FFFFFF;
-    --goldTint:#2A2447; --wm:rgba(158,114,255,.08);
-    --shadow:0 2px 8px rgba(0,0,0,.35); --shadowLg:0 6px 24px rgba(0,0,0,.5);
-    --sideText:rgba(231,227,252,.72); --sideActiveText:#FFFFFF; --sideActiveBg:linear-gradient(72deg,#9168FF 0%,#8C57FF 100%); --sideBorder:rgba(255,255,255,.07); --sideBrand:#FFFFFF;
+    --ink:#F8FAFC; --inkSoft:#CBD5E1; --muted:#94A3B8; --faint:#64748B;
+    --bone:#0B1020; --paper:#0F172A; --hair:rgba(148,163,184,.14); --hairSoft:rgba(148,163,184,.07);
+    --gold:#A855F7; --goldBright:#C084FC; --goldSoft:#2A1E45; --goldEdge:#4C3A7A;
+    --ok:#10B981; --okSoft:#0E2A22; --warn:#F59E0B; --warnSoft:#3A2A0E;
+    --bad:#EF4444; --badSoft:#3A1A1A; --info:#38BDF8; --infoSoft:#0C2A3A;
+    --hero:#0E1528; --side:#07111F; --btnBg:#7C3AED; --btnFg:#FFFFFF;
+    --goldTint:#1A1330; --wm:rgba(168,85,247,.08);
+    --shadow:0 2px 8px rgba(0,0,0,.45); --shadowLg:0 10px 34px rgba(0,0,0,.55);
+    --sideText:rgba(248,250,252,.66); --sideActiveText:#FFFFFF; --sideActiveBg:linear-gradient(90deg,#7C3AED 0%,#A855F7 100%); --sideBorder:rgba(148,163,184,.12); --sideBrand:#F8FAFC;
   }
   [data-amber] * { box-sizing: border-box; }
   [data-amber] button, [data-amber] select { transition: background .18s ease, border-color .18s ease, color .18s ease, transform .12s ease, box-shadow .18s ease; }
@@ -509,10 +509,10 @@ export default function App() {
       {/* sidebar */}
       {user && (!narrow || navOpen) && (
         <aside style={{ width: 232, background: T.side, color: "var(--sideText, #fff)", flexShrink: 0, display: "flex",
-          flexDirection: "column", position: narrow ? "fixed" : "sticky", top: 0, height: narrow ? "100%" : "100vh", transition: "background .25s ease",
+          flexDirection: "column", position: narrow ? "fixed" : "sticky", top: 0, height: narrow ? "100dvh" : "100vh", paddingBottom: narrow ? "env(safe-area-inset-bottom)" : 0, transition: "background .25s ease",
           borderRight: "1px solid var(--sideBorder, transparent)",
           zIndex: 50, boxShadow: narrow ? "0 0 60px rgba(0,0,0,.4)" : "none" }}>
-          <div style={{ padding: "22px 20px 18px", borderBottom: "1px solid var(--sideBorder, rgba(140,87,255,.18))" }}>
+          <div style={{ padding: narrow ? "calc(env(safe-area-inset-top) + 18px) 20px 18px" : "22px 20px 18px", borderBottom: "1px solid var(--sideBorder, rgba(140,87,255,.18))" }}>
             <div style={{ fontFamily: DISPLAY, fontSize: 18, letterSpacing: ".005em", color: "var(--sideBrand, #fff)", fontWeight: 800, lineHeight: 1.1 }}>Amber Homes</div>
             <div style={{ fontFamily: DISPLAY, fontSize: 9.5, letterSpacing: ".34em", color: T.gold, marginTop: 4, fontWeight: 700 }}>REAL ESTATE CRM</div>
           </div>
@@ -546,7 +546,7 @@ export default function App() {
       {/* main */}
       {user && <main style={{ flex: 1, minWidth: 0 }}>
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-          padding: narrow ? "12px 14px" : "14px 26px", background: T.paper, borderBottom: `1px solid ${T.hair}`,
+          padding: narrow ? "calc(env(safe-area-inset-top) + 12px) 14px 12px" : "14px 26px", background: T.paper, borderBottom: `1px solid ${T.hair}`,
           position: "sticky", top: 0, zIndex: 30 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {narrow && <button onClick={() => setNavOpen(true)} style={{ border: `1px solid ${T.hair}`, background: T.paper,
