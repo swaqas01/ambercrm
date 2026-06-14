@@ -4219,7 +4219,7 @@ async function runLeadQuery(intent, user) {
   const weekAgo = new Date(Date.now() - 7 * 864e5).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
   const { data: { user: au } } = await supabase.auth.getUser();
   const { data, error } = await supabase.from("leads")
-    .select("id, lead_code, lead_no, client_name, area, project, developer, property_type, notes, followup_note, nationality, language, status, temperature, next_followup, last_contacted, phone, budget, purpose, lead_type, is_open, assigned_agent, assigned_agent_name, current_owner, created_by, created_at, created_on")
+    .select("*")
     .limit(2000);
   if (error) throw error;
   let rows = data || [];
@@ -4885,9 +4885,9 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     const { data: { user: au } } = await supabase.auth.getUser();
     setMe(au);
     const { data, error } = await supabase.from("leads")
-      .select("id, lead_code, lead_no, client_name, phone, whatsapp, email, project, area, budget, lead_type, assigned_agent_name, assigned_agent, original_agent, current_owner, created_by, status, temperature, source, is_open, opened_reason, next_followup, last_contacted, created_on, created_at, assigned_at")
+      .select("*")
       .order("created_at", { ascending: false }).limit(2000);
-    if (error) { try { console.error("Leads load failed:", error); } catch (e) {} setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); return; }
+    if (error) { try { console.error("[Leads load failed]", { page: "leads", user: au && au.id, email: au && au.email, isAgent: !!isAgent, code: error.code, message: error.message, details: error.details, hint: error.hint, at: new Date().toISOString() }); } catch (e) {} setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); return; }
     let rows = data || [];
     // Agents: show only leads actually assigned to or created by them (RLS also returns the open pool — exclude that here).
     if (isAgent && au) rows = rows.filter((l) => l.assigned_agent === au.id || l.current_owner === au.id || l.created_by === au.id);
@@ -5254,14 +5254,20 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
     const ownership = isAgent
       ? { assigned_agent: myId, current_owner: myId, assigned_agent_name: (user && user.name) || (me && me.full_name) || null, assigned_at: nowIso, is_open: false }
       : { assigned_agent_name: f.assigned_agent_name.trim() || null };
-    const { data: ins, error } = await supabase.from("leads").insert({
+    const payload = {
       lead_code: code, client_name: f.client_name.trim(), phone, whatsapp: phone, email: f.email.trim() || null,
       project: f.project.trim() || null, area: f.area.trim() || null, budget: f.budget.trim() || null,
       property_type: f.property_type.trim() || null, ready_offplan: f.ready_offplan.trim() || null,
       lead_type: f.lead_type || "Buyer",
       purpose: f.purpose.trim() || null, nationality: f.nationality.trim() || null, followup_note: f.followup_note.trim() || null,
       source: "Manual", status: "New", temperature: "Cold", created_by: myId, ...ownership,
-    }).select("id").single();
+    };
+    let { data: ins, error } = await supabase.from("leads").insert(payload).select("id").single();
+    // Graceful degradation: if the lead_type column hasn't been added yet (migration 20 not applied), retry without it.
+    if (error && /lead_type/i.test((error.message || "") + (error.details || "")) && /(column|schema|exist)/i.test((error.message || "") + (error.details || ""))) {
+      const rest = { ...payload }; delete rest.lead_type;
+      ({ data: ins, error } = await supabase.from("leads").insert(rest).select("id").single());
+    }
     if (error) { try { console.error("Add lead failed:", error); } catch (e) {} setBusy(false); setErr("Couldn't save this lead. Please check the details and try again."); return; }
     // audit
     if (me && ins) supabase.from("lead_activity").insert({ lead_id: ins.id, actor_id: me.id,
