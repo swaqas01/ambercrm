@@ -58,6 +58,11 @@ const THEME_CSS = `
   @media (prefers-reduced-motion: reduce) { [data-amber] button { transition: none; } [data-amber] button:hover { transform: none; } }
   /* iOS Safari auto-zooms when a focused input is < 16px — force 16px on mobile to stop the zoom */
   @media (max-width: 768px) { [data-amber] input, [data-amber] textarea, [data-amber] select { font-size: 16px !important; } }
+  /* iPhone PWA standalone only: push the Ask Amber chat header below the status bar/notch and clear the home indicator. Safari (browser) is unaffected, so no extra gap there. */
+  @media all and (display-mode: standalone) {
+    .amber-chat-header { padding-top: calc(env(safe-area-inset-top) + 13px) !important; }
+    .amber-chat-foot { padding-bottom: calc(env(safe-area-inset-bottom) + 11px) !important; }
+  }
   html, body { max-width: 100%; overflow-x: hidden; }
   [data-amber] { max-width: 100%; }
   /* ===== full theme templates (base + accent) ===== */
@@ -3996,7 +4001,7 @@ function AskAmber({ narrow, user, openLead }) {
     <div style={{ ...panel, zIndex: 65, background: T.paper, border: `1px solid ${T.hair}`, boxShadow: T.shadowLg,
       display: "flex", flexDirection: "column", overflow: "hidden", fontFamily: UI }}>
       {/* header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 16px", background: T.hero }}>
+      <div className={narrow ? "amber-chat-header" : undefined} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 16px", background: T.hero }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {mentor ? <img src={mentor.avatar} alt="" style={{ width: 34, height: 34, borderRadius: 10, objectFit: "cover" }} />
             : <span style={{ width: 32, height: 32, borderRadius: 10, background: "rgba(212,175,92,.15)", display: "grid", placeItems: "center" }}><Sparkle size={17} color={T.goldBright} /></span>}
@@ -4081,7 +4086,7 @@ function AskAmber({ narrow, user, openLead }) {
                 borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>{s}</button>))}
           </div>
         )}
-        <div style={{ display: "flex", gap: 8, padding: 11, borderTop: `1px solid ${T.hair}`, background: T.paper }}>
+        <div className={narrow ? "amber-chat-foot" : undefined} style={{ display: "flex", gap: 8, padding: 11, borderTop: `1px solid ${T.hair}`, background: T.paper }}>
           <button onClick={reset} title="New chat" style={{ ...miniBtn(), padding: "0 11px" }}>New</button>
           <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }}
             placeholder={"Ask " + mentor.name.replace(" AI", "") + "…"} style={{ flex: 1, border: `1px solid ${T.hair}`, borderRadius: 11, padding: "10px 12px",
