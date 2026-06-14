@@ -289,6 +289,21 @@ function logAction(action, lead, actorId, extra) {
     detail: { client: lead && lead.client_name, lead_code: lead && lead.lead_code, ...(extra || {}) } }).then(() => {}, () => {}); } catch (e) {}
 }
 
+// Phone link helpers. tel: MUST keep the leading "+" (international dialling);
+// wa.me MUST be digits only (no "+"). UAE local numbers are normalised to +971 when safe.
+// The raw stored number is never mutated — these only build href strings.
+function normIntl(phone) {
+  let d = String(phone || "").trim().replace(/[^\d+]/g, "");
+  if (d.startsWith("00")) d = "+" + d.slice(2);
+  const only = d.replace(/\D/g, "");
+  if (d.startsWith("+")) return only;                 // already international
+  if (/^0\d{9}$/.test(only)) return "971" + only.slice(1);   // 05XXXXXXXX -> 9715XXXXXXXX
+  if (/^5\d{8}$/.test(only)) return "971" + only;            // 5XXXXXXXX  -> 9715XXXXXXXX
+  return only;                                        // assume already has country code
+}
+function telHref(phone) { const d = normIntl(phone); return d ? "tel:+" + d : "tel:"; }
+function waHref(phone) { const d = normIntl(phone); return "https://wa.me/" + d; }
+
 /* ================================ MOCK DATA ============================== */
 const AGENTS = [
   { id: "a1", name: "Derya Altun", initials: "DA", deals: 7, pipeline: 41.2, conv: 18, resp: "11m", leads: 34, score: 92 },
@@ -650,7 +665,7 @@ function AdminDash({ go }) {
         const [lr, ar, pr] = await Promise.all([
           supabase.from("leads").select("created_at,updated_at,status,temperature,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,source,next_followup,deal_value,commission_value").limit(5000),
           supabase.from("lead_activity").select("actor_id,action,created_at").order("created_at", { ascending: false }).limit(5000),
-          supabase.from("profiles").select("id,full_name,role").limit(500),
+          supabase.from("profiles").select("id,full_name,role,active").limit(500),
         ]);
         if (lr.error) { setErr("load"); setLeads([]); return; }
         setLeads(lr.data || []); setActs(ar.data || []); setProfs(pr.data || []);
@@ -679,7 +694,12 @@ function AdminDash({ go }) {
   const won = L.filter((r) => r.status === "Closed Won");
   const cnt = (f) => L.filter(f).length;
   const sum = (arr, k) => arr.reduce((s, r) => s + (Number(r[k]) || 0), 0);
-  const assignedTotal = cnt((r) => r.assigned_agent || r.current_owner || r.assigned_agent_name);
+  // A lead is ASSIGNED only if it is held by a real active agent account (uuid) or its
+  // imported agent-name matches an active account. An imported name with no matching active
+  // account is treated as UNASSIGNED ("not assigned to any active agent" per requirements).
+  const activeAgentNames = new Set(profs.filter((p) => p.active !== false && ["agent", "sales_manager", "admin", "master_admin", "marketing", "accounts"].includes(p.role)).map((p) => String(p.full_name || "").trim().toLowerCase()).filter(Boolean));
+  const isAssignedToAgent = (r) => !!(r.assigned_agent || r.current_owner || (r.assigned_agent_name && activeAgentNames.has(String(r.assigned_agent_name).trim().toLowerCase())));
+  const assignedTotal = cnt(isAssignedToAgent);
   const convOverall = assignedTotal ? (won.length / assignedTotal * 100) : 0;
   const wonMonth = won.filter((r) => inMonth(r.updated_at || r.created_at));
   const monthLeads = L.filter((r) => inMonth(r.created_at));
@@ -733,15 +753,23 @@ function AdminDash({ go }) {
   const D = (deals || []).filter((x) => !x.deleted);
   const dApproved = D.filter((d) => d.status === "approved");
   const dPending = D.filter((d) => ["submitted", "pending_review"].includes(d.status));
-  const apprMonth = dApproved.filter((d) => inMonth(d.decided_at));
-  const apprQ = dApproved.filter((d) => inQuarter(d.decided_at));
-  const apprYear = dApproved.filter((d) => inYear(d.decided_at));
+  // Deals that entered the approval pipeline (left draft) — the correct denominator for approval rate.
+  const dSubmittedPipeline = D.filter((d) => d.status !== "draft");
+  // An approved deal may not have decided_at set; fall back to updated/created so it still counts in a period.
+  const apprDate = (d) => d.decided_at || d.updated_at || d.created_at;
+  // Net to Amber field name varies (final_net vs net_commission); use whichever is populated.
+  const netAmber = (d) => { const v = Number(d.final_net); return Number.isFinite(v) && v > 0 ? v : (Number(d.net_commission) || 0); };
+  const sumNet = (arr) => arr.reduce((s, d) => s + netAmber(d), 0);
+  const apprMonth = dApproved.filter((d) => inMonth(apprDate(d)));
+  const apprQ = dApproved.filter((d) => inQuarter(apprDate(d)));
+  const apprYear = dApproved.filter((d) => inYear(apprDate(d)));
   const subToday = D.filter((d) => (d.submitted_at && inToday(d.submitted_at)) || (d.status !== "draft" && inToday(d.created_at)));
   const sumD = (arr, k) => arr.reduce((s, r) => s + (Number(r[k]) || 0), 0);
   const byType = (t) => dApproved.filter((d) => d.deal_type === t).length;
   const projMap = {}; dApproved.forEach((d) => { if (d.project) projMap[d.project] = (projMap[d.project] || 0) + 1; });
   const topProjects = Object.entries(projMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const convDeals = D.length ? Math.round(dApproved.length / D.length * 100) : 0;
+  // Approved conversion = approved / submitted pipeline (NOT all deals incl. drafts). 1 submitted + 1 approved = 100%.
+  const convDeals = dSubmittedPipeline.length ? Math.round(dApproved.length / dSubmittedPipeline.length * 100) : 0;
 
   return <div>
     <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 14 }}>
@@ -767,10 +795,10 @@ function AdminDash({ go }) {
         <Stat label="Gross comm · month" value={money(sumD(apprMonth, "gross_commission"))} />
       </div>
       <div style={{ ...grid, marginTop: 10 }}>
-        <Stat label="Net to Amber · month" value={money(sumD(apprMonth, "final_net"))} tone="gold" />
+        <Stat label="Net to Amber · month" value={money(sumNet(apprMonth))} tone="gold" />
         <Stat label="Agent payable · month" value={money(sumD(apprMonth, "agent_commission"))} />
         <Stat label="Sales / Rental" value={byType("Sales") + " / " + byType("Rental")} sub="approved" />
-        <Stat label="Approved conversion" value={convDeals + "%"} sub="approved / all deals" />
+        <Stat label="Approved conversion" value={convDeals + "%"} sub="approved / submitted" />
       </div>
       {topProjects.length > 0 && <div style={{ ...card, padding: 14, marginTop: 10 }}>
         <SectionMini>Approved deals by project</SectionMini>
@@ -786,7 +814,7 @@ function AdminDash({ go }) {
       <Stat label="This quarter" value={cnt((r) => inQuarter(r.created_at))} sub="new" />
       <Stat label="This year" value={cnt((r) => inYear(r.created_at))} sub="new" />
       <Stat label="Total" value={L.length} sub="all leads" onClick={() => go("live", { type: "all", label: "All leads" })} />
-      <Stat label="Unassigned" value={cnt((r) => !r.assigned_agent && !r.assigned_agent_name)} sub="to assign" onClick={() => go("live", { type: "unassigned", label: "Unassigned leads" })} />
+      <Stat label="Unassigned" value={cnt((r) => !isAssignedToAgent(r))} sub="to assign" onClick={() => go("live", { type: "unassigned", label: "Unassigned leads" })} />
       <Stat label="Open pool" value={cnt((r) => r.is_open)} tone="gold" onClick={() => go("live", { type: "open", label: "Open pool" })} />
       <Stat label="Hot" value={cnt((r) => r.temperature === "Hot")} tone="bad" onClick={() => go("live", { type: "temp", value: "Hot", label: "Hot leads" })} />
       <Stat label="Very Hot" value={cnt((r) => r.temperature === "Very Hot")} tone="bad" onClick={() => go("live", { type: "temp", value: "Very Hot", label: "Very Hot leads" })} />
@@ -800,8 +828,8 @@ function AdminDash({ go }) {
       <Stat label="Closed (quarter)" value={won.filter((r) => inQuarter(r.updated_at || r.created_at)).length} tone="ok" />
       <Stat label="Closed (year)" value={won.filter((r) => inYear(r.updated_at || r.created_at)).length} tone="ok" />
       <Stat label="Closed (total)" value={won.length} tone="ok" onClick={() => go("live", { type: "status", value: "Closed Won", label: "Closed Won" })} />
-      <Stat label="Commission (month)" value={money(sum(wonMonth, "commission_value"))} tone="gold" />
-      <Stat label="Commission (year)" value={money(sum(won.filter((r) => inYear(r.updated_at || r.created_at)), "commission_value"))} tone="gold" />
+      <Stat label="Commission (month)" value={money(sumD(apprMonth, "gross_commission"))} tone="gold" sub="approved deals" />
+      <Stat label="Commission (year)" value={money(sumD(apprYear, "gross_commission"))} tone="gold" sub="approved deals" />
       <Stat label="Avg deal value" value={won.length ? money(sum(won, "deal_value") / won.length) : "AED 0"} />
       <Stat label="Pipeline value" value={money(sum(L.filter((r) => r.status !== "Closed Won" && r.status !== "Closed Lost" && r.status !== "Dead Lead"), "deal_value"))} />
     </div>
@@ -1260,8 +1288,8 @@ function AgentDash({ go, user, openLead, onAvatar }) {
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button onClick={() => openLead && openLead(f.lead_id)} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11 }}>Open</button>
-                    {f.lead?.phone && <button title="WhatsApp" onClick={() => window.open("https://wa.me/" + digitsOf(f.lead.phone), "_blank")} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11, borderColor: WA, color: WA }}><MessageCircle size={12} /></button>}
-                    {f.lead?.phone && <button title="Call" onClick={() => { window.location.href = "tel:" + digitsOf(f.lead.phone); }} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11 }}><Phone size={12} /></button>}
+                    {f.lead?.phone && <button title="WhatsApp" onClick={() => window.open(waHref(f.lead.phone), "_blank")} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11, borderColor: WA, color: WA }}><MessageCircle size={12} /></button>}
+                    {f.lead?.phone && <button title="Call" onClick={() => { window.location.href = telHref(f.lead.phone); }} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11 }}><Phone size={12} /></button>}
                   </div>
                 </div>
               ))}
@@ -1295,11 +1323,11 @@ function AgentDash({ go, user, openLead, onAvatar }) {
                 <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{[l.area, l.project, l.budget].filter(Boolean).join(" · ") || "—"}</div>
               </div>
               <div style={{ display: "flex", gap: 6 }}>
-                {l.phone && <a href={`https://wa.me/${String(l.phone).replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
+                {l.phone && <a href={waHref(l.phone)} target="_blank" rel="noreferrer"
                   onClick={(e) => { e.stopPropagation(); logAction("whatsapp", l, user && user.id); }}
                   style={{ width: 34, height: 34, borderRadius: 9, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
                   <MessageCircle size={15} color={WA} /></a>}
-                {l.phone && <a href={`tel:${String(l.phone).replace(/\D/g, "")}`}
+                {l.phone && <a href={telHref(l.phone)}
                   onClick={(e) => { e.stopPropagation(); logAction("call", l, user && user.id); }}
                   style={{ width: 34, height: 34, borderRadius: 9, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
                   <Phone size={14} color={T.inkSoft} /></a>}
@@ -1349,7 +1377,7 @@ function FocusList({ title, items, go, onClose }) {
       <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 0", borderBottom: `1px solid ${T.hairSoft}` }}>
         <Av name={l.client_name} size={26} />
         <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{l.client_name}</span>
-        {l.phone && <a href={`https://wa.me/${String(l.phone).replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
+        {l.phone && <a href={waHref(l.phone)} target="_blank" rel="noreferrer"
           style={{ fontSize: 11.5, color: WA, fontWeight: 700, textDecoration: "none" }}>WhatsApp</a>}
       </div>
     ))}
@@ -1667,8 +1695,9 @@ function LeadDetail({ leadId, user, go }) {
     {/* action buttons */}
     <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
       {!revealed && <Btn icon={Eye} label="View Number" onClick={reveal} />}
-      {revealed && lead.phone && <Btn icon={Phone} label="Call" onClick={() => { logAction("call", lead, me && me.id); markContacted(); window.location.href = "tel:" + digits(lead.phone); }} />}
-      {lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="wa" onClick={() => { logAction("whatsapp", lead, me && me.id); markContacted(); window.open("https://wa.me/" + digits(lead.phone), "_blank"); }} />}
+      {revealed && lead.phone && <Btn icon={Phone} label="Call" onClick={() => { logAction("call", lead, me && me.id); markContacted(); window.location.href = telHref(lead.phone); }} />}
+      {lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="wa" onClick={() => { logAction("whatsapp", lead, me && me.id); markContacted(); window.open(waHref(lead.phone), "_blank"); }} />}
+      {revealed && lead.email && <Btn icon={Mail} label="Email" onClick={() => { logAction("email", lead, me && me.id); markContacted(); window.location.href = "mailto:" + lead.email; }} />}
       <Btn icon={Calendar} label="Schedule Follow-Up" onClick={() => openSchedule(null)} />
       {canReassign && <Btn icon={UserPlus} label="Change Agent" tone="gold" onClick={() => { setReTo(lead.assigned_agent || ""); setReReason(""); setErr2(""); setReOpen(true); }} />}
       {canEdit && <Btn icon={editing ? X : Pencil} label={editing ? "Cancel" : "Edit details"} tone="gold" onClick={() => editing ? setEditing(false) : startEdit()} />}
@@ -3994,7 +4023,24 @@ async function runLeadQuery(intent, user) {
     heading = picked.length ? `These leads need attention first${forLbl}:` : `Nothing urgent${forLbl} — pipeline looks under control.`;
   } else if (intent.kind === "list") {
     picked = [...rows].sort((a, b) => hotRank(a) - hotRank(b) || byNew(a, b));
-    if (!isAgent && rows.length) heading = `${rows.length} lead${rows.length > 1 ? "s" : ""} for ${scopeLabel} · ${tempSplit(rows)} · ${overdueOf(open).length} overdue.` + (picked.length > 8 ? " Showing top 8:" : "");
+    if (!isAgent && rows.length) {
+      const ym = today.slice(0, 7), yyyy = today.slice(0, 4);
+      const qs = Math.floor((parseInt(today.slice(5, 7), 10) - 1) / 3) * 3 + 1;
+      const qMonths = [qs, qs + 1, qs + 2].map((m) => yyyy + "-" + String(m).padStart(2, "0"));
+      const monthN = rows.filter((l) => (createdOf(l) || "").slice(0, 7) === ym).length;
+      const quarterN = rows.filter((l) => qMonths.includes((createdOf(l) || "").slice(0, 7))).length;
+      const split = (fn, n = 5) => { const m = {}; rows.forEach((l) => { const k = (fn(l) || "—").toString().trim() || "—"; m[k] = (m[k] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k} ${v}`).join(" · "); };
+      const hotN = rows.filter((l) => hotRank(l) <= 1).length, warmN = rows.filter((l) => l.temperature === "Warm").length;
+      const lines = [
+        `${scopeLabel}: ${rows.length} assigned lead${rows.length > 1 ? "s" : ""} · ${hotN} hot · ${warmN} warm · ${rows.length - hotN - warmN} cold · ${overdueOf(open).length} overdue.`,
+        `This month: ${monthN} · This quarter: ${quarterN}.`,
+        `Projects: ${split((l) => l.project)}`,
+        `Areas: ${split((l) => l.area)}`,
+        `Status: ${split((l) => l.status)}`,
+        `Source: ${split((l) => l.source)}`,
+      ];
+      heading = lines.join("\n") + (picked.length > 8 ? "\nShowing top 8 leads:" : "");
+    }
     else heading = picked.length ? `Your leads for ${scopeLabel}:` : `No leads found for ${scopeLabel}.`;
   } else if (intent.kind === "all") {
     picked = [...rows].sort((a, b) => hotRank(a) - hotRank(b) || byNew(a, b));
@@ -4218,8 +4264,8 @@ function AskAmber({ narrow, user, openLead }) {
                         <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3, lineHeight: 1.4 }}>{ld.reason}</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
                           <button onClick={() => { logLeadAction("open", ld); if (openLead) { openLead(ld.id); setOpen(false); } }} style={cardBtn}>Open Lead</button>
-                          {ph && <button onClick={() => { logLeadAction("whatsapp", ld); window.open("https://wa.me/" + ph, "_blank"); }} style={{ ...cardBtn, borderColor: WA, color: WA }}><MessageCircle size={11} /> WhatsApp</button>}
-                          {ph && <button onClick={() => { logLeadAction("call", ld); window.location.href = "tel:" + ph; }} style={cardBtn}><Phone size={11} /> Call</button>}
+                          {ph && <button onClick={() => { logLeadAction("whatsapp", ld); window.open(waHref(ld.phone), "_blank"); }} style={{ ...cardBtn, borderColor: WA, color: WA }}><MessageCircle size={11} /> WhatsApp</button>}
+                          {ph && <button onClick={() => { logLeadAction("call", ld); window.location.href = telHref(ld.phone); }} style={cardBtn}><Phone size={11} /> Call</button>}
                           <button onClick={() => draftFor(ld)} style={cardBtn}><Sparkle size={11} /> Draft message</button>
                         </div>
                       </div>
@@ -4509,6 +4555,8 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const fmtDubai = (ts) => { if (!ts) return "—"; try { const s = new Date(ts).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }); return s.replace(/\b(am|pm)\b/i, (m) => m.toUpperCase()); } catch (e) { return "—"; } };
   const fmtDay = (d) => { if (!d) return "—"; try { return new Date(d).toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "numeric" }); } catch (e) { return String(d); } };
   const agentName = (id) => { const a = agents.find((x) => x.id === id); return a ? a.full_name : null; };
+  // Created By: real creator/importer name when recorded; safe fallback for old imported leads (never blank/system).
+  const createdByLabel = (l) => agentName(l.created_by) || (l.created_by ? "—" : "Imported");
   const assignable = agents.filter((a) => a.active !== false && (a.role === "agent" || a.role === "sales_manager"));
   const matchAgentFilter = (l) => {
     if (isAgent || !agentFilter) return true;
@@ -4715,12 +4763,12 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     ) : (
       <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
         <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: isAgent ? 820 : 2240 }}>
-            <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr" : "0.35fr 1.5fr 0.7fr 1.2fr 1.1fr 1.1fr 1.3fr 1.1fr 0.9fr 0.9fr 1.1fr 0.85fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
+          <div style={{ minWidth: isAgent ? 820 : 1900 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr" : "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
               padding: "10px 16px", fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
               color: T.muted, borderBottom: `1px solid ${T.hair}`, background: T.bone }}>
               {isAgent ? <><span>Client</span><span>Project</span><span>Budget</span><span>Next follow-up</span><span>Status</span><span>Contact</span></>
-                       : <><span style={{ display: "grid", placeItems: "center" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Code</span><span>Client</span><span>Phone</span><span>WhatsApp</span><span>Email</span><span>Project</span><span>Area</span><span>Source</span><span>Agent</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
+                       : <><span style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 3, background: T.bone, margin: "-10px 0", padding: "10px 0" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Client</span><span>Phone</span><span>Email</span><span>Agent</span><span>Project</span><span>Area</span><span>Source</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
             </div>
             {filtered.map((l, i) => (isAgent ? (
               <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr",
@@ -4736,35 +4784,33 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                   {l.next_followup || "—"}</span>
                 <Chip tone={l.is_open ? "gold" : l.temperature === "Hot" || l.temperature === "Very Hot" ? "bad" : "info"}>{l.is_open ? "Open" : l.status}</Chip>
                 <span style={{ display: "flex", gap: 6 }}>
-                  {l.phone && <a href={`https://wa.me/${digits(l.phone)}`} target="_blank" rel="noreferrer" title="WhatsApp"
+                  {l.phone && <a href={waHref(l.phone)} target="_blank" rel="noreferrer" title="WhatsApp"
                     onClick={(e) => { e.stopPropagation(); logAction("whatsapp", l, me && me.id); }}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
                     <MessageCircle size={14} color={T.ok} /></a>}
-                  {l.phone && <a href={`tel:${digits(l.phone)}`} title="Call"
+                  {l.phone && <a href={telHref(l.phone)} title="Call"
                     onClick={(e) => { e.stopPropagation(); logAction("call", l, me && me.id); }}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
                     <Phone size={13} color={T.inkSoft} /></a>}
                 </span>
               </div>
             ) : (
-              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "0.35fr 1.5fr 0.7fr 1.2fr 1.1fr 1.1fr 1.3fr 1.1fr 0.9fr 0.9fr 1.1fr 0.85fr 0.85fr 0.95fr 0.95fr 1fr",
+              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12, cursor: "pointer", background: selected[l.id] ? T.goldSoft : "transparent" }}>
-                <span onClick={(e) => e.stopPropagation()} style={{ display: "grid", placeItems: "center" }}><input type="checkbox" checked={!!selected[l.id]} onChange={() => toggleSel(l.id)} style={{ cursor: "pointer", width: 14, height: 14 }} /></span>
+                <span onClick={(e) => e.stopPropagation()} style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 2, background: selected[l.id] ? T.goldSoft : T.paper, margin: "-12px 0", padding: "12px 0" }}><input type="checkbox" checked={!!selected[l.id]} onChange={() => toggleSel(l.id)} style={{ cursor: "pointer", width: 14, height: 14 }} /></span>
                 <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 600, lineHeight: 1.3 }}>{fmtDubai(l.created_at || l.created_on)}</span>
-                <span style={{ fontWeight: 700, color: T.gold, fontSize: 10.5 }}>{l.lead_code || (l.lead_no ? "L" + String(l.lead_no).padStart(3, "0") : "—")}</span>
                 <span style={{ fontWeight: 600 }}>{l.client_name}</span>
                 <span style={{ fontSize: 11.5 }}>{l.phone || <span style={{ color: T.faint }}>—</span>}</span>
-                <span style={{ fontSize: 11.5 }}>{l.whatsapp || l.phone || <span style={{ color: T.faint }}>—</span>}</span>
                 <span style={{ fontSize: 11.5, color: l.email ? T.inkSoft : T.faint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.email || "No email"}</span>
+                <button onClick={(e) => { e.stopPropagation(); if (l.is_open) setAgentFilter("open"); else if (l.assigned_agent) setAgentFilter(l.assigned_agent); else setAgentFilter("unassigned"); }} title="Filter by this agent" style={{ background: "none", border: "none", textAlign: "left", padding: 0, cursor: "pointer", fontFamily: UI, fontSize: 12, color: l.is_open ? T.gold : (l.assigned_agent_name ? T.gold : T.faint), fontWeight: l.assigned_agent_name || l.is_open ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.is_open ? "Open" : (l.assigned_agent_name || "Unassigned")}</button>
                 <span style={{ color: T.inkSoft }}>{l.project || "—"}</span>
                 <span style={{ color: T.inkSoft }}>{l.area || "—"}</span>
                 <span style={{ color: T.inkSoft, fontSize: 11 }}>{l.source || "—"}</span>
-                <button onClick={(e) => { e.stopPropagation(); if (l.is_open) setAgentFilter("open"); else if (l.assigned_agent) setAgentFilter(l.assigned_agent); else setAgentFilter("unassigned"); }} title="Filter by this agent" style={{ background: "none", border: "none", textAlign: "left", padding: 0, cursor: "pointer", fontFamily: UI, fontSize: 12, color: l.is_open ? T.gold : (l.assigned_agent_name ? T.gold : T.faint), fontWeight: l.assigned_agent_name || l.is_open ? 600 : 400 }}>{l.is_open ? "Open" : (l.assigned_agent_name || "Unassigned")}</button>
                 <Chip tone={l.is_open ? "gold" : "info"}>{l.is_open ? "Open" : l.status}</Chip>
                 <span style={{ fontSize: 11 }}><Chip tone={l.temperature === "Hot" || l.temperature === "Very Hot" ? "bad" : l.temperature === "Warm" ? "warn" : "info"}>{l.temperature || "—"}</Chip></span>
                 <span style={{ fontSize: 11, color: T.inkSoft }}>{l.last_contacted ? fmtDay(l.last_contacted) : "—"}</span>
                 <span style={{ fontSize: 11, color: l.next_followup && l.next_followup < today ? T.bad : T.inkSoft }}>{l.next_followup ? fmtDay(l.next_followup) : "—"}</span>
-                <span style={{ fontSize: 11, color: T.faint }}>{agentName(l.created_by) || "—"}</span>
+                <span style={{ fontSize: 11, color: T.faint }}>{createdByLabel(l)}</span>
               </div>
             )))}
           </div>
@@ -4836,12 +4882,20 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
       }
     }
     const code = "L-" + Math.random().toString(36).slice(2, 7).toUpperCase();
+    const myId = (me && me.id) || (user && user.id) || null;
+    const nowIso = new Date().toISOString();
+    // created_by is always the creator. Agents MUST own the lead they create (RLS requires
+    // created_by = assigned_agent = auth.uid()), and may not assign to anyone else. Admins/Master
+    // Admin may leave it unassigned or assign by name via the form.
+    const ownership = isAgent
+      ? { assigned_agent: myId, current_owner: myId, assigned_agent_name: (user && user.name) || (me && me.full_name) || null, assigned_at: nowIso, is_open: false }
+      : { assigned_agent_name: f.assigned_agent_name.trim() || null };
     const { data: ins, error } = await supabase.from("leads").insert({
       lead_code: code, client_name: f.client_name.trim(), phone, whatsapp: phone, email: f.email.trim() || null,
       project: f.project.trim() || null, area: f.area.trim() || null, budget: f.budget.trim() || null,
       property_type: f.property_type.trim() || null, ready_offplan: f.ready_offplan.trim() || null,
       purpose: f.purpose.trim() || null, nationality: f.nationality.trim() || null, followup_note: f.followup_note.trim() || null,
-      assigned_agent_name: f.assigned_agent_name.trim() || null, source: "Manual", status: "New", temperature: "Cold",
+      source: "Manual", status: "New", temperature: "Cold", created_by: myId, ...ownership,
     }).select("id").single();
     if (error) { try { console.error("Add lead failed:", error); } catch (e) {} setBusy(false); setErr("Couldn't save this lead. Please check the details and try again."); return; }
     // audit
