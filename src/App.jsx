@@ -3732,68 +3732,143 @@ function AiSourceForm({ initial, cats, trust, onSave, onClose }) {
 
 /* ========================= AI CHAT (ALL USERS) =========================== */
 // Detect a CRM lead-list question so Ask Amber can answer it with actionable cards.
-function leadIntent(text) {
+const ADMIN_ROLES = ["master_admin", "admin", "sales_manager"];
+
+// Parse a lead query into an intent. role decides whether admin-only report kinds are allowed.
+// Optional `target` is an agent name (admins) or a project/area term used to scope results.
+function leadIntent(text, role) {
   const t = String(text || "").toLowerCase();
-  if (/(plan my day|what should i (focus on|do|prioriti[sz]e) today|^my day\b|plan my today)/.test(t)) return { kind: "plan" };
-  if (/(missed?\b.*(follow|lead|client))|((follow|lead|client).*\bmissed?\b)|(did i miss.*follow)|\boverdue\b/.test(t)) return { kind: "overdue" };
-  if (/(due (today|now).*(follow|lead))|(follow.?ups? due)|(today'?s follow)|(follow.?ups? for today)/.test(t)) return { kind: "due" };
-  if (/(hot leads?)|(which (leads?|clients?) (should i|to|do i) (call|contact|message|chase))|(who (should i|to|do i) (call|message|contact))|(which client should i message)/.test(t)) return { kind: "hot" };
-  if (/(which (of my )?(leads?|clients?) need)|((leads?|clients?) need (attention|action|a follow|to follow|follow))|(which leads? to work)/.test(t)) return { kind: "attention" };
+  const isAdmin = ADMIN_ROLES.includes(role);
+  let target = "";
+  const m = t.match(/\b(?:for|of|assigned to|under|belonging to)\s+([a-z0-9][a-z0-9 .,'&\-]{1,40})/);
+  if (m) target = m[1];
+  const poss = t.match(/([a-z][a-z .'\-]{1,30})['’]s\s+(?:performance|leads?|stats|numbers|pipeline)/);
+  if (!target && poss) target = poss[1];
+  target = target.replace(/\b(today|now|this (week|month|year)|last (week|month)|the (week|month)|me|my|all|our|a|the)\b/g, " ")
+                 .replace(/\bleads?\b/g, " ").replace(/[?.!,]+/g, " ").replace(/\s+/g, " ").trim();
+
+  // ---- Admin-only report intents (Master Admin / Admin / Sales Manager) ----
+  if (/(unassigned|not assigned)\s*leads?/.test(t)) return { kind: "unassigned", adminOnly: true };
+  if (/(which|what) projects?.*(most|top).*leads?|top projects? by leads?|projects? with (the )?most leads?|project lead summary/.test(t)) return { kind: "topProjects", adminOnly: true, target };
+  if (/agents?/.test(t) && /(not|aren'?t|isn'?t|haven'?t|hasn'?t)\b.*follow|who.*follow.?ups?/.test(t)) return { kind: "laggards", adminOnly: true };
+  if (target && /(performance|how (is|are).*doing|stats|numbers|conversion report)/.test(t)) return { kind: "perf", adminOnly: true, target };
+  if (/open leads?/.test(t) && !/my open/.test(t)) return { kind: "open", adminOnly: true, target };
+  if (/(created|new).*(this|last) week|leads? (created )?this week/.test(t)) return { kind: "recent", adminOnly: true, target };
+
+  // ---- Shared kinds (optionally scoped by target = project, or agent for admins) ----
+  if (/(latest|last|most recent|newest)\s+lead|lead.*\b(latest|newest|most recent)\b/.test(t)) return { kind: "latest", target };
+  if (/\boverdue\b|missed?\b.*follow|follow.*\bmissed?\b|did i miss.*follow/.test(t)) return { kind: "overdue", target };
+  if (/due (today|now)|follow.?ups? due|today'?s follow|follow.?ups? for today/.test(t)) return { kind: "due", target };
+  if (/hot leads?|hottest lead|which (leads?|clients?) (should i|to|do i) (call|contact|message|chase)|who (should i|to|do i) (call|message|contact)|which lead.*first|who.*call first/.test(t)) return { kind: "hot", target };
+  if (/plan my day|what should i (focus on|do|prioriti[sz]e) today|plan my today/.test(t)) return { kind: "plan" };
+  if (/(which (of my )?leads? need)|leads? need (attention|action|a follow|to follow|follow)|which leads? to work/.test(t)) return { kind: "attention", target };
+  if (target && /\blead/.test(t)) return { kind: "list", target };
   return null;
 }
 
-// Run the lead query against ONLY the data this user may see (RLS + explicit agent filter,
-// mirroring buildCrmContext). Returns { heading, leads:[{id,name,project,status,temp,due,phone,reason}] }.
+// Run the lead query against ONLY the data this user may see (agents are hard-filtered to
+// their own leads regardless of intent — the security boundary). Admins (master_admin/admin/
+// sales_manager) may scope by agent or project and get summary reports. Returns { heading, leads }.
 async function runLeadQuery(intent, user) {
+  const role = user && user.role;
+  const isAgent = role === "agent";
+  if (intent.adminOnly && isAgent) {
+    return { heading: "That's an admin report — I can only pull your own leads. Try \"show me my hot leads\", \"my latest lead\", or \"my overdue follow-ups\".", leads: [] };
+  }
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+  const weekAgo = new Date(Date.now() - 7 * 864e5).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
   const { data: { user: au } } = await supabase.auth.getUser();
   const { data, error } = await supabase.from("leads")
-    .select("id, client_name, area, project, status, temperature, next_followup, last_contacted, phone, purpose, is_open, assigned_agent, current_owner, created_by")
-    .limit(800);
+    .select("id, lead_code, lead_no, client_name, area, project, status, temperature, next_followup, last_contacted, phone, budget, purpose, is_open, assigned_agent, assigned_agent_name, current_owner, created_by, created_at, created_on")
+    .limit(2000);
   if (error) throw error;
   let rows = data || [];
-  const isAgent = user && user.role === "agent";
   if (isAgent && au) rows = rows.filter((l) => l.assigned_agent === au.id || l.current_owner === au.id || l.created_by === au.id);
-  const open = rows.filter((l) => l.status !== "Closed Won" && l.status !== "Closed Lost");
+
   const d10 = (v) => String(v || "").slice(0, 10);
+  const createdOf = (l) => d10(l.created_at) || d10(l.created_on);
+  const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
   const hotRank = (l) => (l.temperature === "Very Hot" ? 0 : l.temperature === "Hot" ? 1 : l.temperature === "Warm" ? 2 : 3);
   const byDue = (a, b) => d10(a.next_followup).localeCompare(d10(b.next_followup));
+  const byNew = (a, b) => (createdOf(b) || "").localeCompare(createdOf(a) || "");
   const fmtDue = (v) => { const s = d10(v); if (!s) return "no follow-up set"; if (s < today) return "overdue (" + s + ")"; if (s === today) return "due today"; return "due " + s; };
+
+  // Scope by target (admins: agent name preferred, else project; agents: project only).
+  const target = norm(intent.target);
+  let scopeLabel = "";
+  if (target) {
+    const byAgent = isAgent ? [] : rows.filter((l) => norm(l.assigned_agent_name).includes(target));
+    const byProj = rows.filter((l) => norm(l.project).includes(target) || norm(l.area).includes(target));
+    if (byAgent.length && byAgent.length >= byProj.length) { rows = byAgent; scopeLabel = intent.target.trim(); }
+    else if (byProj.length) { rows = byProj; scopeLabel = intent.target.trim(); }
+    else if (byAgent.length) { rows = byAgent; scopeLabel = intent.target.trim(); }
+    else { rows = []; scopeLabel = intent.target.trim(); }
+  }
+
+  const open = rows.filter((l) => l.status !== "Closed Won" && l.status !== "Closed Lost");
+  const overdueOf = (arr) => arr.filter((l) => d10(l.next_followup) && d10(l.next_followup) < today);
+  const tempSplit = (arr) => { const hot = arr.filter((l) => hotRank(l) <= 1).length, warm = arr.filter((l) => l.temperature === "Warm").length; return `${hot} hot · ${warm} warm · ${arr.length - hot - warm} cold`; };
+  const forLbl = scopeLabel ? " for " + scopeLabel : "";
+
   let picked = [], heading = "";
-  if (intent.kind === "overdue") {
-    picked = open.filter((l) => d10(l.next_followup) && d10(l.next_followup) < today).sort(byDue);
-    heading = picked.length ? `You have ${picked.length} missed/overdue follow-up${picked.length > 1 ? "s" : ""}. Start with these:` : "You're all caught up — no overdue follow-ups right now. Want your hot leads instead?";
+  if (intent.kind === "latest") {
+    picked = [...rows].sort(byNew).slice(0, 1);
+    heading = picked.length ? `Your latest lead${forLbl} is below.` : `No leads found${forLbl}.`;
+  } else if (intent.kind === "overdue") {
+    picked = overdueOf(open).sort(byDue);
+    heading = picked.length ? `${picked.length} overdue follow-up${picked.length > 1 ? "s" : ""}${forLbl}. Start here:` : `No overdue follow-ups${forLbl} — all caught up.`;
   } else if (intent.kind === "due") {
     picked = open.filter((l) => d10(l.next_followup) && d10(l.next_followup) <= today).sort(byDue);
-    heading = picked.length ? `You have ${picked.length} follow-up${picked.length > 1 ? "s" : ""} due today or earlier:` : "Nothing due today — your follow-ups are clear.";
+    heading = picked.length ? `${picked.length} follow-up${picked.length > 1 ? "s" : ""} due today or earlier${forLbl}:` : `Nothing due today${forLbl}.`;
   } else if (intent.kind === "hot") {
     picked = open.filter((l) => hotRank(l) <= 1).sort((a, b) => hotRank(a) - hotRank(b) || byDue(a, b));
-    heading = picked.length ? `Your hottest leads to action${picked.length > 8 ? " (top 8)" : ""}:` : "No hot leads in your pipeline right now. Want me to show what's due?";
+    heading = picked.length ? `${picked.length} hot lead${picked.length > 1 ? "s" : ""}${forLbl}${picked.length > 8 ? " (top 8)" : ""}. Start with these:` : `No hot leads${forLbl} right now.`;
+  } else if (intent.kind === "unassigned") {
+    picked = open.filter((l) => !l.assigned_agent && !norm(l.assigned_agent_name));
+    heading = picked.length ? `${picked.length} unassigned open lead${picked.length > 1 ? "s" : ""}:` : "No unassigned open leads.";
+  } else if (intent.kind === "open") {
+    const o = open.filter((l) => l.is_open); picked = o.length ? o : open;
+    heading = `${picked.length} open lead${picked.length > 1 ? "s" : ""}${forLbl}:`;
+  } else if (intent.kind === "recent") {
+    picked = rows.filter((l) => createdOf(l) && createdOf(l) >= weekAgo).sort(byNew);
+    heading = picked.length ? `${picked.length} lead${picked.length > 1 ? "s" : ""} created in the last 7 days${forLbl}:` : `No leads created in the last 7 days${forLbl}.`;
+  } else if (intent.kind === "perf") {
+    const won = rows.filter((l) => l.status === "Closed Won").length, lost = rows.filter((l) => l.status === "Closed Lost").length;
+    heading = `${scopeLabel || "Agent"} — ${rows.length} leads · ${tempSplit(rows)} · ${overdueOf(open).length} overdue · ${won} won / ${lost} lost.` + (open.length ? " Priority leads:" : "");
+    picked = open.filter((l) => hotRank(l) <= 1 || (d10(l.next_followup) && d10(l.next_followup) < today)).sort((a, b) => hotRank(a) - hotRank(b) || byDue(a, b));
+  } else if (intent.kind === "topProjects") {
+    const counts = {}; open.forEach((l) => { const p = l.project || l.area || "—"; counts[p] = (counts[p] || 0) + 1; });
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    heading = top.length ? "Projects by open-lead count:\n" + top.map(([p, c], i) => `${i + 1}. ${p} — ${c} lead${c > 1 ? "s" : ""}`).join("\n") : "No open leads to summarise.";
+  } else if (intent.kind === "laggards") {
+    const byAg = {}; overdueOf(open).forEach((l) => { const a = l.assigned_agent_name || "Unassigned"; byAg[a] = (byAg[a] || 0) + 1; });
+    const top = Object.entries(byAg).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    heading = top.length ? "Most overdue follow-ups by agent:\n" + top.map(([a, c]) => `• ${a} — ${c} overdue`).join("\n") : "No overdue follow-ups across the team — everyone's current.";
   } else if (intent.kind === "attention") {
-    const overdue = open.filter((l) => d10(l.next_followup) && d10(l.next_followup) < today);
-    const hot = open.filter((l) => hotRank(l) <= 1 && !overdue.includes(l));
-    const noDate = open.filter((l) => !d10(l.next_followup) && !hot.includes(l) && !overdue.includes(l));
-    const seen = new Set(); picked = [];
-    [...overdue.sort(byDue), ...hot, ...noDate].forEach((l) => { if (!seen.has(l.id)) { seen.add(l.id); picked.push(l); } });
-    heading = picked.length ? `These leads need attention first:` : "Nothing urgent — your pipeline looks under control.";
+    const overdue = overdueOf(open); const hot = open.filter((l) => hotRank(l) <= 1 && !overdue.includes(l)); const noDate = open.filter((l) => !d10(l.next_followup) && !hot.includes(l) && !overdue.includes(l));
+    const seen = new Set(); picked = []; [...overdue.sort(byDue), ...hot, ...noDate].forEach((l) => { if (!seen.has(l.id)) { seen.add(l.id); picked.push(l); } });
+    heading = picked.length ? `These leads need attention first${forLbl}:` : `Nothing urgent${forLbl} — pipeline looks under control.`;
+  } else if (intent.kind === "list") {
+    picked = [...rows].sort((a, b) => hotRank(a) - hotRank(b) || byNew(a, b));
+    if (!isAgent && rows.length) heading = `${rows.length} lead${rows.length > 1 ? "s" : ""} for ${scopeLabel} · ${tempSplit(rows)} · ${overdueOf(open).length} overdue.` + (picked.length > 8 ? " Showing top 8:" : "");
+    else heading = picked.length ? `Your leads for ${scopeLabel}:` : `No leads found for ${scopeLabel}.`;
   } else { // plan
-    const overdue = open.filter((l) => d10(l.next_followup) && d10(l.next_followup) < today).sort(byDue);
-    const due = open.filter((l) => d10(l.next_followup) === today);
-    const hot = open.filter((l) => hotRank(l) <= 1 && d10(l.next_followup) !== today && !(d10(l.next_followup) && d10(l.next_followup) < today));
-    const seen = new Set(); picked = [];
-    [...overdue, ...due, ...hot].forEach((l) => { if (!seen.has(l.id)) { seen.add(l.id); picked.push(l); } });
-    heading = picked.length ? `Here's your plan — ${overdue.length} overdue, ${due.length} due today, plus your hot leads. Work them top to bottom:` : "Your pipeline is clear for today. Add follow-up dates to your leads and I'll build your day around them.";
+    const overdue = overdueOf(open).sort(byDue); const due = open.filter((l) => d10(l.next_followup) === today); const hot = open.filter((l) => hotRank(l) <= 1 && d10(l.next_followup) !== today && !overdue.includes(l));
+    const seen = new Set(); picked = []; [...overdue, ...due, ...hot].forEach((l) => { if (!seen.has(l.id)) { seen.add(l.id); picked.push(l); } });
+    heading = picked.length ? `Your plan — ${overdue.length} overdue, ${due.length} due today, plus hot leads. Work top to bottom:` : "Your pipeline is clear for today. Add follow-up dates and I'll build your day around them.";
   }
+
   const reasonFor = (l) => {
     const bits = []; const s = d10(l.next_followup);
     if (hotRank(l) === 0) bits.push("Very hot"); else if (hotRank(l) === 1) bits.push("Hot lead");
     if (s && s < today) bits.push("follow-up overdue"); else if (s === today) bits.push("follow-up due today"); else if (!s) bits.push("no follow-up set");
+    if (!isAgent && l.assigned_agent_name) bits.push("agent: " + l.assigned_agent_name);
     if (l.project) bits.push("interest: " + l.project);
-    return bits.join(" · ") || "Worth a touch today";
+    return bits.join(" · ") || "Worth a touch";
   };
   const leads = picked.slice(0, 8).map((l) => ({
-    id: l.id, name: l.client_name || "Lead", project: l.project || l.area || "—",
-    status: l.is_open ? "Open" : (l.status || "—"), temp: l.temperature || "—",
+    id: l.id, name: l.client_name || "Lead", code: l.lead_code || l.lead_no || "", project: l.project || l.area || "—",
+    status: l.is_open ? "Open" : (l.status || "—"), temp: l.temperature || "—", budget: l.budget || "",
     due: fmtDue(l.next_followup), phone: l.phone || "", reason: reasonFor(l),
   }));
   return { heading, leads };
@@ -3858,7 +3933,7 @@ function AskAmber({ narrow, user, openLead }) {
       return;
     }
     // CRM lead-list question → answer with actionable lead cards (RLS limits to permitted leads).
-    const li = leadIntent(text);
+    const li = leadIntent(text, user && user.role);
     if (li) {
       setMsgs((m) => [...m, { role: "user", text }]); setBusy(true);
       try {
@@ -3979,10 +4054,10 @@ function AskAmber({ narrow, user, openLead }) {
                     return (
                       <div key={ld.id} style={{ background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 12, padding: "10px 12px", boxShadow: T.shadow }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                          <div style={{ fontWeight: 700, fontSize: 12.8, color: T.ink }}>{ld.name}</div>
+                          <div style={{ fontWeight: 700, fontSize: 12.8, color: T.ink }}>{ld.name}{ld.code ? <span style={{ fontSize: 10, color: T.faint, fontWeight: 600, marginLeft: 6 }}>{ld.code}</span> : null}</div>
                           <div style={{ fontSize: 10.5, fontWeight: 700, color: tcol, whiteSpace: "nowrap" }}>{ld.temp}</div>
                         </div>
-                        <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{ld.project} · {ld.status} · {ld.due}</div>
+                        <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{ld.project} · {ld.status}{ld.budget ? " · " + ld.budget : ""} · {ld.due}</div>
                         <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3, lineHeight: 1.4 }}>{ld.reason}</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
                           <button onClick={() => { logLeadAction("open", ld); if (openLead) { openLead(ld.id); setOpen(false); } }} style={cardBtn}>Open Lead</button>
