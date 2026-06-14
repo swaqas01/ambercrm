@@ -1423,8 +1423,9 @@ function LeadDetail({ leadId, user, go }) {
   const GROUPS = {
     contact: [["client_name", "Client name", "text"], ["phone", "Phone", "text"], ["whatsapp", "WhatsApp", "text"], ["email", "Email", "text"]],
     profile: [["nationality", "Nationality", "text"], ["country_residence", "Country of residence", "text"], ["language", "Language", "text"]],
-    invest: [["budget", "Budget", "text"], ["purpose", "Purpose", "select", ["Investment", "Personal use", "Both", "Not sure"]],
-      ["area", "Area", "text"], ["project", "Project", "text"], ["developer", "Developer", "text"],
+    invest: [["lead_type", "Lead type", "select", ["Buyer", "Seller", "Tenant", "Agent"]],
+      ["budget", "Budget", "text"], ["purpose", "Purpose", "select", ["Investment", "Personal use", "Both", "Not sure"]],
+      ["area", "Area / Community", "text"], ["project", "Project name", "text"], ["developer", "Developer", "text"],
       ["property_type", "Property type", "select", ["Apartment", "Villa", "Townhouse", "Penthouse", "Plot", "Commercial", "Other"]],
       ["ready_offplan", "Ready / Off-plan", "select", ["Off-plan", "Ready", "Either"]],
       ["finance", "Finance", "select", ["Cash", "Mortgage", "Not decided"]], ["timeline", "Timeline", "text"]],
@@ -1435,7 +1436,7 @@ function LeadDetail({ leadId, user, go }) {
   };
   const ALL_KEYS = [].concat(...Object.values(GROUPS)).map((d) => d[0]);
   // Agents may edit progress + profile + requirement — NOT identity/contact/source (also enforced by the DB guard trigger).
-  const AGENT_KEYS = ["nationality", "country_residence", "language", "budget", "purpose", "area", "project", "developer", "property_type", "ready_offplan", "finance", "timeline", "status", "temperature", "last_contacted", "next_followup"];
+  const AGENT_KEYS = ["lead_type", "nationality", "country_residence", "language", "budget", "purpose", "area", "project", "developer", "property_type", "ready_offplan", "finance", "timeline", "status", "temperature", "last_contacted", "next_followup"];
   const LOCKED_FOR_AGENT = ["client_name", "phone", "whatsapp", "email", "source"];
   const LABELS = {}; [].concat(...Object.values(GROUPS)).forEach((d) => { LABELS[d[0]] = d[1]; });
   const isAssignedAgent = user && user.role === "agent" && lead && (lead.assigned_agent === user.id || lead.created_by === user.id);
@@ -1685,6 +1686,7 @@ function LeadDetail({ leadId, user, go }) {
         <button onClick={askAmberLead} style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "rgba(212,175,92,.18)", border: `1px solid ${T.goldEdge}`, color: "#fff", borderRadius: 999, padding: "9px 15px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}><Sparkle size={15} color={T.goldBright} /> Ask Amber</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 12, marginTop: 16 }}>
+        <HeaderItem k="Lead type" v={lead.lead_type || "Buyer"} />
         <HeaderItem k="Assigned agent" v={agentDisplay} />
         <HeaderItem k="Source" v={lead.source || "—"} />
         <HeaderItem k="Last contact" v={lead.last_contacted || "—"} />
@@ -2461,6 +2463,86 @@ function Commission() {
 }
 
 /* ======================== 12 SETTINGS & PERMISSIONS ====================== */
+function OpenLeadsAutomation() {
+  const [s, setS] = useState(undefined);  // undefined = loading, null = table missing
+  const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [msg, setMsg] = useState("");
+  const load = async () => {
+    const { data, error } = await supabase.from("open_leads_settings").select("*").eq("id", true).maybeSingle();
+    setS(error ? null : (data || null));
+  };
+  useEffect(() => { load(); }, []);
+  const set = (k, v) => setS((p) => ({ ...p, [k]: v }));
+  const save = async () => {
+    setSaving(true); setMsg("");
+    const { data: { user: au } } = await supabase.auth.getUser();
+    const { error } = await supabase.from("open_leads_settings").update({
+      auto_open_enabled: s.auto_open_enabled, inactivity_days: Math.max(1, Number(s.inactivity_days) || 15),
+      apply_buyer: s.apply_buyer, apply_seller: s.apply_seller, apply_tenant: s.apply_tenant, apply_agent: s.apply_agent,
+      respect_future_followups: s.respect_future_followups, view_counts_as_activity: s.view_counts_as_activity,
+      notify_admin_after: s.notify_admin_after, notify_agent_before: s.notify_agent_before,
+      updated_at: new Date().toISOString(), updated_by: au?.id || null,
+    }).eq("id", true);
+    setMsg(error ? "Save failed — Master Admin only." : "Settings saved.");
+    setSaving(false);
+  };
+  const runNow = async () => {
+    setRunning(true); setMsg("");
+    const { data, error } = await supabase.rpc("auto_open_stale_leads");
+    setMsg(error ? ("Run failed: " + (error.message || "permission")) : (Number(data) === 0 ? "Ran — no leads needed opening." : "Ran — " + data + " lead(s) moved to Open."));
+    setRunning(false);
+  };
+
+  const Toggle = ({ on, onClick }) => (
+    <button onClick={onClick} style={{ width: 40, height: 23, borderRadius: 999, border: "none", cursor: "pointer",
+      background: on ? T.ok : T.hair, position: "relative", transition: "background .15s", flexShrink: 0 }}>
+      <span style={{ position: "absolute", top: 2, left: on ? 19 : 2, width: 19, height: 19, borderRadius: 999, background: "#fff", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} />
+    </button>
+  );
+  const row = (label, sub, k) => (
+    <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 0", borderTop: `1px solid ${T.hairSoft}` }}>
+      <div><div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{label}</div><div style={{ fontSize: 11, color: T.muted }}>{sub}</div></div>
+      <Toggle on={!!s[k]} onClick={() => set(k, !s[k])} />
+    </div>
+  );
+
+  return <div style={{ marginBottom: 22 }}>
+    <SectionTitle right={<button onClick={runNow} disabled={running || !s} style={{ background: "none", border: `1px solid ${T.gold}`, color: T.gold, borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: running ? "default" : "pointer", fontFamily: UI, opacity: running ? .6 : 1 }}>{running ? "Running…" : "Run automation now"}</button>}>Open Leads automation</SectionTitle>
+    {s === undefined ? <div style={{ ...card, padding: 20, color: T.muted }}>Loading…</div>
+     : s === null ? <div style={{ ...card, padding: 18, borderColor: T.warnSoft, background: T.warnSoft }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: T.warn }}>Automation not enabled yet</div>
+        <div style={{ fontSize: 12, color: T.inkSoft, marginTop: 4 }}>Run migration <b>20_lead_type_and_open_leads.sql</b> in Supabase to create the settings and the auto-open function. Until then, leads can still be opened manually.</div>
+      </div>
+     : <div style={{ ...card, padding: "16px 18px" }}>
+        <div style={{ fontSize: 12, color: T.muted, marginBottom: 6, lineHeight: 1.5 }}>Automatically moves inactive leads to the Open pool for redistribution. Only the lead types you enable below are ever auto-opened; Closed Won, deal-pending and other excluded statuses are always protected, and leads with a future follow-up are left alone.</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 0" }}>
+          <div><div style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>Auto-open enabled</div><div style={{ fontSize: 11, color: T.muted }}>Master switch for the automation</div></div>
+          <Toggle on={!!s.auto_open_enabled} onClick={() => set("auto_open_enabled", !s.auto_open_enabled)} />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 0", borderTop: `1px solid ${T.hairSoft}` }}>
+          <div><div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>Inactivity days</div><div style={{ fontSize: 11, color: T.muted }}>Open after this many days with no meaningful activity</div></div>
+          <input type="number" min={1} value={s.inactivity_days} onChange={(e) => set("inactivity_days", e.target.value)} style={{ width: 70, border: `1px solid ${T.hair}`, borderRadius: 8, padding: "7px 10px", fontSize: 13, fontFamily: UI, textAlign: "center", background: T.bone }} />
+        </div>
+        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: T.muted, marginTop: 12, marginBottom: 2 }}>Apply to lead types</div>
+        {row("Buyer leads", "Recommended — the main pool for redistribution", "apply_buyer")}
+        {row("Seller leads", "Off by default", "apply_seller")}
+        {row("Tenant leads", "Off by default", "apply_tenant")}
+        {row("Agent leads", "Off by default", "apply_agent")}
+        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: T.muted, marginTop: 12, marginBottom: 2 }}>Rules</div>
+        {row("Respect future follow-ups", "Never open a lead that has a scheduled future follow-up", "respect_future_followups")}
+        {row("Lead view counts as activity", "If off, only calls/WhatsApp/email/comments/edits reset the timer", "view_counts_as_activity")}
+        {row("Notify admin after opening", "Record an audit entry when a lead is auto-opened", "notify_admin_after")}
+        <div style={{ marginTop: 12, padding: "10px 12px", background: T.bone, borderRadius: 9, fontSize: 11, color: T.muted, lineHeight: 1.5 }}>
+          <b style={{ color: T.inkSoft }}>Always protected (never auto-opened):</b> {(s.exclude_statuses || []).join(" · ")} — plus any lead tied to a submitted, pending or approved deal.
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
+          <button onClick={save} disabled={saving} style={{ background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 9, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: saving ? "default" : "pointer", fontFamily: UI, opacity: saving ? .6 : 1 }}>{saving ? "Saving…" : "Save settings"}</button>
+          {msg && <span style={{ fontSize: 12.5, fontWeight: 600, color: /fail/i.test(msg) ? T.bad : T.ok }}>{msg}</span>}
+        </div>
+      </div>}
+  </div>;
+}
 function SettingsPage() {
   const roles = ["Owner", "Manager", "Agent", "Marketing", "Accounts"];
   const perms = [
@@ -2477,6 +2559,7 @@ function SettingsPage() {
     ? <span style={{ fontSize: 10, fontWeight: 700, color: T.warn }}>Scoped</span>
     : <Ban size={13} color={T.faint} />;
   return <div>
+    <OpenLeadsAutomation />
     <SectionTitle>Role permissions <span style={{ fontSize: 11, color: T.faint, fontFamily: UI }}>· deny by default</span></SectionTitle>
     <div style={{ ...card, overflow: "hidden" }}>
       <div style={{ overflowX: "auto" }}>
@@ -4000,8 +4083,18 @@ const ADMIN_ROLES = ["master_admin", "admin", "sales_manager"];
 
 // Parse a lead query into an intent. role decides whether admin-only report kinds are allowed.
 // Optional `target` is an agent name (admins) or a project/area term used to scope results.
-function leadIntent(text, role) {
+// Detect a Lead Type filter in a question. "agent" only counts as a type when it's "agent lead(s)"
+// (so "agent performance" still routes to the performance report, not the Agent lead type).
+function parseLeadType(text) {
   const t = String(text || "").toLowerCase();
+  if (/\bbuyers?\b/.test(t)) return "Buyer";
+  if (/\bsellers?\b/.test(t)) return "Seller";
+  if (/\btenants?\b/.test(t)) return "Tenant";
+  if (/\bagent\s+leads?\b/.test(t)) return "Agent";
+  return null;
+}
+function leadIntent(text, role) {
+  let t = String(text || "").toLowerCase();
   const isAdmin = ADMIN_ROLES.includes(role);
   let target = "";
   const m = t.match(/\b(?:for|of|assigned to|under|belonging to)\s+([a-z0-9][a-z0-9 .,'&\-]{1,40})/);
@@ -4010,6 +4103,14 @@ function leadIntent(text, role) {
   if (!target && poss) target = poss[1];
   target = target.replace(/\b(today|now|this (week|month|year)|last (week|month)|the (week|month)|me|my|all|our|a|the)\b/g, " ")
                  .replace(/\bleads?\b/g, " ").replace(/[?.!,]+/g, " ").replace(/\s+/g, " ").trim();
+
+  // Lead Type is an add-on filter (attached to the intent at the call site). Strip the type word
+  // from the working text so action rules ("hot leads", "overdue leads", "all leads") still match
+  // phrases like "hot buyer leads" or "all agent leads".
+  const LT = parseLeadType(t);
+  if (LT === "Agent") t = t.replace(/\bagent(\s+leads?)/g, "$1");
+  else if (LT) t = t.replace(/\b(buyer|seller|tenant)s?\b/g, " ");
+  if (LT) t = t.replace(/\s+/g, " ").trim();
 
   // ---- Admin-only report intents (Master Admin / Admin / Sales Manager) ----
   if (/(unassigned|not assigned)\s*leads?/.test(t)) return { kind: "unassigned", adminOnly: true };
@@ -4030,6 +4131,8 @@ function leadIntent(text, role) {
   if (/(created|added|new)\b.*\btoday\b|leads? (created |added )?today|today'?s leads?/.test(t)) return { kind: "today", target };
   if (!target && (/\ball\b[^.]*\bleads?\b|\bevery\b[^.]*\blead|\bentire\b[^.]*\bleads?\b|company.?wide leads?|all (the )?company leads?|total leads?|how many leads|leads? (overview|summary|breakdown|count)|^\s*(show|list|get)( me)?( the| all)? leads\s*$/.test(t))) return { kind: "all", target: "" };
   if (target && /\blead/.test(t)) return { kind: "list", target };
+  // Type-only query (e.g. "show me my buyer leads" / "all seller leads") with no other action keyword.
+  if (LT && /\blead/.test(t)) return { kind: "all", target: target || "" };
   return null;
 }
 
@@ -4046,11 +4149,12 @@ async function runLeadQuery(intent, user) {
   const weekAgo = new Date(Date.now() - 7 * 864e5).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
   const { data: { user: au } } = await supabase.auth.getUser();
   const { data, error } = await supabase.from("leads")
-    .select("id, lead_code, lead_no, client_name, area, project, status, temperature, next_followup, last_contacted, phone, budget, purpose, is_open, assigned_agent, assigned_agent_name, current_owner, created_by, created_at, created_on")
+    .select("id, lead_code, lead_no, client_name, area, project, status, temperature, next_followup, last_contacted, phone, budget, purpose, lead_type, is_open, assigned_agent, assigned_agent_name, current_owner, created_by, created_at, created_on")
     .limit(2000);
   if (error) throw error;
   let rows = data || [];
   if (isAgent && au) rows = rows.filter((l) => l.assigned_agent === au.id || l.current_owner === au.id || l.created_by === au.id);
+  if (intent.leadType) rows = rows.filter((l) => (l.lead_type || "Buyer") === intent.leadType);
 
   const d10 = (v) => String(v || "").slice(0, 10);
   const createdOf = (l) => d10(l.created_at) || d10(l.created_on);
@@ -4168,6 +4272,7 @@ async function runLeadQuery(intent, user) {
     status: l.is_open ? "Open" : (l.status || "—"), temp: l.temperature || "—", budget: l.budget || "",
     due: fmtDue(l.next_followup), phone: l.phone || "", reason: reasonFor(l),
   }));
+  if (intent.leadType && heading && !new RegExp(intent.leadType, "i").test(heading)) heading = intent.leadType + " leads — " + heading;
   return { heading, leads };
 }
 
@@ -4231,6 +4336,7 @@ function AskAmber({ narrow, user, openLead }) {
     }
     // CRM lead-list question → answer with actionable lead cards (RLS limits to permitted leads).
     const li = leadIntent(text, user && user.role);
+    if (li) { const lt = parseLeadType(text); if (lt) li.leadType = lt; }
     if (li) {
       setMsgs((m) => [...m, { role: "user", text }]); setBusy(true);
       try {
@@ -4622,6 +4728,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const [me, setMe] = useState(null);
   const [sort, setSort] = useState("newest");
   const [agentFilter, setAgentFilter] = useState(initialAgentFilter);   // null | 'unassigned' | 'open' | <agentId>
+  const [typeFilter, setTypeFilter] = useState("");                     // "" | Buyer | Seller | Tenant | Agent
   const [agents, setAgents] = useState([]);
   const [selected, setSelected] = useState({});            // { [leadId]: true }
   const [showBulk, setShowBulk] = useState(false);
@@ -4632,7 +4739,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     const { data: { user: au } } = await supabase.auth.getUser();
     setMe(au);
     const { data, error } = await supabase.from("leads")
-      .select("id, lead_code, lead_no, client_name, phone, whatsapp, email, project, area, budget, assigned_agent_name, assigned_agent, original_agent, current_owner, created_by, status, temperature, source, is_open, opened_reason, next_followup, last_contacted, created_on, created_at, assigned_at")
+      .select("id, lead_code, lead_no, client_name, phone, whatsapp, email, project, area, budget, lead_type, assigned_agent_name, assigned_agent, original_agent, current_owner, created_by, status, temperature, source, is_open, opened_reason, next_followup, last_contacted, created_on, created_at, assigned_at")
       .order("created_at", { ascending: false }).limit(2000);
     if (error) { try { console.error("Leads load failed:", error); } catch (e) {} setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); return; }
     let rows = data || [];
@@ -4707,10 +4814,11 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     }
   };
   const matchTab = (l) => tabDef(tab, l);
-  const baseLeads = (leads || []).filter(matchFilter).filter(matchAgentFilter);
+  const matchType = (l) => !typeFilter || (l.lead_type || "Buyer") === typeFilter;
+  const baseLeads = (leads || []).filter(matchFilter).filter(matchAgentFilter).filter(matchType);
   const tabCount = (t) => baseLeads.filter((l) => tabDef(t, l)).length;
   const TAB_TONE = { Hot: T.bad, "Very Hot": T.bad, Warm: T.warn, Cold: T.muted, "Closed Won": T.ok, "Closed Lost": T.bad, Overdue: T.bad, "Follow-up due": T.gold, New: T.gold };
-  const filteredRaw = (leads || []).filter(matchFilter).filter(matchTab).filter(matchAgentFilter).filter((l) => {
+  const filteredRaw = (leads || []).filter(matchFilter).filter(matchTab).filter(matchAgentFilter).filter(matchType).filter((l) => {
     if (!q.trim()) return true;
     const s = q.toLowerCase();
     return [l.client_name, l.project, l.area, l.assigned_agent_name, l.lead_code, l.status].some((v) => (v || "").toLowerCase().includes(s));
@@ -4793,6 +4901,13 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       {q && <span style={{ fontSize: 11.5, color: T.muted }}>{filtered.length} match</span>}
     </div>
 
+    {isAgent && <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 10, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 11.5, color: T.muted, fontWeight: 600, marginRight: 2 }}>Type</span>
+      {["", ...LEAD_TYPES].map((t) => (
+        <button key={t || "all"} onClick={() => setTypeFilter(t)} style={{ padding: "6px 12px", borderRadius: 999, border: `1px solid ${typeFilter === t ? T.gold : T.hair}`, background: typeFilter === t ? T.goldSoft : T.paper, color: typeFilter === t ? T.gold : T.muted, cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: UI }}>{t || "All"}</button>
+      ))}
+    </div>}
+
     {!isAgent && <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
         <span style={{ fontSize: 11.5, color: T.muted, fontWeight: 600 }}>Sort</span>
@@ -4807,6 +4922,13 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
           <option value="unassigned">Unassigned</option>
           <option value="open">Open leads</option>
           <optgroup label="Agents">{assignable.map((a) => <option key={a.id} value={a.id}>{a.full_name}</option>)}</optgroup>
+        </select>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+        <span style={{ fontSize: 11.5, color: T.muted, fontWeight: 600 }}>Lead type</span>
+        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ border: `1px solid ${typeFilter ? T.gold : T.hair}`, borderRadius: 9, padding: "7px 10px", fontSize: 12.5, fontFamily: UI, color: T.ink, background: T.paper, cursor: "pointer" }}>
+          <option value="">All types</option>
+          {LEAD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
       </div>
       {agentFilter && <span style={{ display: "inline-flex", alignItems: "center", gap: 8, background: T.goldSoft, color: T.gold, borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 700 }}>
@@ -4857,12 +4979,12 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     ) : (
       <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
         <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: isAgent ? 820 : 1900 }}>
-            <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr" : "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
+          <div style={{ minWidth: isAgent ? 820 : 2040 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr" : "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
               padding: "10px 16px", fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
               color: T.muted, borderBottom: `1px solid ${T.hair}`, background: T.bone }}>
               {isAgent ? <><span>Client</span><span>Project</span><span>Budget</span><span>Next follow-up</span><span>Status</span><span>Contact</span></>
-                       : <><span style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 3, background: T.bone, margin: "-10px 0", padding: "10px 0" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Client</span><span>Phone</span><span>Email</span><span>Agent</span><span>Project</span><span>Area</span><span>Source</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
+                       : <><span style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 3, background: T.bone, margin: "-10px 0", padding: "10px 0" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Client</span><span>Phone</span><span>Email</span><span>Agent</span><span>Type</span><span>Project</span><span>Area</span><span>Source</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
             </div>
             {filtered.map((l, i) => (isAgent ? (
               <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr",
@@ -4870,7 +4992,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{l.client_name}
                     {(l.temperature === "Hot" || l.temperature === "Very Hot") && <span style={{ width: 7, height: 7, borderRadius: 7, background: T.bad }} />}</div>
-                  <div style={{ fontSize: 10.5, color: T.faint }}>{l.area || "—"}</div>
+                  <div style={{ fontSize: 10.5, color: T.faint, display: "flex", alignItems: "center", gap: 5 }}><span style={{ fontWeight: 700, color: (l.lead_type || "Buyer") === "Buyer" ? T.info : T.muted }}>{l.lead_type || "Buyer"}</span> · {l.area || "—"}</div>
                 </div>
                 <span style={{ color: T.inkSoft }}>{l.project || "—"}</span>
                 <span style={{ color: T.inkSoft }}>{l.budget || "—"}</span>
@@ -4889,7 +5011,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 </span>
               </div>
             ) : (
-              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
+              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12, cursor: "pointer", background: selected[l.id] ? T.goldSoft : "transparent" }}>
                 <span onClick={(e) => e.stopPropagation()} style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 2, background: selected[l.id] ? T.goldSoft : T.paper, margin: "-12px 0", padding: "12px 0" }}><input type="checkbox" checked={!!selected[l.id]} onChange={() => toggleSel(l.id)} style={{ cursor: "pointer", width: 14, height: 14 }} /></span>
                 <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 600, lineHeight: 1.3 }}>{fmtDubai(l.created_at || l.created_on)}</span>
@@ -4897,6 +5019,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 <span style={{ fontSize: 11.5 }}>{l.phone || <span style={{ color: T.faint }}>—</span>}</span>
                 <span style={{ fontSize: 11.5, color: l.email ? T.inkSoft : T.faint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.email || "No email"}</span>
                 <button onClick={(e) => { e.stopPropagation(); if (l.is_open) setAgentFilter("open"); else if (l.assigned_agent) setAgentFilter(l.assigned_agent); else setAgentFilter("unassigned"); }} title="Filter by this agent" style={{ background: "none", border: "none", textAlign: "left", padding: 0, cursor: "pointer", fontFamily: UI, fontSize: 12, color: l.is_open ? T.gold : (l.assigned_agent_name ? T.gold : T.faint), fontWeight: l.assigned_agent_name || l.is_open ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.is_open ? "Open" : (l.assigned_agent_name || "Unassigned")}</button>
+                <span style={{ fontSize: 10.5 }}><Chip tone={(l.lead_type || "Buyer") === "Buyer" ? "info" : (l.lead_type === "Seller" ? "gold" : "muted")}>{l.lead_type || "Buyer"}</Chip></span>
                 <span style={{ color: T.inkSoft }}>{l.project || "—"}</span>
                 <span style={{ color: T.inkSoft }}>{l.area || "—"}</span>
                 <span style={{ color: T.inkSoft, fontSize: 11 }}>{l.source || "—"}</span>
@@ -4927,8 +5050,9 @@ function miniBtn() { return { background: T.paper, color: T.ink, border: `1px so
   display: "inline-flex", alignItems: "center", gap: 6 }; }
 
 /* ---- Add Lead: validation + duplicate check + autocomplete + AI extract ---- */
-const DUBAI_AREAS = ["Palm Jumeirah","Palm Jebel Ali","Dubai Hills Estate","Downtown Dubai","Business Bay","Dubai Marina","Jumeirah Village Circle","JVC","Jumeirah Village Triangle","JVT","Arabian Ranches","Arabian Ranches 2","Arabian Ranches 3","Dubai Creek Harbour","Emaar South","Dubai South","Dubai Islands","Damac Hills","Damac Hills 2","Tilal Al Ghaf","Mohammed Bin Rashid City","MBR City","District One","City Walk","Nad Al Sheba","Meydan","Jumeirah Golf Estates","Emirates Living","Springs","Meadows","The Lakes","Bluewaters","Madinat Jumeirah Living","Rashid Yachts and Marina"];
+const DUBAI_AREAS = ["Downtown Dubai","Business Bay","Dubai Marina","Palm Jumeirah","Palm Jebel Ali","Dubai Hills Estate","Jumeirah Village Circle","JVC","Jumeirah Village Triangle","JVT","City Walk","Meydan","Dubai Creek Harbour","Dubai Islands","Emaar South","The Valley","Arabian Ranches","Arabian Ranches 2","Arabian Ranches 3","Tilal Al Ghaf","Damac Lagoons","Damac Hills","Damac Hills 2","Sobha Hartland","Dubai South","Jumeirah Golf Estates","Dubai Sports City","Motor City","Al Furjan","Mohammed Bin Rashid City","MBR City","District One","Dubai Production City","Dubai Investment Park","DIFC","Jumeirah Lake Towers","JLT","Bluewaters","Port de La Mer","Rashid Yachts and Marina","Dubai Design District","Nad Al Sheba","The Acres","Emirates Living","Springs","Meadows","The Lakes","Madinat Jumeirah Living","Expo City","Jumeirah Beach Residence","JBR","Al Barsha","Town Square","Dubailand","Discovery Gardens","International City","Mirdif","Jumeirah","Umm Suqeim"];
 const DUBAI_PROJECTS = ["Palm Jebel Ali","Dubai Hills Estate","Emaar South","The Valley","Rashid Yachts and Marina","Dubai Creek Harbour","City Walk","Madinat Jumeirah Living","Nad Al Sheba Gardens","District One","Damac Lagoons","Damac Hills","Sobha Hartland","Sobha One","Sobha Reserve","Tilal Al Ghaf","Arabian Ranches 3","Expo City","Dubai Islands","Bay Villas","Bluewaters Residences","Jumeirah Living"];
+const LEAD_TYPES = ["Buyer", "Seller", "Tenant", "Agent"];
 const normPhone = (p) => { if (!p) return ""; let d = String(p).replace(/[^\d+]/g, ""); if (d.startsWith("00")) d = "+" + d.slice(2); else if (!d.startsWith("+")) d = "+" + d; return d; };
 
 function AddLeadModal({ onClose, onSaved, me, user }) {
@@ -4936,7 +5060,7 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
   const [mode, setMode] = useState("manual"); // manual | ai
   const [aiText, setAiText] = useState(""); const [aiBusy, setAiBusy] = useState(false); const [aiErr, setAiErr] = useState("");
   const [f, setF] = useState({ client_name: "", phone: "", email: "", project: "", area: "", budget: "",
-    property_type: "", ready_offplan: "", purpose: "", nationality: "", followup_note: "",
+    property_type: "", ready_offplan: "", purpose: "", nationality: "", followup_note: "", lead_type: "Buyer",
     assigned_agent_name: isAgent ? (user.name || "") : "" });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   const [dup, setDup] = useState(null); // pending duplicate, requires confirm
@@ -4988,6 +5112,7 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
       lead_code: code, client_name: f.client_name.trim(), phone, whatsapp: phone, email: f.email.trim() || null,
       project: f.project.trim() || null, area: f.area.trim() || null, budget: f.budget.trim() || null,
       property_type: f.property_type.trim() || null, ready_offplan: f.ready_offplan.trim() || null,
+      lead_type: f.lead_type || "Buyer",
       purpose: f.purpose.trim() || null, nationality: f.nationality.trim() || null, followup_note: f.followup_note.trim() || null,
       source: "Manual", status: "New", temperature: "Cold", created_by: myId, ...ownership,
     }).select("id").single();
@@ -5046,8 +5171,13 @@ function AddLeadModal({ onClose, onSaved, me, user }) {
       {field("Client name *", "client_name")}
       {field("Phone * (required)", "phone", { norm: true, ph: "+9715…" })}
       {field("Email", "email", { ph: "optional" })}
-      {field("Area", "area", { list: "areas", ph: "type or pick" })}
-      {field("Project", "project", { list: "projects", ph: "type or pick" })}
+      <label style={{ display: "block", marginBottom: 10 }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Lead type</span>
+        <select value={f.lead_type} onChange={(e) => set("lead_type", e.target.value)} style={inp}>{LEAD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+      </label>
+      {field("Area / Community", "area", { list: "areas", ph: "Select or type a community" })}
+      {field("Project name", "project", { ph: "Specific project/building, if known — type manually" })}
+      <div style={{ fontSize: 10.5, color: T.faint, margin: "-4px 0 12px", lineHeight: 1.45 }}>Area is the community/location (e.g. Dubai Hills Estate). Project name is the specific project/building, if known (e.g. Sobha One).</div>
       {field("Budget", "budget", { ph: "AED …" })}
       {field("Property type", "property_type", { ph: "Villa / Apartment …" })}
       {field("Ready / Off-plan", "ready_offplan", { ph: "Off-plan / Ready" })}
