@@ -9,7 +9,7 @@ import {
   Flame, Clock, MapPin, Eye, EyeOff, Lock, AlertTriangle, CheckCircle2,
   TrendingUp, Users, Wallet, Star, Calendar, Filter, Plus, ArrowUpRight,
   ArrowDownRight, CircleDot, Ban, Download, Globe, Smartphone, Sun, Moon, Unlock, Send, Bot, Fingerprint, KeyRound, LogOut,
-  Database, RefreshCw, Upload, Sparkle, Zap, ShieldCheck
+  Database, RefreshCw, Upload, Sparkle, Zap, ShieldCheck, Camera, Target, PhoneCall
 } from "lucide-react";
 
 /* ================================ TOKENS ================================= */
@@ -440,13 +440,13 @@ export default function App() {
       if (!/type=recovery/.test(typeof window !== "undefined" ? (window.location.hash || "") : "")) {
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.user && mounted) {
-          const { data: prof } = await supabase.from("profiles").select("full_name, role, active, force_password_change, first_login, password_expires_at").eq("id", session.user.id).single();
+          const { data: prof } = await supabase.from("profiles").select("full_name, role, active, force_password_change, first_login, password_expires_at, avatar_url").eq("id", session.user.id).single();
           if (prof && prof.active !== false) {
             const role = resolveRole(session.user.email, prof.role);
             const ri = roleInfo(role);
             const expired = !!(prof.password_expires_at && new Date(prof.password_expires_at).getTime() < Date.now());
             setUser({ name: prof.full_name || session.user.email, email: session.user.email, role,
-              roleLabel: ri.label, id: session.user.id, mustChangePw: !!prof.force_password_change || !!prof.first_login || expired });
+              roleLabel: ri.label, id: session.user.id, avatar_url: prof.avatar_url || null, mustChangePw: !!prof.force_password_change || !!prof.first_login || expired });
             let initial = ri.home === "agent" ? "agent" : "admin";
             try { const saved = sessionStorage.getItem("amber_screen"); if (saved && saved !== "lead" && saved !== "dealdetail" && canOpen(role, saved)) initial = saved; } catch (e) {}
             setScreen(initial);
@@ -489,7 +489,7 @@ export default function App() {
     if (user && screen !== "lead" && screen !== "dealdetail") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} />, lead: <LeadDetail leadId={detailId} user={user} go={go} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <Performance go={go} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -618,9 +618,11 @@ function TempTag({ t }) {
   const tone = t === "Very Hot" ? "bad" : t === "Hot" ? "warn" : t === "Warm" ? "gold" : "muted";
   return <Chip tone={tone}>{t}</Chip>;
 }
-function Av({ name, size = 36, dark }) {
+function Av({ name, size = 36, dark, src, round }) {
   const ini = String(name || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase() || "?";
-  return <div style={{ width: size, height: size, borderRadius: size * 0.3, background: dark ? T.hero : T.goldSoft,
+  const radius = round ? "50%" : size * 0.3;
+  if (src) return <img src={src} alt={name || ""} style={{ width: size, height: size, borderRadius: radius, objectFit: "cover", flexShrink: 0, border: `1px solid ${dark ? "rgba(255,255,255,.25)" : T.goldEdge}` }} />;
+  return <div style={{ width: size, height: size, borderRadius: radius, background: dark ? T.hero : T.goldSoft,
     color: dark ? T.goldBright : T.gold, display: "grid", placeItems: "center", fontFamily: DISPLAY,
     fontSize: size * 0.36, flexShrink: 0, border: `1px solid ${dark ? "transparent" : T.goldEdge}` }}>{ini}</div>;
 }
@@ -884,10 +886,16 @@ function AdminDash({ go }) {
 }
 
 /* ============================ 2 AGENT DASHBOARD ========================== */
-function AgentDash({ go, user, openLead }) {
+function AgentDash({ go, user, openLead, onAvatar }) {
   const [rows, setRows] = useState(null);
   const [acts, setActs] = useState([]);
+  const [deals, setDeals] = useState([]);
   const [fups, setFups] = useState([]);
+  const [period, setPeriod] = useState("month");
+  const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url || null);
+  const [upBusy, setUpBusy] = useState(false);
+  const [upErr, setUpErr] = useState("");
+  const fileRef = useRef(null);
   const [projAnn, setProjAnn] = useState([]);
   const [hotDeals, setHotDeals] = useState([]);
   const [err, setErr] = useState("");
@@ -900,13 +908,14 @@ function AgentDash({ go, user, openLead }) {
     (async () => {
       const { data: { user: au } } = await supabase.auth.getUser();
       const uid = au?.id;
-      const [lr, ar] = await Promise.all([
-        supabase.from("leads").select("id, client_name, phone, project, area, budget, status, temperature, next_followup, last_contacted, is_open, assigned_agent, current_owner, created_by, deal_value, commission_value").limit(2000),
-        supabase.from("lead_activity").select("action, created_at").eq("actor_id", uid).order("created_at", { ascending: false }).limit(400),
+      const [lr, ar, dr] = await Promise.all([
+        supabase.from("leads").select("id, client_name, phone, project, area, budget, status, temperature, next_followup, last_contacted, is_open, assigned_agent, current_owner, created_by, deal_value, commission_value, created_at, created_on").limit(2000),
+        supabase.from("lead_activity").select("action, created_at").eq("actor_id", uid).order("created_at", { ascending: false }).limit(5000),
+        supabase.from("deals").select("status, deal_type, property_value, gross_commission, net_commission, agent_commission, decided_at, created_at").eq("agent_id", uid).limit(1000),
       ]);
       if (lr.error) { setErr("Unable to load your dashboard. Please try again or contact admin."); setRows([]); return; }
       const mine = (lr.data || []).filter((l) => l.assigned_agent === uid || l.current_owner === uid || l.created_by === uid);
-      setRows(mine); setActs(ar.data || []);
+      setRows(mine); setActs(ar.data || []); setDeals(dr.data || []);
       // follow-ups for me (RLS already scopes to leads I can see)
       const { data: fu } = await supabase.from("follow_ups")
         .select("id, lead_id, due_at, type, comment, priority, status, notified, lead:leads!follow_ups_lead_id_fkey(client_name, phone)")
@@ -1032,15 +1041,85 @@ function AgentDash({ go, user, openLead }) {
   const AnnIcon = projTop ? Building2 : Flame;
   const annGo = projTop ? () => go("projects") : () => go("hotdeals");
 
+  // ---- profile photo upload (Supabase Storage 'avatars' bucket; profiles.avatar_url) ----
+  const onPhoto = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (e.target) e.target.value = "";
+    if (!file) return;
+    if (!/^image\/(jpeg|jpg|png|webp)$/.test(file.type)) { setUpErr("Please use a JPG, PNG or WebP image."); return; }
+    if (file.size > 5 * 1024 * 1024) { setUpErr("Image must be under 5MB."); return; }
+    setUpBusy(true); setUpErr("");
+    try {
+      const { data: { user: au } } = await supabase.auth.getUser();
+      const uid = au?.id; if (!uid) throw new Error("no session");
+      const ext = (file.type.split("/")[1] || "jpg").replace("jpeg", "jpg");
+      const path = uid + "/avatar." + ext;
+      const { error: e1 } = await supabase.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type, cacheControl: "3600" });
+      if (e1) throw e1;
+      const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
+      const url = pub.publicUrl + "?v=" + Date.now(); // cache-bust so the new image shows immediately
+      const { error: e2 } = await supabase.from("profiles").update({ avatar_url: url }).eq("id", uid);
+      if (e2) throw e2;
+      setAvatarUrl(url);
+      if (onAvatar) onAvatar(url);
+    } catch (err) { setUpErr("Upload failed. Please try again."); }
+    finally { setUpBusy(false); }
+  };
+
+  // ---- period-scoped REAL performance metrics (Asia/Dubai) ----
+  const dStr = (iso) => { try { return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return ""; } };
+  const dNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Dubai" }));
+  const ymd = (dt) => dt.toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+  const PERIODS = [["today", "Today"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["half", "6 Months"], ["year", "Year"]];
+  const periodStart = (() => {
+    const d = new Date(dNow);
+    if (period === "today") return ymd(d);
+    if (period === "week") { d.setDate(d.getDate() - 6); return ymd(d); }
+    if (period === "month") return ymd(new Date(dNow.getFullYear(), dNow.getMonth(), 1));
+    if (period === "quarter") return ymd(new Date(dNow.getFullYear(), Math.floor(dNow.getMonth() / 3) * 3, 1));
+    if (period === "half") { d.setDate(d.getDate() - 181); return ymd(d); }
+    if (period === "year") return ymd(new Date(dNow.getFullYear(), 0, 1));
+    return ymd(d);
+  })();
+  const inPeriod = (iso) => { const s = dStr(iso); return s && s >= periodStart && s <= today; };
+  const periodLabel = (PERIODS.find((p) => p[0] === period) || ["", ""])[1];
+
+  const actsIn = acts.filter((a) => inPeriod(a.created_at));
+  const callsN = actsIn.filter((a) => a.action === "call").length;
+  const waN = actsIn.filter((a) => a.action === "whatsapp").length;
+  const viewsN = actsIn.filter((a) => a.action === "view_number" || a.action === "view").length;
+  const fupDoneN = actsIn.filter((a) => a.action === "followup_completed").length;
+  const contactN = callsN + waN + viewsN;
+  const leadsAssignedN = mine.filter((l) => inPeriod(l.created_at || l.created_on)).length;
+  const apprDeals = deals.filter((d) => d.status === "approved" && inPeriod(d.decided_at || d.created_at));
+  const closedN = apprDeals.length;
+  const valueClosed = apprDeals.reduce((s, d) => s + (Number(d.property_value) || 0), 0);
+  const grossComm = apprDeals.reduce((s, d) => s + (Number(d.gross_commission) || 0), 0);
+  const agentComm = apprDeals.reduce((s, d) => s + (Number(d.agent_commission) || 0), 0);
+  const netComm = apprDeals.reduce((s, d) => s + (Number(d.net_commission) || 0), 0);
+  const pendingDeals = deals.filter((d) => d.status === "submitted" || d.status === "pending_review").length;
+  const warm = mine.filter((l) => l.temperature === "Warm");
+  const cold = mine.filter((l) => l.temperature !== "Hot" && l.temperature !== "Very Hot" && l.temperature !== "Warm" && l.status !== "Closed Won" && l.status !== "Closed Lost");
+  const aed0 = (n) => "AED " + Math.round(n).toLocaleString("en-US");
+
   return <div>
+    <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={onPhoto} style={{ display: "none" }} />
     {/* greeting banner */}
     <div style={{ ...card, padding: "22px 24px", background: T.hero, border: "none", boxShadow: T.shadowLg }}>
       <div style={{ display: "flex", alignItems: "center", gap: 15, flexWrap: "wrap" }}>
-        <Av name={user?.name || "Agent"} size={52} />
+        <div style={{ position: "relative", flexShrink: 0 }}>
+          <Av name={user?.name || "Agent"} src={avatarUrl || undefined} size={(typeof window !== "undefined" && window.innerWidth < 768) ? 60 : 76} round dark />
+          <button onClick={() => !upBusy && fileRef.current && fileRef.current.click()} title="Upload / change photo"
+            style={{ position: "absolute", right: -2, bottom: -2, width: 26, height: 26, borderRadius: "50%", border: "2px solid " + T.hero,
+              background: T.btnBg, color: T.btnFg, display: "grid", placeItems: "center", cursor: upBusy ? "default" : "pointer", padding: 0 }}>
+            {upBusy ? <span style={{ fontSize: 9, fontWeight: 700 }}>…</span> : <Camera size={13} />}</button>
+        </div>
         <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ fontFamily: DISPLAY, fontSize: 26, color: "#fff", lineHeight: 1.1 }}>{greetWord(h)}, {firstName(user?.name)}</div>
+          <div style={{ fontSize: 12, color: T.goldBright, fontWeight: 700, marginTop: 3 }}>{user?.roleLabel || "Agent"}</div>
           <div style={{ fontSize: 12.5, color: "rgba(255,255,255,.62)", marginTop: 4 }}>{new Date().toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", weekday: "long", day: "numeric", month: "long" })} · Dubai</div>
           <div style={{ fontSize: 13, color: "rgba(255,255,255,.82)", marginTop: 7 }}>{motiv}</div>
+          {upErr && <div style={{ fontSize: 11.5, color: "#ffd9d5", marginTop: 6 }}>{upErr}</div>}
         </div>
       </div>
       {annText && <div onClick={annGo} style={{ marginTop: 16, background: "rgba(255,255,255,.10)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 11, cursor: "pointer" }}>
@@ -1061,6 +1140,60 @@ function AgentDash({ go, user, openLead }) {
     {rows === null ? (
       <div style={{ ...card, padding: 40, marginTop: 14, textAlign: "center", color: T.muted }}>Loading your dashboard…</div>
     ) : (<>
+      {/* ===== My Performance (real data, period-scoped) ===== */}
+      <div style={{ ...card, padding: 0, marginTop: 14, overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "15px 18px 0", flexWrap: "wrap" }}>
+          <div style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 9 }}><BarChart3 size={19} color={T.gold} /> My Performance</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {PERIODS.map(([k, lbl]) => (
+              <button key={k} onClick={() => setPeriod(k)} style={{ padding: "6px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: UI,
+                border: "1px solid " + (period === k ? T.btnBg : T.hair), background: period === k ? T.btnBg : T.paper, color: period === k ? T.btnFg : T.muted }}>{lbl}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, padding: 18 }}>
+          {[
+            { ic: Database, label: "Leads Assigned", val: leadsAssignedN, sub: periodLabel, tone: "ink" },
+            { ic: PhoneCall, label: "Calls Made", val: callsN, sub: periodLabel, tone: "ink" },
+            { ic: MessageCircle, label: "WhatsApp Actions", val: waN, sub: periodLabel, tone: "wa" },
+            { ic: CheckCircle2, label: "Follow-Ups Done", val: fupDoneN, sub: periodLabel, tone: "ok" },
+            { ic: Coins, label: "Closed Deals", val: closedN, sub: periodLabel, tone: "gold" },
+            { ic: Wallet, label: "Commission Earned", val: aed0(agentComm), sub: "approved · " + periodLabel, tone: "gold", small: true },
+          ].map((c, i) => (
+            <div key={i} style={{ border: "1px solid " + T.hair, borderRadius: 13, padding: "13px 15px", background: T.paper }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, color: T.muted }}>
+                <c.ic size={15} color={c.tone === "gold" ? T.gold : c.tone === "wa" ? WA : c.tone === "ok" ? T.ok : T.inkSoft} />
+                <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase" }}>{c.label}</span>
+              </div>
+              <div style={{ fontFamily: DISPLAY, fontSize: c.small ? 19 : 27, marginTop: 6, color: c.tone === "gold" ? T.gold : c.tone === "bad" ? T.bad : T.ink, lineHeight: 1.1 }}>{c.val}</div>
+              <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3 }}>{c.sub}</div>
+            </div>
+          ))}
+        </div>
+        {/* closing + activity + quality rows */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 12, padding: "0 18px 18px" }}>
+          <div style={{ border: "1px solid " + T.hair, borderRadius: 13, padding: "13px 15px" }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: T.muted, marginBottom: 9 }}>Closing — {periodLabel}</div>
+            {[["Property value closed", aed0(valueClosed)], ["Gross commission", aed0(grossComm)], ["My commission (approved)", aed0(agentComm)], ["Deals pending approval", String(pendingDeals)]].map(([l, v], i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "4px 0", borderBottom: i < 3 ? "1px solid " + T.hairSoft : "none" }}><span style={{ color: T.muted }}>{l}</span><span style={{ fontWeight: 700, color: T.ink }}>{v}</span></div>
+            ))}
+          </div>
+          <div style={{ border: "1px solid " + T.hair, borderRadius: 13, padding: "13px 15px" }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: T.muted, marginBottom: 9 }}>Activity — {periodLabel}</div>
+            {[["Calls made", callsN], ["WhatsApp actions", waN], ["Numbers viewed", viewsN], ["Total contact actions", contactN]].map(([l, v], i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "4px 0", borderBottom: i < 3 ? "1px solid " + T.hairSoft : "none" }}><span style={{ color: T.muted }}>{l}</span><span style={{ fontWeight: 700, color: T.ink }}>{v}</span></div>
+            ))}
+          </div>
+          <div style={{ border: "1px solid " + T.hair, borderRadius: 13, padding: "13px 15px" }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: T.muted, marginBottom: 9 }}>Lead quality — now</div>
+            {[["Hot / very hot", hot.length, T.bad], ["Warm", warm.length, T.warn], ["Cold", cold.length, T.muted], ["Overdue follow-ups", overdue.length, overdue.length ? T.bad : T.ok]].map(([l, v, c], i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "4px 0", borderBottom: i < 3 ? "1px solid " + T.hairSoft : "none" }}><span style={{ color: T.muted }}>{l}</span><span style={{ fontWeight: 700, color: c }}>{v}</span></div>
+            ))}
+          </div>
+        </div>
+        <div style={{ fontSize: 10.5, color: T.faint, padding: "0 18px 14px" }}>All figures are your own real CRM activity. "Leads Assigned" counts leads created in the period; commission reflects approved deals only.</div>
+      </div>
+
       {/* streak + plan my day */}
       <div style={{ display: "flex", gap: 12, marginTop: 14, flexWrap: "wrap" }}>
         <div style={{ ...card, padding: "14px 18px", display: "flex", alignItems: "center", gap: 11, flex: "1 1 200px" }}>
@@ -1802,7 +1935,7 @@ function Performance({ go }) {
       const [leadsR, actR, profR, dealsR] = await Promise.all([
         supabase.from("leads").select("assigned_agent,assigned_agent_name,status,temperature,next_followup,last_contacted,deleted").limit(10000),
         supabase.from("lead_activity").select("actor_id,action,created_at").limit(20000),
-        supabase.from("profiles").select("id,full_name,role,active,last_login"),
+        supabase.from("profiles").select("id,full_name,role,active,last_login,avatar_url"),
         supabase.from("deals").select("agent_id,status,deleted").limit(10000),
       ]);
       if (leadsR.error) throw leadsR.error;
@@ -1813,7 +1946,7 @@ function Performance({ go }) {
       const deals = (dealsR.data || []).filter((d) => !d.deleted);
       const today = dubaiToday();
       const closedSet = new Set(["Closed Won", "Closed Lost", "Dead Lead"]);
-      const build = (name, id, role, active, lastLogin, imported) => {
+      const build = (name, id, role, active, lastLogin, imported, avatar) => {
         const mine = leads.filter((l) => (id && l.assigned_agent === id) || (name && l.assigned_agent_name === name));
         const myActs = id ? acts.filter((a) => a.actor_id === id) : [];
         const myDeals = id ? deals.filter((d) => d.agent_id === id) : [];
@@ -1829,10 +1962,10 @@ function Performance({ go }) {
         const submitted = myDeals.filter((d) => d.status && d.status !== "draft").length;
         const approved = myDeals.filter((d) => d.status === "approved").length;
         const conv = assigned ? Math.round((won / assigned) * 100) : 0;
-        return { name, id, role, active, lastLogin, imported, assigned, contacted, won, overdue, due, calls, wa, reveals, submitted, approved, conv };
+        return { name, id, role, active, lastLogin, imported, avatar: avatar || null, assigned, contacted, won, overdue, due, calls, wa, reveals, submitted, approved, conv };
       };
       const accountRows = profs.filter((p) => p.role === "agent" || p.role === "sales_manager")
-        .map((p) => build(p.full_name, p.id, p.role, p.active, p.last_login, false));
+        .map((p) => build(p.full_name, p.id, p.role, p.active, p.last_login, false, p.avatar_url));
       const known = new Set(profs.map((p) => p.full_name).filter(Boolean));
       const orphanNames = Array.from(new Set(leads.map((l) => l.assigned_agent_name).filter((n) => n && !known.has(n))));
       const orphanRows = orphanNames.map((n) => build(n, null, "agent", null, null, true));
@@ -1893,7 +2026,7 @@ function Performance({ go }) {
                   style={{ borderBottom: i < rows.length - 1 ? `1px solid ${T.hairSoft}` : "none", cursor: "pointer" }}>
                   <C strong>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                      <Av name={r.name} size={26} />
+                      <Av name={r.name} src={r.avatar || undefined} size={26} round />
                       <span style={{ display: "inline-flex", flexDirection: "column" }}>
                         <span>{r.name || "Unnamed"}</span>
                         {r.imported ? <span style={{ fontSize: 9.5, color: T.warn, fontWeight: 600 }}>imported · no account</span>
@@ -4153,12 +4286,12 @@ function LoginFlow({ onLogin }) {
     return r.json();
   };
   const fetchProfileAndFinish = async (uid) => {
-    const { data: prof } = await supabase.from("profiles").select("full_name, role, active").eq("id", uid).single();
+    const { data: prof } = await supabase.from("profiles").select("full_name, role, active, avatar_url").eq("id", uid).single();
     if (!prof) { setErr("No profile found for this account. Contact your admin."); setBusy(false); return; }
     if (prof.active === false) { await supabase.auth.signOut(); setErr("Your account is inactive. Please contact admin."); setBusy(false); return; }
     const role = resolveRole(email, prof.role);
     const ri = roleInfo(role); stampLogin(uid);
-    onLogin({ name: prof.full_name || email, email, role, roleLabel: ri.label, home: ri.home, id: uid, mustChangePw: false });
+    onLogin({ name: prof.full_name || email, email, role, roleLabel: ri.label, home: ri.home, id: uid, avatar_url: prof.avatar_url || null, mustChangePw: false });
   };
   const establish = async (token_hash, mustChange) => {
     const { data, error } = await supabase.auth.verifyOtp({ token_hash, type: "magiclink" });
@@ -5195,7 +5328,8 @@ function ProfileMenu({ user, dark, setDark, accent, setAccent, ACCENTS, signOut 
     <div style={{ position: "relative" }}>
       <button onClick={() => setOpen(!open)} style={{ width: 36, height: 36, borderRadius: 10, background: T.hero,
         color: T.goldBright, display: "grid", placeItems: "center", fontFamily: DISPLAY, fontSize: 14, border: "none",
-        cursor: "pointer" }}>{ini}</button>
+        cursor: "pointer", padding: 0, overflow: "hidden" }}>
+        {user?.avatar_url ? <img src={user.avatar_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : ini}</button>
       {open && <>
         <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 70 }} />
         <div style={{ position: "absolute", right: 0, top: 44, width: 244, background: T.paper, border: `1px solid ${T.hair}`,
@@ -5571,7 +5705,7 @@ function UsersAdmin({ user }) {
               <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1.6fr 1.2fr 1fr 0.8fr 0.7fr 1fr", gap: 8,
                 alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                  <Av name={u.full_name || u.email} size={30} dark />
+                  <Av name={u.full_name || u.email} src={u.avatar_url || undefined} size={30} dark round />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.full_name || "—"}</div>
                     <div style={{ fontSize: 10.5, color: T.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.email}</div>
