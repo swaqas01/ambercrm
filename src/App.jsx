@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Component } from "react";
-import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall, resolveRole } from "./supabase.js";
+import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall, resolveRole, MASTER_ADMIN_EMAIL } from "./supabase.js";
 import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, isPureGreeting, categorize, logAi, fetchKnowledge, pickKnowledge } from "./mentors.js";
 import {
   BookOpen, Pencil, Trash2, Save, Check,
@@ -6390,6 +6390,7 @@ function UsersAdmin({ user }) {
   const [err, setErr] = useState("");
   const [q, setQ] = useState(""); const [roleFilter, setRoleFilter] = useState("all");
   const [showAdd, setShowAdd] = useState(false);
+  const [showBulk, setShowBulk] = useState(false);
   const [edit, setEdit] = useState(null);
 
   const load = async () => {
@@ -6421,6 +6422,7 @@ function UsersAdmin({ user }) {
       </div>
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={load} style={{ ...miniBtn() }}><RefreshCw size={13} /> Refresh</button>
+        <button onClick={() => setShowBulk(true)} style={{ ...miniBtn() }}><Users size={13} /> Bulk import</button>
         <button onClick={() => setShowAdd(true)} style={{ background: T.btnBg, color: T.btnFg, border: "none",
           borderRadius: 9, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
           display: "inline-flex", alignItems: "center", gap: 6 }}><UserPlus size={14} /> Add new user</button>
@@ -6475,8 +6477,147 @@ function UsersAdmin({ user }) {
     </div>
 
     {showAdd && <AddUserModal onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />}
+    {showBulk && <BulkImportUsers onClose={() => setShowBulk(false)} onDone={() => { setShowBulk(false); load(); }} />}
     {edit && <ManageUserModal u={edit} users={users} onClose={() => setEdit(null)} onChanged={() => { setEdit(null); load(); }} />}
   </div>;
+}
+
+function BulkImportUsers({ onClose, onDone }) {
+  const DEFAULT = `ADNAN AHMED KHAN, adnan@amberhomes.ae, Agent
+ALAN KURBANOV, ak@amberhomes.ae, Agent
+ALI MOHSIN, ali@amberhomes.ae, Agent
+ANKIT AGGARWAL, ankit@amberhomes.ae, Agent
+ARSALAN RAUF, arsalan@amberhomes.ae, Agent
+ASMA MOHAMMAD, asma@amberhomes.ae, Agent
+Admin, admin@amberhomes.ae, Manager
+BAPTISTE PARNEIX, baptiste@amberhomes.ae, Agent
+BINOIA DZHURABAEVA, binoia@amberhomes.ae, Agent
+DERYA ALTUN, derya@amberhomes.ae, Agent
+FAZAL KHAN, fazal@amberhomes.ae, Agent
+HASSAN MUGHAL, hmughal@amberhomes.ae, Agent
+IBRAHIM QURESHI, ibrahimqureshi@amberhomes.ae, Manager
+IRENE PRAVEEN, irene@amberhomes.ae, Agent
+JAYESH NARYANI, jayesh@amberhomes.ae, Agent
+KHOZHIAKBAR SADYKOV, khozhiakbar@amberhomes.ae, Agent
+MADEL DICHOSO, madz@amberhomes.ae, Agent
+MOHSIN FIROZ PATEL, mohsin@amberhomes.ae, Agent
+MUAAZ MEHMOOD, muaaz@amberhomes.ae, Agent
+MUEEZ MEHMOOD, mueez@amberhomes.ae, Agent
+MUHAMMAD IBRAHIM, ibrahim@amberhomes.ae, Agent
+MUHAMMAD ZOHAIB KHAN, mkhan@amberhomes.ae, Agent
+RAMEESA NADEEM, rameesa@amberhomes.ae, Agent
+ROHAIL QAISAR ABBAS, rohail@amberhomes.ae, Agent
+SAIMIN ALTAF ZUBER, saimin@amberhomes.ae, Agent
+SANA KHAN, sana@amberhomes.ae, Agent
+SHIFA SHAMSHUDDIN, shifa@amberhomes.ae, Agent
+SHILEN AJESH MEHTA, shil@amberhomes.ae, Agent
+SYED QALB E ABBAS SHAH, abbas@amberhomes.ae, Agent
+YASHVEER OMPRAKASH SWAMI, yashveer@amberhomes.ae, Agent
+ZONISH BAIG, zonish@amberhomes.ae, Agent`;
+  const [text, setText] = useState(DEFAULT);
+  const [phase, setPhase] = useState("edit");
+  const [results, setResults] = useState([]);
+  const [progress, setProgress] = useState("");
+
+  const normRole = (r) => { const s = (r || "").trim().toLowerCase();
+    if (s.includes("manager")) return "sales_manager"; if (s === "admin") return "admin";
+    if (s.includes("market")) return "marketing"; if (s.includes("account")) return "accounts"; return "agent"; };
+  const parse = (txt) => txt.split("\n").map((line) => {
+    const parts = line.split(",").map((x) => x.trim()).filter(Boolean);
+    if (parts.length < 2) return null;
+    const emailIdx = parts.findIndex((p) => p.includes("@"));
+    const email = (emailIdx >= 0 ? parts[emailIdx] : parts[1] || "").toLowerCase();
+    const role = normRole(parts[parts.length - 1]);
+    const name = (emailIdx > 0 ? parts.slice(0, emailIdx).join(" ") : parts[0]).trim();
+    return { name, email, role };
+  }).filter(Boolean);
+  const genPw = () => "Amber" + Math.random().toString(36).slice(2, 8) + Math.floor(10 + Math.random() * 89) + "!";
+  const roleName = (r) => ({ sales_manager: "Manager", admin: "Admin", agent: "Agent", marketing: "Marketing", accounts: "Accounts" }[r] || r);
+
+  const run = async () => {
+    setPhase("running"); setResults([]);
+    const parsed = parse(text);
+    const seen = new Set(); const out = []; const targets = [];
+    for (const t of parsed) {
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t.email)) { out.push({ ...t, action: "invalid email — skipped" }); continue; }
+      if (t.email === MASTER_ADMIN_EMAIL) { out.push({ ...t, action: "skipped — Master Admin protected" }); continue; }
+      if (seen.has(t.email)) { out.push({ ...t, action: "duplicate in list — skipped" }); continue; }
+      seen.add(t.email); targets.push(t);
+    }
+    setResults([...out]);
+    const lu = await adminCall("list_users", {});
+    if (lu.error) { setResults([...out, { name: "", email: "", role: "", action: "ERROR loading users: " + lu.error }]); setPhase("done"); return; }
+    const existing = Object.fromEntries((lu.users || []).map((u) => [(u.email || "").toLowerCase(), u]));
+    let done = 0;
+    for (const t of targets) {
+      setProgress("Processing " + (done + 1) + " of " + targets.length + "…");
+      const ex = existing[t.email];
+      if (ex) {
+        if (ex.role === "master_admin") { out.push({ ...t, action: "skipped — Master Admin protected" }); setResults([...out]); done++; continue; }
+        const changes = [];
+        if (t.role && ex.role !== t.role) {
+          const r = await adminCall("set_role", { id: ex.id, role: t.role, oldRole: ex.role });
+          if (r.error) { out.push({ ...t, action: "error: " + r.error }); setResults([...out]); done++; continue; }
+          changes.push("role " + (ex.role || "?") + " → " + roleName(t.role));
+        }
+        const fields = { twofa_required: true };
+        if (t.name && ex.full_name !== t.name) { fields.full_name = t.name; changes.push("name updated"); }
+        if (ex.active === false) { fields.active = true; changes.push("reactivated"); }
+        const r2 = await adminCall("update_user", { id: ex.id, fields });
+        if (r2.error) { out.push({ ...t, action: "error: " + r2.error }); setResults([...out]); done++; continue; }
+        changes.push("2FA ensured");
+        out.push({ ...t, action: "updated (" + changes.join(", ") + ")" });
+      } else {
+        const pw = genPw();
+        const r = await adminCall("create_user", { email: t.email, password: pw, full_name: t.name, role: t.role, twofa: true, status: "active" });
+        if (r.error) out.push({ ...t, action: "error: " + r.error });
+        else out.push({ ...t, action: "created", password: pw });
+      }
+      setResults([...out]); done++;
+    }
+    setProgress(""); setPhase("done");
+  };
+
+  const created = results.filter((r) => r.action === "created");
+  const cnt = (f) => results.filter(f).length;
+  const copyAll = () => { const txt = created.map((r) => r.email + "  " + r.password).join("\n");
+    if (navigator.clipboard) navigator.clipboard.writeText("Amber Homes CRM logins (temporary passwords — change on first login):\n\n" + txt); };
+  const tone = (a) => a === "created" ? T.ok : a.startsWith("updated") ? T.gold : (a.startsWith("error") || a.startsWith("ERROR")) ? T.bad : T.muted;
+
+  return <Modal title="Bulk import users" onClose={onClose}>
+    {phase === "edit" && <>
+      <div style={{ fontSize: 12.5, color: T.inkSoft, lineHeight: 1.55, marginBottom: 10 }}>
+        One user per line as <b>Name, email, Role</b> (Role = Agent or Manager). Emails are lowercased automatically.
+        Existing users are updated, never duplicated; <b>saad@amberhomes.ae</b> is always protected. New users get a
+        secure temporary password and must change it at first login, with 2FA required.</div>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
+        style={{ width: "100%", height: 200, border: `1px solid ${T.hair}`, borderRadius: 10, padding: 12, fontSize: 12,
+          fontFamily: "monospace", color: T.ink, background: T.bone, boxSizing: "border-box", resize: "vertical" }} />
+      <div style={{ fontSize: 11, color: T.faint, marginTop: 6 }}>“Manager” maps to Sales Manager (team reporting and dashboards; not Master Admin, no user management).</div>
+      <button onClick={run} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 10,
+        padding: 12, fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, marginTop: 12 }}>
+        Create / update {parse(text).length} users</button>
+    </>}
+
+    {phase !== "edit" && <>
+      {phase === "running" && <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 10, fontWeight: 600 }}>{progress || "Working…"}</div>}
+      {phase === "done" && <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 10, lineHeight: 1.5 }}>
+        <b>{created.length}</b> created · <b>{cnt((r) => r.action.startsWith("updated"))}</b> updated ·
+        <b> {cnt((r) => r.action.includes("skipped"))}</b> skipped ·
+        <b> {cnt((r) => r.action.startsWith("error") || r.action.startsWith("ERROR"))}</b> errors.
+        {created.length > 0 && <span> Temporary passwords are shown once below — copy them now.</span>}</div>}
+      <div style={{ ...card, padding: 0, maxHeight: 320, overflowY: "auto" }}>
+        {results.map((r, i) => <div key={i} style={{ padding: "8px 12px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12 }}>
+          <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.email || r.name || "—"}</div>
+          <div style={{ fontSize: 11, color: tone(r.action), fontWeight: 600 }}>{r.action}{r.password ? "  ·  " + r.password : ""}</div>
+        </div>)}
+      </div>
+      {phase === "done" && created.length > 0 && <button onClick={copyAll}
+        style={{ ...miniBtn(), width: "100%", justifyContent: "center", marginTop: 10 }}>Copy all new credentials</button>}
+      {phase === "done" && <button onClick={onDone} style={{ width: "100%", background: T.btnBg, color: T.btnFg, border: "none",
+        borderRadius: 10, padding: 12, fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, marginTop: 8 }}>Done</button>}
+    </>}
+  </Modal>;
 }
 
 function AddUserModal({ onClose, onSaved }) {
