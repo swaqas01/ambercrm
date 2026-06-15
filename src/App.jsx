@@ -601,8 +601,9 @@ export default function App() {
   }, []);
   const [filter, setFilter] = useState(null);
   const [detailId, setDetailId] = useState(null);
+  const [leadFrom, setLeadFrom] = useState(null);  // screen a lead was opened from (drives the Back button)
   const go = (s, f = null) => { setScreen(s); setFilter(f); setNavOpen(false); };
-  const openLead = (id) => { setDetailId(id); setScreen("lead"); setFilter(null); setNavOpen(false); };
+  const openLead = (id) => { setLeadFrom((prev) => (screen === "lead" ? prev : screen)); setDetailId(id); setScreen("lead"); setFilter(null); setNavOpen(false); };
   const [dealDetailId, setDealDetailId] = useState(null);
   const openDeal = (id) => { setDealDetailId(id); setScreen("dealdetail"); setNavOpen(false); };
   // role guard — agents may only open their own surfaces
@@ -617,7 +618,7 @@ export default function App() {
     if (user && screen !== "lead" && screen !== "dealdetail") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <Performance go={go} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -1559,7 +1560,14 @@ function FocusList({ title, items, go, onClose }) {
 }
 
 /* ============================= 3 LEAD DETAIL ============================= */
-function LeadDetail({ leadId, user, go, openLead }) {
+function LeadDetail({ leadId, user, go, openLead, from }) {
+  // Context-aware Back target/label based on where the lead was opened from.
+  const backTo = from === "open" ? { screen: "open", label: "Back to Open Leads" }
+    : from === "assign" ? { screen: "assign", label: "Back to Lead Assignment" }
+    : from === "live" ? { screen: "live", label: user && user.role === "agent" ? "Back to My Leads" : "Back to Leads" }
+    : from === "agent" ? { screen: "agent", label: "Back to Dashboard" }
+    : (from && from !== "lead") ? { screen: from, label: "Back" }
+    : { screen: user && user.role === "agent" ? "agent" : "live", label: user && user.role === "agent" ? "Back to My Leads" : "Back to Leads" };
   const [lead, setLead] = useState(null);
   const [showDeal, setShowDeal] = useState(false);
   const [comments, setComments] = useState([]);
@@ -1894,7 +1902,7 @@ function LeadDetail({ leadId, user, go, openLead }) {
     <Ic size={17} /> {label}</button>;
 
   return <div>
-    <button onClick={() => go("live")} style={{ ...miniBtn(), marginBottom: 12 }}>← Back to {user && user.role === "agent" ? "My Leads" : "Leads"}</button>
+    <button onClick={() => go(backTo.screen)} style={{ ...miniBtn(), marginBottom: 12 }}>← {backTo.label}</button>
 
     {/* header */}
     <div style={{ ...card, padding: "18px 20px", background: T.hero, border: "none", boxShadow: T.shadowLg }}>
@@ -4521,14 +4529,14 @@ async function runLeadQuery(intent, user) {
       scored.forEach((s) => { const a = s.l.assigned_agent_name || (s.l.is_open ? "Open pool" : "Unassigned"); (byAg[a] = byAg[a] || { n: 0, hot: 0, overdue: 0 }); byAg[a].n++; if (hotRank(s.l) <= 1) byAg[a].hot++; if (d10(s.l.next_followup) && d10(s.l.next_followup) < today && s.l.status !== "Closed Won" && s.l.status !== "Closed Lost") byAg[a].overdue++; });
       const top = Object.entries(byAg).sort((a, b) => b[1].n - a[1].n);
       heading = top.length
-        ? `${launch.name} (${launch.developer}, ${launch.area}) — ${scored.length} matching lead${scored.length > 1 ? "s" : ""} across ${top.length} agent${top.length > 1 ? "s" : ""}:\n` + top.map(([a, s]) => `• ${a} — ${s.n} lead${s.n > 1 ? "s" : ""} (${s.hot} hot · ${s.overdue} overdue)`).join("\n") + `\n\nPitch: ${launch.pitch}\n(Founder's Knowledge — verify launch details before sharing.)`
+        ? `${launch.name} (${launch.developer}, ${launch.area}) — ${scored.length} matching lead${scored.length > 1 ? "s" : ""} across ${top.length} agent${top.length > 1 ? "s" : ""}:\n` + top.map(([a, s]) => `• ${a} — ${s.n} lead${s.n > 1 ? "s" : ""} (${s.hot} hot · ${s.overdue} overdue)`).join("\n") + `\n\nPitch: ${launch.pitch}\nVerify the latest launch details with the developer before sharing.`
         : `No leads match ${launch.name} yet.`;
       picked = scored.slice(0, 8).map((s) => s.l); setInfo(scored.slice(0, 8));
     } else {
       picked = scored.map((s) => s.l); setInfo(scored);
       heading = scored.length
-        ? `${launch.name} — ${launch.developer} · ${launch.area} · ${launch.status}.\nBest buyer: ${launch.buyer}.\n${scored.length} of ${isAgent ? "your" : "the"} leads look like a fit — pitch angle: ${launch.pitch}\n(Founder's Knowledge — internal view; verify launch details before sharing with clients.)`
-        : `${launch.name} — ${launch.developer} · ${launch.area}. No clearly-matching ${isAgent ? "leads of yours" : "leads"} yet. Best buyer: ${launch.buyer}. (Founder's Knowledge — verify launch details before sharing.)`;
+        ? `${launch.name} — ${launch.developer} · ${launch.area} · ${launch.status}.\nBest buyer: ${launch.buyer}.\n${scored.length} of ${isAgent ? "your" : "the"} leads look like a fit — pitch angle: ${launch.pitch}\nVerify the latest details with the developer before sharing with clients.`
+        : `${launch.name} — ${launch.developer} · ${launch.area}. No clearly-matching ${isAgent ? "leads of yours" : "leads"} yet. Best buyer: ${launch.buyer}. Verify the latest launch details with the developer before sharing.`;
     }
   } else if (intent.kind === "matchLaunches") {
     const perLaunch = {}; LAUNCHES.forEach((x) => { perLaunch[x.key] = []; });
@@ -4542,7 +4550,7 @@ async function runLeadQuery(intent, user) {
     all.sort((a, b) => b.score - a.score || hotRank(a.l) - hotRank(b.l));
     picked = all.slice(0, 8).map((s) => s.l);
     heading = all.length
-      ? `${isAgent ? "Your" : "Company"} leads matched to current launches (Founder's Knowledge):\n` + lines.join("\n") + `\n\nShowing the strongest ${Math.min(8, picked.length)} below. Ask "who should I pitch <project> to" for a full per-launch list. Verify launch details before sharing.`
+      ? `${isAgent ? "Your" : "Company"} leads matched to current launches:\n` + lines.join("\n") + `\n\nShowing the strongest ${Math.min(8, picked.length)} below. Ask "who should I pitch <project> to" for a full per-launch list. Verify launch details before sharing.`
       : `I couldn't match ${isAgent ? "your" : "the"} leads to the current launches yet. Add area/project interest to leads, or ask about a specific launch.`;
   } else if (intent.kind === "latest") {
     picked = [...rows].sort(byNew).slice(0, 1);
@@ -4632,7 +4640,7 @@ async function runLeadQuery(intent, user) {
   const leads = picked.slice(0, 8).map((l) => {
     const mi = matchInfo[l.id];
     return {
-      id: l.id, name: l.client_name || "Lead", code: l.lead_code || l.lead_no || "", project: l.project || l.area || "—",
+      id: l.id, name: l.client_name || "Lead", code: l.lead_code || l.lead_no || "", project: l.project || l.area || "—", area: l.area || "",
       status: l.is_open ? "Open" : (l.status || "—"), temp: l.temperature || "—", budget: l.budget || "",
       due: fmtDue(l.next_followup), phone: l.phone || "", lead_type: l.lead_type || "Buyer",
       reason: mi ? mi.reason : reasonFor(l), match: mi ? mi.match : null, pitch: mi ? mi.pitch : null,
@@ -4687,6 +4695,7 @@ function AskAmber({ narrow, user, openLead }) {
   const [busy, setBusy] = useState(false);
   const [ctx, setCtx] = useState(null);
   const [kb, setKb] = useState([]);                // Amber Homes knowledge (loaded once per session)
+  const [revealedAi, setRevealedAi] = useState({}); // { [leadId]: true } — gate WhatsApp/Call behind Reveal in chat cards
   const boxRef = useRef(null);
   useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight; }, [msgs, busy]);
 
@@ -4710,11 +4719,24 @@ function AskAmber({ narrow, user, openLead }) {
   }, [mentor]);
 
   const logLeadAction = (action, ld) => { try { logAi({ user, mentor, question: "[lead action: " + action + "] " + (ld.name || ld.id), responseSum: "lead_action:" + action, category: "crm", status: "success" }); } catch (e) {} };
-  const draftFor = (ld) => {
-    const q = `Draft a short, warm WhatsApp follow-up message for my lead ${ld.name}${ld.project && ld.project !== "—" ? " (interested in " + ld.project + ")" : ""}. One short paragraph, professional, ready to copy.`;
-    send(q);
+  // Reveal a chat-card contact: log server-side (reveal_contact RPC, same as Lead Detail) then unlock WhatsApp/Call.
+  const revealAi = async (ld) => {
+    setRevealedAi((r) => ({ ...r, [ld.id]: true }));
+    try { await supabase.rpc("reveal_contact", { p_lead_id: ld.id }); } catch (e) {}
+    logLeadAction("contact_reveal", ld);
   };
-  const send = async (q) => {
+  const draftFor = (ld) => {
+    const bits = [];
+    if (ld.project && ld.project !== "—") bits.push("interested in " + ld.project);
+    if (ld.area && ld.area !== ld.project && ld.area !== "—") bits.push("area " + ld.area);
+    if (ld.budget) bits.push("budget " + ld.budget);
+    if (ld.temp && ld.temp !== "—") bits.push(String(ld.temp).toLowerCase() + " lead");
+    const ctxLine = bits.length ? " (" + bits.join(", ") + ")" : "";
+    const q = `Write a short, client-safe WhatsApp follow-up to my client ${ld.name || "the client"}${ctxLine}. One warm, professional paragraph, ready to copy. No guarantees of price, ROI, premium or appreciation. If a current focus launch fits their interest, lead with it and add "subject to developer confirmation". Output only the message.`;
+    logLeadAction("draft_message", ld);
+    send(q, true);   // forceModel: draft directly, never re-run lead matching
+  };
+  const send = async (q, forceModel) => {
     const text = (q != null ? q : input).trim();
     if (!text || busy || !mentor) return;
     setInput("");
@@ -4738,7 +4760,7 @@ function AskAmber({ narrow, user, openLead }) {
       return;
     }
     // CRM lead-list question → answer with actionable lead cards (RLS limits to permitted leads).
-    const li = leadIntent(text, user && user.role);
+    const li = forceModel ? null : leadIntent(text, user && user.role);
     if (li) { const lt = parseLeadType(text); if (lt) li.leadType = lt; }
     if (li) {
       setMsgs((m) => [...m, { role: "user", text }]); setBusy(true);
@@ -4865,13 +4887,15 @@ function AskAmber({ narrow, user, openLead }) {
                           <div style={{ fontSize: 10.5, fontWeight: 700, color: tcol, whiteSpace: "nowrap" }}>{ld.temp}</div>
                         </div>
                         <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{ld.project} · {ld.status}{ld.budget ? " · " + ld.budget : ""} · {ld.due}</div>
+                        {ld.area && ld.area !== "—" && ld.area !== ld.project && <div style={{ fontSize: 10.5, color: T.faint, marginTop: 2, display: "inline-flex", alignItems: "center", gap: 4 }}><MapPin size={10} /> {ld.area}</div>}
                         {ld.match && <div style={{ fontSize: 10.5, fontWeight: 700, color: T.gold, marginTop: 4, display: "inline-flex", alignItems: "center", gap: 4 }}><Sparkle size={11} /> Pitch: {ld.match}</div>}
                         <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3, lineHeight: 1.4 }}>{ld.reason}</div>
                         {ld.pitch && <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 3, lineHeight: 1.4, background: T.bone, borderRadius: 8, padding: "5px 8px" }}>{ld.pitch}</div>}
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
                           <button onClick={() => { logLeadAction("open", ld); if (openLead) { openLead(ld.id); setOpen(false); } }} style={cardBtn}>Open Lead</button>
-                          {ph && <button onClick={() => { logLeadAction("whatsapp", ld); window.open(waHref(ld.phone), "_blank"); }} style={{ ...cardBtn, borderColor: WA, color: WA }}><MessageCircle size={11} /> WhatsApp</button>}
-                          {ph && <button onClick={() => { logLeadAction("call", ld); window.location.href = telHref(ld.phone); }} style={cardBtn}><Phone size={11} /> Call</button>}
+                          {ph && !revealedAi[ld.id] && <button onClick={() => revealAi(ld)} title="Reveal contact" style={{ ...cardBtn, borderRadius: 999, borderColor: T.gold, color: T.gold }}><Eye size={11} /> Reveal</button>}
+                          {ph && revealedAi[ld.id] && <button onClick={() => { logLeadAction("whatsapp", ld); window.open(waHref(ld.phone), "_blank"); }} style={{ ...cardBtn, borderColor: WA, color: WA }}><MessageCircle size={11} /> WhatsApp</button>}
+                          {ph && revealedAi[ld.id] && <button onClick={() => { logLeadAction("call", ld); window.location.href = telHref(ld.phone); }} style={cardBtn}><Phone size={11} /> Call</button>}
                           <button onClick={() => draftFor(ld)} style={cardBtn}><Sparkle size={11} /> Draft message</button>
                         </div>
                       </div>
@@ -5195,6 +5219,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const digits = (p) => String(p || "").replace(/\D/g, "");
   const reveal = async (l) => {
     setRevealed((r) => ({ ...r, [l.id]: true }));
+    try { await supabase.rpc("reveal_contact", { p_lead_id: l.id }); } catch (e) {}
     if (me) logAction("view_number", l, me.id);
   };
 
@@ -5392,34 +5417,39 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     ) : (
       <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
         <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: isAgent ? 820 : 2040 }}>
-            <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr" : "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
+          <div style={{ minWidth: isAgent ? 900 : 2040 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr" : "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
               padding: "10px 16px", fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
               color: T.muted, borderBottom: `1px solid ${T.hair}`, background: T.bone }}>
-              {isAgent ? <><span>Client</span><span>Project</span><span>Budget</span><span>Next follow-up</span><span>Status</span><span>Contact</span></>
+              {isAgent ? <><span>Client</span><span>Project</span><span>Location</span><span>Budget</span><span>Next follow-up</span><span>Status</span><span>Contact</span></>
                        : <><span style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 3, background: T.bone, margin: "-10px 0", padding: "10px 0" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Client</span><span>Phone</span><span>Email</span><span>Agent</span><span>Type</span><span>Project</span><span>Area</span><span>Source</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
             </div>
             {filtered.map((l, i) => (isAgent ? (
-              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.3fr 1fr 1.2fr 0.9fr 1fr",
+              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5, cursor: "pointer" }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{l.client_name}
                     {(l.temperature === "Hot" || l.temperature === "Very Hot") && <span style={{ width: 7, height: 7, borderRadius: 7, background: T.bad }} />}</div>
-                  <div style={{ fontSize: 10.5, color: T.faint, display: "flex", alignItems: "center", gap: 5 }}><span style={{ fontWeight: 700, color: (l.lead_type || "Buyer") === "Buyer" ? T.info : T.muted }}>{l.lead_type || "Buyer"}</span> · {l.area || "—"}</div>
+                  <div style={{ fontSize: 10.5, color: T.faint, display: "flex", alignItems: "center", gap: 5 }}><span style={{ fontWeight: 700, color: (l.lead_type || "Buyer") === "Buyer" ? T.info : T.muted }}>{l.lead_type || "Buyer"}</span></div>
                 </div>
                 <span style={{ color: T.inkSoft }}>{l.project || "—"}</span>
+                <span style={{ color: T.inkSoft }}>{l.area || "—"}</span>
                 <span style={{ color: T.inkSoft }}>{l.budget || "—"}</span>
                 <span style={{ color: l.next_followup && l.next_followup < today ? T.bad : T.inkSoft, fontSize: 12 }}>
                   {l.next_followup || "—"}</span>
                 <Chip tone={l.is_open ? "gold" : l.temperature === "Hot" || l.temperature === "Very Hot" ? "bad" : "info"}>{l.is_open ? "Open" : l.status}</Chip>
-                <span style={{ display: "flex", gap: 6 }}>
+                <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   {l.is_open ? (
                     <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 9px", display: "inline-flex", alignItems: "center", gap: 4 }}><Lock size={11} /> Reveal inside</span>
+                  ) : !revealed[l.id] ? (
+                    l.phone ? <button onClick={(e) => { e.stopPropagation(); reveal(l); }} title="Reveal contact"
+                      style={{ borderRadius: 999, background: T.goldSoft, border: `1px solid ${T.gold}`, color: T.gold, padding: "5px 11px", fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <Eye size={12} /> Reveal</button> : <span style={{ color: T.faint }}>—</span>
                   ) : <>
                   {l.phone && <a href={waHref(l.phone)} target="_blank" rel="noreferrer" title="WhatsApp"
                     onClick={(e) => { e.stopPropagation(); logAction("whatsapp", l, me && me.id); }}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
-                    <MessageCircle size={14} color={T.ok} /></a>}
+                    <MessageCircle size={14} color={WA} /></a>}
                   {l.phone && <a href={telHref(l.phone)} title="Call"
                     onClick={(e) => { e.stopPropagation(); logAction("call", l, me && me.id); }}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
