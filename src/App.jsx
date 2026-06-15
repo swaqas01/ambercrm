@@ -608,6 +608,7 @@ export default function App() {
   // role guard — agents may only open their own surfaces
   useEffect(() => {
     if (user && !canOpen(user.role, screen)) {
+      try { console.warn("[access-denied] blocked screen access", { email: user.email, role: user.role, screen, at: new Date().toISOString() }); } catch (e) {}
       setScreen(roleInfo(user.role).home === "agent" ? "agent" : "admin");
     }
   }, [user, screen]);
@@ -4468,6 +4469,12 @@ async function runLeadQuery(intent, user) {
   if (intent.adminOnly && isAgent) {
     return { heading: "That's an admin report — I can only pull your own leads. Try \"show me my hot leads\", \"my latest lead\", or \"my overdue follow-ups\".", leads: [] };
   }
+  // Lead data through Ask Amber is limited to the reporting roles. Operational Admin (and marketing/
+  // accounts) must not use the assistant as a backdoor to read leads — they get a clear redirect.
+  const canBroadLeads = role === "master_admin" || role === "sales_manager";
+  if (!isAgent && !canBroadLeads) {
+    return { heading: "Lead reports aren't available for your role here. I can still help with deals, projects, hot resale listings, and lead assignment.", leads: [] };
+  }
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
   const weekAgo = new Date(Date.now() - 7 * 864e5).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
   const { data: { user: au } } = await supabase.auth.getUser();
@@ -5117,6 +5124,8 @@ function LoginFlow({ onLogin }) {
 
 function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, heading = null, sub = null }) {
   const isAgent = user && user.role === "agent";
+  const isMaster = user && user.role === "master_admin";
+  const isOpsAdmin = user && user.role === "admin";   // operational Admin: may only see unassigned/open leads (for assignment)
   const [leads, setLeads] = useState(null);   // null = loading
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
@@ -5216,10 +5225,13 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   };
   const matchTab = (l) => tabDef(tab, l);
   const matchType = (l) => !typeFilter || (l.lead_type || "Buyer") === typeFilter;
-  const baseLeads = (leads || []).filter(matchFilter).filter(matchAgentFilter).filter(matchType);
+  // Operational Admin is hard-limited to unassigned + open-pool leads, regardless of the agent filter —
+  // they create and assign leads but must never browse another agent's assigned leads (security boundary).
+  const opsAdminScope = (l) => !isOpsAdmin || l.is_open === true || !l.assigned_agent;
+  const baseLeads = (leads || []).filter(matchFilter).filter(matchAgentFilter).filter(matchType).filter(opsAdminScope);
   const tabCount = (t) => baseLeads.filter((l) => tabDef(t, l)).length;
   const TAB_TONE = { Hot: T.bad, "Very Hot": T.bad, Warm: T.warn, Cold: T.muted, "Closed Won": T.ok, "Closed Lost": T.bad, Overdue: T.bad, "Follow-up due": T.gold, New: T.gold };
-  const filteredRaw = (leads || []).filter(matchFilter).filter(matchTab).filter(matchAgentFilter).filter(matchType).filter((l) => {
+  const filteredRaw = (leads || []).filter(matchFilter).filter(matchTab).filter(matchAgentFilter).filter(matchType).filter(opsAdminScope).filter((l) => {
     if (!q.trim()) return true;
     const s = q.toLowerCase();
     return [l.client_name, l.project, l.area, l.assigned_agent_name, l.lead_code, l.status].some((v) => (v || "").toLowerCase().includes(s));
@@ -5286,7 +5298,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       </div>
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={load} style={{ ...miniBtn() }}><RefreshCw size={13} /> Refresh</button>
-        {!isAgent && <button onClick={() => setShowImport(true)} style={{ ...miniBtn() }}><Upload size={13} /> Import file</button>}
+        {isMaster && <button onClick={() => setShowImport(true)} style={{ ...miniBtn() }}><Upload size={13} /> Import file</button>}
         <button onClick={() => setShowAdd(true)} style={{ background: T.btnBg, color: T.btnFg, border: "none",
           borderRadius: 9, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
           display: "inline-flex", alignItems: "center", gap: 6 }}><Plus size={14} /> Add lead</button>

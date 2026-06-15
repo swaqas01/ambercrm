@@ -28,8 +28,8 @@ export function resolveRole(email, dbRole) {
 // Which sidebar screens each role may open. 'users' is Master-Admin only.
 const SCREEN_ACCESS = {
   master_admin: "ALL",
-  admin:        ["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","security","matching","score","careers","commission","settings","deals","dealdetail"],
-  sales_manager:["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","matching","score","settings","deals","dealdetail"],
+  admin:        ["projects","hotdeals","admin","lead","assign","performance","deals","dealdetail"],
+  sales_manager:["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","matching","score","deals","dealdetail"],
   agent:        ["projects","hotdeals","agent","live","open","lead","deals","dealdetail"],
   marketing:    ["projects","admin","live","open","lead","settings"],
   accounts:     ["projects","admin","commission","lead","settings"],
