@@ -9,7 +9,7 @@ import {
   Flame, Clock, MapPin, Eye, EyeOff, Lock, AlertTriangle, CheckCircle2,
   TrendingUp, Users, Wallet, Star, Calendar, Filter, Plus, ArrowUpRight,
   ArrowDownRight, CircleDot, Ban, Download, Globe, Smartphone, Sun, Moon, Unlock, Send, Bot, Fingerprint, KeyRound, LogOut,
-  Database, RefreshCw, Upload, Sparkle, Zap, ShieldCheck, Camera, Target, PhoneCall
+  Database, RefreshCw, Upload, Sparkle, Zap, ShieldCheck, Camera, Target, PhoneCall, BedDouble, Home, Share2
 } from "lucide-react";
 
 /* ================================ TOKENS ================================= */
@@ -720,6 +720,67 @@ export default function App() {
 
 /* ============================== PRIMITIVES =============================== */
 const card = { background: T.paper, border: `1px solid ${T.hairSoft}`, borderRadius: 12, boxShadow: T.shadow, transition: "background .25s ease, border-color .25s ease, box-shadow .25s ease" };
+
+// ---- Premium showcase card + timeframe filtering (reusable for Projects + Hot Resale) ----
+function hotImageFrom(photos) {
+  try {
+    if (Array.isArray(photos) && photos.length) {
+      const p = photos[0];
+      if (typeof p === "string") return p;
+      if (p && typeof p === "object") return p.url || p.src || p.href || null;
+    }
+  } catch (e) {}
+  return null;
+}
+function isRecent(ts, days) { try { return !!ts && (Date.now() - new Date(ts).getTime()) <= days * 864e5; } catch (e) { return false; } }
+function withinFrame(ts, frame) {
+  if (frame === "all" || !ts) return true;
+  try { return (Date.now() - new Date(ts).getTime()) <= (frame === "week" ? 7 : 31) * 864e5; } catch (e) { return true; }
+}
+function sortFeaturedNewest(arr) {
+  return [...(arr || [])].sort((a, b) => {
+    const f = (x) => (x && x.featured ? 1 : 0);
+    if (f(b) !== f(a)) return f(b) - f(a);
+    const t = (x) => new Date((x && (x.created_at || x.created_on)) || 0).getTime();
+    return t(b) - t(a);
+  });
+}
+function FrameTabs({ value, onChange }) {
+  const opts = [["week", "This Week"], ["month", "This Month"], ["all", "All"]];
+  return (
+    <div style={{ display: "inline-flex", background: T.bone, border: `1px solid ${T.hair}`, borderRadius: 999, padding: 3, gap: 2 }}>
+      {opts.map(([k, l]) => (
+        <button key={k} onClick={() => onChange(k)} style={{ border: "none", cursor: "pointer", fontFamily: UI, fontSize: 12, fontWeight: 700,
+          padding: "6px 13px", borderRadius: 999, background: value === k ? T.btnBg : "transparent", color: value === k ? T.btnFg : T.muted, transition: "background .15s ease" }}>{l}</button>
+      ))}
+    </div>
+  );
+}
+function HotCard({ img, badge, name, desc, price, paymentPlan, beds, ptype, location, footNote, children, dim }) {
+  return (
+    <div style={{ ...card, padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", opacity: dim ? 0.6 : 1 }}>
+      <div style={{ position: "relative", height: 168, flexShrink: 0,
+        background: img ? `#0b0716 url("${String(img).replace(/"/g, "%22")}") center/cover no-repeat` : `linear-gradient(135deg, ${T.side} 0%, #15102c 60%, #221634 100%)` }}>
+        {!img && <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}><Building2 size={40} color="rgba(255,255,255,.16)" /></div>}
+        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(0,0,0,.30) 0%, rgba(0,0,0,0) 34%, rgba(0,0,0,0) 62%, rgba(0,0,0,.22) 100%)" }} />
+        {badge && <span style={{ position: "absolute", top: 12, left: 12, background: "rgba(12,9,22,.66)", color: "#fff", fontSize: 11, fontWeight: 700, letterSpacing: ".01em", padding: "5px 11px", borderRadius: 999, border: "1px solid rgba(255,255,255,.16)" }}>{badge}</span>}
+      </div>
+      <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 7, flex: 1 }}>
+        <div style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 800, color: T.ink, lineHeight: 1.15 }}>{name || "—"}</div>
+        {desc && <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{desc}</div>}
+        {price && <div style={{ fontFamily: DISPLAY, fontSize: 22, fontWeight: 800, color: T.ink, marginTop: 2 }}>{price}</div>}
+        {paymentPlan && <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: T.muted }}><Calendar size={13} color={T.faint} /> <span>Payment Plan: <span style={{ color: T.inkSoft, fontWeight: 600 }}>{paymentPlan}</span></span></div>}
+        {(beds || ptype) && <div style={{ display: "flex", alignItems: "center", gap: 18, fontSize: 13, color: T.inkSoft, marginTop: 1 }}>
+          {beds && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><BedDouble size={15} color={T.faint} /> {beds}</span>}
+          {ptype && <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Home size={15} color={T.faint} /> {ptype}</span>}
+        </div>}
+        {location && <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13.5, color: T.ink, fontWeight: 600, marginTop: 1 }}><MapPin size={15} color={T.gold} /> {location}</div>}
+        {footNote && <div style={{ fontSize: 11, color: T.faint, marginTop: 1 }}>{footNote}</div>}
+        {children && <div style={{ marginTop: "auto", paddingTop: 10 }}>{children}</div>}
+      </div>
+    </div>
+  );
+}
 function SectionTitle({ children, right }) {
   return <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", margin: "26px 0 12px" }}>
     <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
@@ -3372,6 +3433,7 @@ function Projects({ user, go }) {
   const [typeF, setTypeF] = useState("");
   const [editing, setEditing] = useState(null);
   const [expand, setExpand] = useState({});
+  const [frame, setFrame] = useState("all");
 
   const load = async () => {
     setProjects(null);
@@ -3407,6 +3469,7 @@ function Projects({ user, go }) {
   const filtered = all.filter((p) =>
     (!devF || p.developer === devF) && (!areaF || p.area === areaF) && (!typeF || p.property_type === typeF) &&
     (!q || (p.name + " " + (p.developer || "") + " " + (p.area || "") + " " + (p.selling_points || "")).toLowerCase().includes(q.toLowerCase())));
+  const shown = sortFeaturedNewest(filtered.filter((p) => withinFrame(p.created_at, frame)));
 
   return (
     <div>
@@ -3428,51 +3491,48 @@ function Projects({ user, go }) {
         <select value={typeF} onChange={(e) => setTypeF(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 150px" }}><option value="">All types</option>{types.map((t) => <option key={t}>{t}</option>)}</select>
       </div>
 
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, color: T.muted, fontWeight: 600 }}>{shown.length} {shown.length === 1 ? "project" : "projects"}{frame === "week" ? " · this week" : frame === "month" ? " · this month" : ""} · newest first</div>
+        <FrameTabs value={frame} onChange={setFrame} />
+      </div>
+
       {projects === null ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading projects…</div>
-        : filtered.length === 0 ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>No projects {all.length === 0 ? "yet. " + (isAdmin ? "Add one above, after running migration 08 in Supabase." : "have been added yet.") : "match your filters."}</div>
-        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(320px,1fr))", gap: 14 }}>
-          {filtered.map((p) => {
-            const sm = projStatusMeta(p.status);
+        : shown.length === 0 ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>No projects {all.length === 0 ? "yet. " + (isAdmin ? "Add one above, after running migration 08 in Supabase." : "have been added yet.") : filtered.length === 0 ? "match your filters." : (frame === "week" ? "added this week. Switch to This Month or All." : frame === "month" ? "added this month. Switch to All." : "to show.")}</div>
+        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(320px,1fr))", gap: 16 }}>
+          {shown.map((p) => {
             const due = p.review_date && p.review_date <= today;
             const visFiles = (p.files || []).filter((fl) => isAdmin || !fl.internal_only);
             const open = expand[p.id];
+            const badge = p.status === "upcoming" ? "Upcoming" : p.status === "sold_out" ? "Sold out" : isRecent(p.created_at, 7) ? "New" : null;
+            const foot = [p.developer ? "By " + p.developer : null, p.handover_date ? "Handover " + p.handover_date : null].filter(Boolean).join("  ·  ");
             return (
-              <div key={p.id} style={{ ...card, padding: 16, opacity: p.status === "inactive" ? .6 : 1, display: "flex", flexDirection: "column" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                  <div style={{ fontWeight: 800, fontSize: 15.5, color: T.ink, fontFamily: DISPLAY }}>{p.name}</div>
-                  <Chip tone={sm[2]}>{sm[1]}</Chip>
-                </div>
-                <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>{[p.developer, p.area, p.property_type].filter(Boolean).join(" · ") || "—"}</div>
-                <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap", fontSize: 12 }}>
-                  {p.starting_price && <div><div style={{ color: T.faint, fontSize: 10 }}>FROM</div><div style={{ fontWeight: 700 }}>{p.starting_price}</div></div>}
-                  {p.handover_date && <div><div style={{ color: T.faint, fontSize: 10 }}>HANDOVER</div><div style={{ fontWeight: 700 }}>{p.handover_date}</div></div>}
-                  {p.bedroom_options && <div><div style={{ color: T.faint, fontSize: 10 }}>UNITS</div><div style={{ fontWeight: 700 }}>{p.bedroom_options}</div></div>}
-                </div>
-                {p.selling_points && <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 10, lineHeight: 1.5, display: open ? "block" : "-webkit-box", WebkitLineClamp: open ? "none" : 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{p.selling_points}</div>}
-                {open && <div style={{ marginTop: 10, fontSize: 12.5, color: T.inkSoft, lineHeight: 1.55 }}>
-                  {p.payment_plan && <div style={{ marginBottom: 6 }}><b style={{ color: T.ink }}>Payment plan:</b> {p.payment_plan}</div>}
+              <HotCard key={p.id} img={null} badge={badge} name={p.name} desc={p.selling_points}
+                price={p.starting_price} paymentPlan={p.payment_plan} beds={p.bedroom_options} ptype={p.property_type}
+                location={p.area} footNote={foot || null} dim={p.status === "inactive"}>
+                {open && <div style={{ marginTop: 2, fontSize: 12.5, color: T.inkSoft, lineHeight: 1.55, borderTop: `1px solid ${T.hairSoft}`, paddingTop: 10 }}>
                   {p.investment_points && <div style={{ marginBottom: 6 }}><b style={{ color: T.ink }}>Investment:</b> {p.investment_points}</div>}
                   {p.golden_visa && <div style={{ marginBottom: 6 }}><b style={{ color: T.ink }}>Golden Visa:</b> {p.golden_visa}</div>}
                   {p.target_client && <div style={{ marginBottom: 6 }}><b style={{ color: T.ink }}>Target client:</b> {p.target_client}</div>}
                   {p.risks_notes && <div style={{ marginBottom: 6 }}><b style={{ color: T.ink }}>Risks/notes:</b> {p.risks_notes}</div>}
                   {p.talking_points && <div style={{ marginBottom: 6 }}><b style={{ color: T.ink }}>Talking points:</b> {p.talking_points}</div>}
                 </div>}
-                {(p.selling_points || p.payment_plan || p.investment_points) && <button onClick={() => setExpand((s) => ({ ...s, [p.id]: !s[p.id] }))} style={{ alignSelf: "flex-start", marginTop: 8, background: "none", border: "none", color: T.gold, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>{open ? "Show less" : "More details"}</button>}
+                {(p.investment_points || p.golden_visa || p.target_client || p.risks_notes || p.talking_points || (p.selling_points && p.selling_points.length > 90)) &&
+                  <button onClick={() => setExpand((s) => ({ ...s, [p.id]: !s[p.id] }))} style={{ alignSelf: "flex-start", marginTop: 8, background: "none", border: "none", color: T.gold, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, padding: 0 }}>{open ? "Show less" : "More details"}</button>}
 
-                {visFiles.length > 0 && <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 12 }}>
+                {visFiles.length > 0 && <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 10 }}>
                   {visFiles.map((fl) => <button key={fl.id} onClick={() => download(p, fl)} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 11px", borderRadius: 8, border: `1px solid ${T.hair}`, background: T.bone, color: T.ink, cursor: "pointer", fontSize: 11.5, fontWeight: 600, fontFamily: UI }}>
                     <Download size={13} color={T.gold} /> {fileKindLabel(fl.kind)}{fl.internal_only ? " (int.)" : ""}</button>)}
                 </div>}
 
-                <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {(due || isAdmin) && <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   {due && <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: T.warnSoft, color: T.warn, display: "flex", alignItems: "center", gap: 3 }}><Clock size={11} /> Review due</span>}
                   {isAdmin && <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
                     <button onClick={() => setEditing(p)} title="Edit" style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${T.hair}`, background: T.paper, color: T.inkSoft, cursor: "pointer", display: "grid", placeItems: "center" }}><Pencil size={14} /></button>
                     <button onClick={() => toggleStatus(p)} title={p.status === "inactive" ? "Activate" : "Deactivate"} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${T.hair}`, background: T.paper, color: p.status === "inactive" ? T.ok : T.warn, cursor: "pointer", display: "grid", placeItems: "center" }}>{p.status === "inactive" ? <Check size={14} /> : <EyeOff size={14} />}</button>
                     <button onClick={() => softDelete(p)} title="Delete" style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${T.hair}`, background: T.paper, color: T.bad, cursor: "pointer", display: "grid", placeItems: "center" }}><Trash2 size={14} /></button>
                   </div>}
-                </div>
-              </div>
+                </div>}
+              </HotCard>
             );
           })}
         </div>}
@@ -5890,6 +5950,7 @@ function HotDeals({ user, go }) {
   const [noteDraft, setNoteDraft] = useState("");
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
+  const [frame, setFrame] = useState("all");
 
   const load = async () => { const { data } = await supabase.from("hot_resale_deals").select("*").order("created_at", { ascending: false }); setDeals(data || []); };
   useEffect(() => { load(); }, []);
@@ -5943,40 +6004,32 @@ function HotDeals({ user, go }) {
   };
   const toggleFeature = async (d) => { setBusy(true); const { error } = await supabase.from("hot_resale_deals").update({ featured: !d.featured }).eq("id", d.id); setBusy(false); if (!error) { audit(d.featured ? "hot_deal_unfeatured" : "hot_deal_featured", d); const nd = { ...d, featured: !d.featured }; setDetail(nd); load(); flash(nd.featured ? "Featured on dashboard" : "Unfeatured"); } };
 
-  const Card = ({ d, ownerView }) => (
-    <div style={{ ...card, padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: "14px 16px", background: T.goldSoft, borderBottom: `1px solid ${T.hairSoft}` }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-          <div style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 800, color: T.ink, lineHeight: 1.2 }}>{d.project_name}</div>
-          {d.featured && <Star size={14} color={T.gold} />}
+  const Card = ({ d, ownerView }) => {
+    const img = hotImageFrom(d.photos);
+    const badgeTxt = d.featured ? "Featured" : isRecent(d.created_at, 7) ? "New" : null;
+    const sizePart = d.size_sqft ? " · " + d.size_sqft + " sqft" : "";
+    const foot = "Posted by " + (d.agent_name || "Agent") + " · " + fmtDate(d.created_at) + sizePart + (d.expiry_date ? " · expires " + fmtDate(d.expiry_date) : "");
+    return (
+      <HotCard img={img} badge={badgeTxt} name={d.project_name} desc={d.deal_summary || d.why_hot}
+        price={d.price} beds={d.bedrooms} ptype={d.property_type} location={d.area} footNote={foot}>
+        {ownerView && <div style={{ marginBottom: 2 }}>{badge(d.status)}{d.status === "Needs Correction" && d.approval_notes && <div style={{ fontSize: 11.5, color: T.bad, marginTop: 5 }}>Note: {d.approval_notes}</div>}</div>}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", borderTop: `1px solid ${T.hairSoft}`, paddingTop: 10 }}>
+          <button onClick={() => openDetail(d)} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5 }}><Eye size={12} /> Details</button>
+          {ownerView && (d.status === "Needs Correction" || d.status === "Draft") && <button onClick={() => { setEditDeal(d); setShowForm(true); }} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5 }}><Pencil size={12} /> Edit & resubmit</button>}
+          {d.status === "Approved" && <>
+            <button onClick={() => copyPitch(d)} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5, borderColor: T.ok, color: T.ok }}><MessageCircle size={12} /> Copy pitch</button>
+            <button onClick={() => askAmber(d)} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5, borderColor: T.goldEdge, color: T.gold }}><Sparkle size={12} /> Ask Amber</button>
+          </>}
         </div>
-        <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>{d.area} · {d.property_type}{d.bedrooms ? " · " + d.bedrooms : ""}</div>
-      </div>
-      <div style={{ padding: "14px 16px", flex: 1 }}>
-        <div style={{ fontSize: 18, fontWeight: 800, color: T.gold, fontFamily: DISPLAY }}>{d.price}</div>
-        <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 8, lineHeight: 1.5 }}>{d.why_hot}</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 12, flexWrap: "wrap" }}>
-          <Av name={d.agent_name || "Agent"} size={20} />
-          <span style={{ fontSize: 11.5, color: T.muted }}>Posted by <b style={{ color: T.ink }}>{d.agent_name || "Agent"}</b> · {fmtDate(d.created_at)}</span>
-        </div>
-        {ownerView && <div style={{ marginTop: 8 }}>{badge(d.status)}{d.status === "Needs Correction" && d.approval_notes && <div style={{ fontSize: 11.5, color: T.bad, marginTop: 5 }}>Note: {d.approval_notes}</div>}</div>}
-        {d.expiry_date && <div style={{ fontSize: 11, color: T.faint, marginTop: 8 }}>Expires {fmtDate(d.expiry_date)}</div>}
-      </div>
-      <div style={{ padding: "10px 14px", borderTop: `1px solid ${T.hairSoft}`, display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <button onClick={() => openDetail(d)} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5 }}><Eye size={12} /> Details</button>
-        {ownerView && (d.status === "Needs Correction" || d.status === "Draft") && <button onClick={() => { setEditDeal(d); setShowForm(true); }} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5 }}><Pencil size={12} /> Edit & resubmit</button>}
-        {d.status === "Approved" && <>
-          <button onClick={() => copyPitch(d)} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5, borderColor: T.ok, color: T.ok }}><MessageCircle size={12} /> Copy pitch</button>
-          <button onClick={() => askAmber(d)} style={{ ...miniBtn(), padding: "7px 11px", fontSize: 11.5, borderColor: T.goldEdge, color: T.gold }}><Sparkle size={12} /> Ask Amber</button>
-        </>}
-      </div>
-    </div>
-  );
+      </HotCard>
+    );
+  };
 
   const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 14 };
   const tabs = isAdmin ? [["pending", "Pending", pending.length], ["board", "Approved", approved.length], ["all", "All deals", all.length]]
     : [["board", "Hot deals", approved.length], ["mine", "My submissions", mine.length]];
   const shown = tab === "pending" ? pending : tab === "mine" ? mine : tab === "all" ? all : approved;
+  const framed = tab === "pending" ? shown : sortFeaturedNewest(shown.filter((d) => withinFrame(d.created_at, frame)));
 
   return <div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
@@ -5991,12 +6044,17 @@ function HotDeals({ user, go }) {
       {tabs.map(([k, label, n]) => <button key={k} onClick={() => setTab(k)} style={{ border: `1px solid ${tab === k ? T.gold : T.hair}`, background: tab === k ? T.goldSoft : T.paper, color: tab === k ? T.gold : T.muted, borderRadius: 999, padding: "7px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>{label}{typeof n === "number" ? " · " + n : ""}</button>)}
     </div>
 
+    {tab !== "pending" && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginTop: 14 }}>
+      <div style={{ fontSize: 12.5, color: T.muted, fontWeight: 600 }}>{framed.length} {framed.length === 1 ? "deal" : "deals"}{frame === "week" ? " · this week" : frame === "month" ? " · this month" : ""} · featured & newest first</div>
+      <FrameTabs value={frame} onChange={setFrame} />
+    </div>}
+
     <div style={{ marginTop: 16 }}>
       {deals === null ? <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>Loading hot deals…</div>
-        : shown.length === 0 ? <div style={{ ...card, padding: 40, textAlign: "center" }}>
+        : framed.length === 0 ? <div style={{ ...card, padding: 40, textAlign: "center" }}>
             <Flame size={26} color={T.faint} style={{ marginBottom: 10 }} />
-            <div style={{ fontWeight: 700 }}>{tab === "pending" ? "No deals waiting for approval." : tab === "mine" ? "You haven't posted any hot deals yet." : "No approved hot deals yet."}</div>
-            <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>{isAdmin ? "Approved deals appear to the whole team." : "Tap Post Hot Deal to share an opportunity."}</div>
+            <div style={{ fontWeight: 700 }}>{shown.length > 0 && frame !== "all" ? (frame === "week" ? "No deals in this view from the last 7 days." : "No deals in this view from the last 31 days.") : tab === "pending" ? "No deals waiting for approval." : tab === "mine" ? "You haven't posted any hot deals yet." : "No approved hot deals yet."}</div>
+            <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>{shown.length > 0 && frame !== "all" ? "Switch to All to see everything." : isAdmin ? "Approved deals appear to the whole team." : "Tap Post Hot Deal to share an opportunity."}</div>
           </div>
         : tab === "pending" ? <div style={{ display: "grid", gap: 10 }}>
             {pending.map((d) => <div key={d.id} style={{ ...card, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -6008,7 +6066,7 @@ function HotDeals({ user, go }) {
               <button onClick={() => openDetail(d)} style={{ background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 9, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Review</button>
             </div>)}
           </div>
-        : <div style={grid}>{shown.map((d) => <Card key={d.id} d={d} ownerView={tab === "mine" || (tab === "all" && isAdmin)} />)}</div>}
+        : <div style={grid}>{framed.map((d) => <Card key={d.id} d={d} ownerView={tab === "mine" || (tab === "all" && isAdmin)} />)}</div>}
     </div>
 
     {showForm && <HotDealForm initial={editDeal} me={me} onClose={() => { setShowForm(false); setEditDeal(null); }} onSaved={(asDraft) => { setShowForm(false); setEditDeal(null); load(); flash(asDraft ? "Saved as draft" : "Submitted for approval"); if (!isAdmin) setTab(asDraft ? "mine" : "mine"); }} />}
