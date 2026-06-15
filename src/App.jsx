@@ -1283,7 +1283,7 @@ function AgentDash({ go, user, openLead, onAvatar }) {
         "Keep it tight and practical. Do not invent leads, names, or numbers that are not in my data.";
       const mentor = mentorById("ambreen_ai") || MENTORS[0];
       const res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mentor: mentor.id, crmContext: ctx, messages: [{ role: "user", content: prompt }] }) });
+        body: JSON.stringify({ mentor: mentor.id, crmContext: ctx, role: user && user.role, messages: [{ role: "user", content: prompt }] }) });
       const data = await res.json();
       if (data.error) { setPlanErr("Plan My Day is temporarily unavailable. Please try again."); }
       else {
@@ -4473,6 +4473,67 @@ function parseLeadType(text) {
   if (/\bagent\s+leads?\b/.test(t)) return "Agent";
   return null;
 }
+
+// ===================== CRM REPORTING HELPERS (Master Admin / Admin) =====================
+// Parse an explicit time window from the question. Returns {from,to,label} (YYYY-MM-DD, Dubai tz) or null.
+function parsePeriod(text) {
+  const t = String(text || "").toLowerCase();
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); // YYYY-MM-DD
+  const [Y, M] = today.split("-").map(Number); // Y, M(1-12)
+  const lastDay = (y, m) => new Date(y, m, 0).getDate();
+  const first = (y, m) => `${y}-${String(m).padStart(2, "0")}-01`;
+  const last = (y, m) => `${y}-${String(m).padStart(2, "0")}-${String(lastDay(y, m)).padStart(2, "0")}`;
+  if (/last month|previous month/.test(t)) { let y = Y, m = M - 1; if (m < 1) { m = 12; y--; } return { from: first(y, m), to: last(y, m), label: "last month" }; }
+  if (/this month|current month|\bthis mo\b|in (this )?month|\bmonth to date\b|\bmtd\b/.test(t) || /\bmonth\b/.test(t)) return { from: first(Y, M), to: last(Y, M), label: "this month" };
+  if (/this year|current year|\bytd\b|year to date/.test(t)) return { from: `${Y}-01-01`, to: `${Y}-12-31`, label: "this year" };
+  if (/last week|past week|last 7 days|past 7 days|previous week/.test(t)) { const f = new Date(Date.now() - 7 * 864e5).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); return { from: f, to: today, label: "the last 7 days" }; }
+  if (/this week|current week/.test(t)) { const f = new Date(Date.now() - 7 * 864e5).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); return { from: f, to: today, label: "this week" }; }
+  if (/\btoday\b/.test(t)) return { from: today, to: today, label: "today" };
+  return null;
+}
+// Best-effort extraction of an agent name/email from a reporting question. Returns "" if none.
+function extractAgentName(t) {
+  const STOP = new Set("this that the a an last next current our my me all every each everyone everybody team teams agents agent leads lead deals deal listings listing properties property company total today now week month year get got close closed closing won win post posted posting listed made make did do does done has have how many much number count of show me give tell about for under by from in on are is were was their his her".split(" "));
+  const grab = (re) => { const x = String(t || "").match(re); return x ? x[1] : ""; };
+  let cand = grab(/\b([a-z][a-z'’\-]+(?:\s+[a-z][a-z'’\-]+){0,2})['’]s\b/); // possessive: amar's / amar qureshi's
+  if (!cand) cand = grab(/\b(?:by|for|of|from|under|assigned to|belonging to)\s+([a-z][a-z'’\-]+(?:\s+[a-z][a-z'’\-]+){0,2})/);
+  if (!cand) cand = grab(/\b(?:did|has|have|does|do)\s+([a-z][a-z'’\-]+(?:\s+[a-z][a-z'’\-]+){0,2})\s+(?:get|got|close|closed|won|win|post|posted|list|listed|made|make|submit|submitted|do|done|have|has)\b/);
+  if (!cand) cand = grab(/\b(?:leads?|deals?|listings?|properties|sales?)\s+(?:that\s+|which\s+)?([a-z][a-z'’\-]+(?:\s+[a-z][a-z'’\-]+){0,2})\s+(?:got|get|closed|close|posted|listed|made|won|has|have)\b/);
+  if (!cand) { const e = String(t || "").match(/([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/); if (e) return e[1]; }
+  const toks = String(cand || "").split(/\s+/).filter((w) => w && !STOP.has(w));
+  return toks.join(" ").trim();
+}
+function lev(a, b) {
+  a = String(a); b = String(b); const m = a.length, n = b.length;
+  if (Math.abs(m - n) > 2) return 9;
+  const d = Array.from({ length: m + 1 }, (_, i) => { const r = new Array(n + 1).fill(0); r[0] = i; return r; });
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[m][n];
+}
+// Resolve a name/email to a single profile. Returns {match, candidates, q}. Only admins can read
+// other profiles (RLS), so for non-admins this resolves to themselves or nothing.
+async function resolveAgent(target) {
+  const q = String(target || "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!q) return { match: null, candidates: [], q };
+  const { data } = await supabase.from("profiles").select("id, full_name, email, role, active").limit(1000);
+  const people = (data || []).filter((p) => p.active !== false);
+  const nm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (q.includes("@")) { const c = people.filter((p) => nm(p.email) === q); return { match: c.length === 1 ? c[0] : null, candidates: c, q }; }
+  let c = people.filter((p) => nm(p.full_name) === q);
+  if (c.length === 1) return { match: c[0], candidates: c, q };
+  const toks = q.split(" ");
+  c = people.filter((p) => { const fn = nm(p.full_name); return toks.every((tk) => fn.includes(tk)); });
+  if (c.length === 1) return { match: c[0], candidates: c, q };
+  if (c.length > 1) return { match: null, candidates: c, q };
+  c = people.filter((p) => { const fn = nm(p.full_name), em = nm(p.email); const fst = fn.split(" ")[0]; return (fst && (fst.startsWith(q) || q.startsWith(fst))) || em.split("@")[0] === q; });
+  if (c.length === 1) return { match: c[0], candidates: c, q };
+  if (c.length > 1) return { match: null, candidates: c, q };
+  const q1 = q.split(" ")[0];
+  c = people.filter((p) => { const fst = nm(p.full_name).split(" ")[0]; return lev(fst, q) <= 1 || (q1 && lev(fst, q1) <= 1); });
+  return { match: c.length === 1 ? c[0] : null, candidates: c, q };
+}
+
 function leadIntent(text, role) {
   let t = String(text || "").toLowerCase();
   const isAdmin = ADMIN_ROLES.includes(role);
@@ -4491,6 +4552,30 @@ function leadIntent(text, role) {
   if (LT === "Agent") t = t.replace(/\bagent(\s+leads?)/g, "$1");
   else if (LT) t = t.replace(/\b(buyer|seller|tenant)s?\b/g, " ");
   if (LT) t = t.replace(/\s+/g, " ").trim();
+
+  // ===== CRM REPORT INTENTS (module-separated; admin-gated in runReportQuery) =====
+  // These MUST come before the generic lead rules so "deals"/"commission"/"hot resale" questions
+  // are never answered from the leads module or the model's memory. Each maps to ONE CRM module.
+  const _period = parsePeriod(text);
+  const _agent = extractAgentName(t);
+  const dealWords = /\b(close[ds]?|closing|won|win|approv\w*|submitt?ed?|revenue|sales? (?:made|done|closed))\b/;
+  // DEALS module (closed/approved deals) — never hot resale.
+  if ((/\bdeals?\b/.test(t) && (dealWords.test(t) || /how many|number of|count|total/.test(t))) || /\bclosed?\b[^.]*\bdeals?\b/.test(t)) {
+    if (/\bcommission|net to amber|gross|revenue\b/.test(t)) return _agent ? { kind: "commissionByAgent", target: _agent, adminOnly: true, period: _period } : { kind: "commissionAll", adminOnly: true, period: _period };
+    return _agent ? { kind: "dealsByAgent", target: _agent, adminOnly: true, period: _period } : { kind: "dealsAll", adminOnly: true, period: _period };
+  }
+  // Commission / net-to-company on its own.
+  if (/\b(net|gross)\b[^.]*\bcommission\b|\bcommission\b[^.]*\b(this|last|month|year|week)\b|\bnet to amber\b|\bcompany revenue\b/.test(t)) {
+    return _agent ? { kind: "commissionByAgent", target: _agent, adminOnly: true, period: _period } : { kind: "commissionAll", adminOnly: true, period: _period };
+  }
+  // HOT RESALE LISTINGS module (agent-posted listings) — never counted as deals.
+  if (/\b(hot resale|hot listing|hot propert\w*|resale listing|hot deals?)\b/.test(t) && /\b(how many|post(?:ed|ing)?|listed|listing|count|number of|did|share[ds]?)\b/.test(t)) {
+    return _agent ? { kind: "hotResaleByAgent", target: _agent, adminOnly: true, period: _period } : { kind: "hotResaleAll", adminOnly: true, period: _period };
+  }
+  // LEADS module — a specific agent's lead count for a period ("how many leads did Amar get this month").
+  if ((/\bhow many leads\b|\bleads?\b[^.]*\b(count|total|number)\b|\bnumber of leads\b/.test(t)) && _agent) {
+    return { kind: "leadCountByAgent", target: _agent, adminOnly: true, period: _period };
+  }
 
   // ---- Launch ↔ lead matching (highest-value: connect upcoming launches to real leads) ----
   const launch = resolveLaunch(text);
@@ -4534,6 +4619,11 @@ function leadIntent(text, role) {
 async function runLeadQuery(intent, user) {
   const role = user && user.role;
   const isAgent = role === "agent";
+  // Deals / commission / hot-resale / per-agent lead-count reports use OTHER modules and have their
+  // own admin gating — route them out before the lead-only role gates below.
+  if (["dealsByAgent", "dealsAll", "commissionAll", "commissionByAgent", "hotResaleByAgent", "hotResaleAll", "leadCountByAgent"].includes(intent.kind)) {
+    return await runReportQuery(intent, user);
+  }
   if (intent.adminOnly && isAgent) {
     return { heading: "That's an admin report — I can only pull your own leads. Try \"show me my hot leads\", \"my latest lead\", or \"my overdue follow-ups\".", leads: [] };
   }
@@ -4710,6 +4800,104 @@ async function runLeadQuery(intent, user) {
   return { heading, leads };
 }
 
+// CRM reporting against the CORRECT module only — exact numbers computed here in JS from real rows,
+// never by the model. Permissions: deals/commission = Master Admin + Admin (deals RLS); per-agent
+// lead counts = Master Admin (full leads visibility); hot-resale reports = Master Admin + Admin.
+async function runReportQuery(intent, user) {
+  const role = user && user.role;
+  const isAdminRole = role === "master_admin" || role === "admin";
+  const isMaster = role === "master_admin";
+  const period = intent.period || null;
+  const periodLabel = period ? period.label : "all time";
+  const within = (ts) => { if (!period) return true; const d = String(ts || "").slice(0, 10); return d >= period.from && d <= period.to; };
+  const money = (n) => "AED " + Math.round(Number(n || 0)).toLocaleString("en-US");
+  const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const d10 = (v) => String(v || "").slice(0, 10);
+
+  if (!isAdminRole) return { heading: "Company reports (deals, commissions, other agents' leads or listings) are available to Master Admin / Admin only. I can still help you with your own leads, deals, listings and clients.", leads: [] };
+
+  // Resolve the target agent (RLS: only admins can read other profiles).
+  let agent = null;
+  if (intent.target) {
+    const r = await resolveAgent(intent.target);
+    if (!r.match && (!r.candidates || r.candidates.length === 0)) return { heading: `I couldn't find an agent matching "${intent.target}". Check the spelling, or use their full name or email.`, leads: [] };
+    if (!r.match && r.candidates.length > 1) return { heading: `More than one agent matches "${intent.target}": ${r.candidates.map((c) => c.full_name || c.email).join(", ")}. Which one do you mean?`, leads: [] };
+    agent = r.match;
+  }
+
+  // ---------- DEALS (closed/approved) + COMMISSION — Deals module ONLY ----------
+  if (["dealsByAgent", "dealsAll", "commissionAll", "commissionByAgent"].includes(intent.kind)) {
+    const { data, error } = await supabase.from("deals").select("*").eq("deleted", false);
+    if (error) throw error;
+    let deals = (data || []).filter((d) => d.status === "approved");
+    if (agent) deals = deals.filter((d) => d.agent_id === agent.id || d.created_by === agent.id);
+    const dealDate = (d) => d.decided_at || d.submitted_at || d.created_at;
+    deals = deals.filter((d) => within(dealDate(d)));
+    const n = deals.length;
+    const gross = deals.reduce((s, d) => s + Number(d.gross_commission || 0), 0);
+    const net = deals.reduce((s, d) => s + Number(d.net_commission || d.final_net || 0), 0);
+    const val = deals.reduce((s, d) => s + Number(d.property_value || 0), 0);
+    const who = agent ? agent.full_name : "The team";
+    const src = "\n\n(Source: Deals module — approved deals only. Hot resale listings are NOT counted as closed deals.)";
+    if (intent.kind === "commissionAll" || intent.kind === "commissionByAgent") {
+      if (!n) return { heading: `${who} had no approved closed deals ${periodLabel}, so commission is AED 0.` + src, leads: [] };
+      return { heading: `${who} — ${periodLabel}:\nApproved closed deals: ${n}\nGross commission: ${money(gross)}\nNet to Amber Homes: ${money(net)}` + src, leads: [] };
+    }
+    if (!n) return { heading: `${who} ${agent ? "has" : "had"} no approved closed deals ${periodLabel}.` + src, leads: [] };
+    const lines = deals.sort((a, b) => String(dealDate(b)).localeCompare(String(dealDate(a)))).slice(0, 10).map((d) => {
+      const bits = [d.project || d.area || "Deal", d.property_type, d.property_value ? money(d.property_value) : null, d.gross_commission ? "gross " + money(d.gross_commission) : null].filter(Boolean);
+      return "• " + bits.join(" · ");
+    });
+    const head = agent
+      ? `${agent.full_name} has ${n} approved closed deal${n > 1 ? "s" : ""} ${periodLabel}.\nValue: ${money(val)} · Gross commission: ${money(gross)} · Net to Amber Homes: ${money(net)}\n\n` + lines.join("\n") + src
+      : `${n} approved closed deal${n > 1 ? "s" : ""} ${periodLabel} across the team.\nValue: ${money(val)} · Gross commission: ${money(gross)} · Net to Amber Homes: ${money(net)}\n\n` + lines.join("\n") + src;
+    return { heading: head, leads: [] };
+  }
+
+  // ---------- HOT RESALE LISTINGS — Hot resale module ONLY (never deals) ----------
+  if (intent.kind === "hotResaleByAgent" || intent.kind === "hotResaleAll") {
+    const { data, error } = await supabase.from("hot_resale_deals").select("*");
+    if (error) throw error;
+    let hot = data || [];
+    if (agent) hot = hot.filter((d) => d.agent_id === agent.id || norm(d.agent_name) === norm(agent.full_name));
+    hot = hot.filter((d) => within(d.created_at));
+    const n = hot.length;
+    const approved = hot.filter((d) => d.status === "Approved").length;
+    const pending = hot.filter((d) => d.status === "Pending Approval").length;
+    const who = agent ? agent.full_name : "The team";
+    const src = "\n\n(Source: Hot Resale board — these are property LISTINGS, not closed deals.)";
+    if (!n) return { heading: `${who} ${agent ? "has" : "had"} no hot resale listings ${periodLabel}.` + src, leads: [] };
+    const lines = hot.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 10).map((d) => "• " + [d.project_name, d.area, d.property_type, d.price, d.status].filter(Boolean).join(" · "));
+    return { heading: `${who} — ${n} hot resale listing${n > 1 ? "s" : ""} ${periodLabel} (${approved} approved · ${pending} pending).\n` + lines.join("\n") + src, leads: [] };
+  }
+
+  // ---------- LEAD COUNT for one agent — Leads module (Master Admin only: full leads visibility) ----------
+  if (intent.kind === "leadCountByAgent") {
+    if (!isMaster) return { heading: "Exact per-agent lead counts are available to Master Admin only here (full lead visibility). I can still help with deals, listings and assignment.", leads: [] };
+    if (!agent) return { heading: "Tell me which agent — e.g. \"how many leads did Amar get this month\".", leads: [] };
+    const { data, error } = await supabase.from("leads").select("*").limit(5000);
+    if (error) throw error;
+    const mine = (data || []).filter((l) => l.assigned_agent === agent.id || l.current_owner === agent.id || l.created_by === agent.id);
+    const createdOf = (l) => d10(l.created_at) || d10(l.created_on);
+    const inP = mine.filter((l) => within(createdOf(l)));
+    const n = inP.length;
+    const hotRank = (l) => (l.temperature === "Very Hot" ? 0 : l.temperature === "Hot" ? 1 : l.temperature === "Warm" ? 2 : 3);
+    const hot = inP.filter((l) => hotRank(l) <= 1).length;
+    const warm = inP.filter((l) => l.temperature === "Warm").length;
+    const cold = n - hot - warm;
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+    const live = inP.filter((l) => l.status !== "Closed Won" && l.status !== "Closed Lost");
+    const overdue = live.filter((l) => d10(l.next_followup) && d10(l.next_followup) < today).length;
+    const latest = [...inP].sort((a, b) => (createdOf(b) || "").localeCompare(createdOf(a) || ""))[0];
+    let h = `${agent.full_name} got ${n} lead${n !== 1 ? "s" : ""} ${periodLabel}.`;
+    if (n) h += `\n\nHot: ${hot}\nWarm: ${warm}\nCold/New: ${cold}\nOverdue follow-ups: ${overdue}` + (latest ? `\nLast lead received: ${createdOf(latest)}` : "") + `\n\nWant me to show ${(agent.full_name || "their").split(" ")[0]}'s latest leads?`;
+    else h += " (Source: Leads module.)";
+    return { heading: h, leads: [] };
+  }
+
+  return { heading: "I couldn't run that report.", leads: [] };
+}
+
 // Lightweight, safe markdown renderer for Ask Amber answers: **bold**, headings (#),
 // bullet/numbered lists, clean paragraphs and line breaks. No raw markdown shown, no lone
 // punctuation lines, and long tokens wrap instead of overflowing on mobile.
@@ -4839,7 +5027,7 @@ function AskAmber({ narrow, user, openLead }) {
     const picked = pickKnowledge(text, kb, mentor.id); // relevant verified knowledge for THIS question
     try {
       const res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mentor: mentor.id, crmContext: ctx, knowledge: picked.text,
+        body: JSON.stringify({ mentor: mentor.id, crmContext: ctx, knowledge: picked.text, role: user && user.role,
           messages: next.slice(-12).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })) }) });
       const data = await res.json();
       if (data.error) {

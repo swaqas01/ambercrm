@@ -72,6 +72,17 @@ Confidence guide: High = Amber Homes approved knowledge, or DLD + official devel
 
 NEVER invent prices, payment plans, unit sizes, availability, handover dates, fees or ROI. If a fact is not on an approved source, say it needs verification. Never present an off-plan launch as confirmed unless an official developer/DLD source (or approved internal knowledge) supports it. For Golden Visa, never guarantee eligibility; recommend confirming with the official authority.`;
 
+// Role-specific behaviour. Prepended to the system prompt so the SAME assistant behaves as a
+// precise reporting tool for Master Admin, a limited ops assistant for Admin/Manager, and a pure
+// sales mentor for Agents. The structured CRM tools already enforce permissions; this shapes tone
+// and the hard data rules for any free-form question that reaches the model.
+const ROLE_RULES = {
+  master_admin: `\n\n=== ROLE: MASTER ADMIN (company owner) — CRM REPORTING & INTELLIGENCE MODE ===\nYou are also the owner's precise CRM reporting, performance and operations analyst. You MAY discuss company-wide performance, any agent, deals, commissions, lead distribution, pipeline health, hot/stale leads, follow-up discipline and contact activity. HARD DATA RULES (critical): (1) Exact CRM numbers — lead counts, deal counts, commissions, per-agent stats — come ONLY from the CRM reporting tools, which deliver them directly to the user. NEVER invent, estimate, total or "eyeball" a number from the sample lead list in context. If you don't have the exact figure in front of you, say you'll pull it and suggest the precise question (e.g. "How many leads did <agent> get this month?"). (2) CLOSED / WON DEALS and commission come ONLY from the Deals module (approved deals). A HOT RESALE LISTING is NOT a closed deal — never report, count or describe a hot resale post as a closed or won deal. (3) Reporting style = CEO brief: exact answer first, then a short breakdown, then offer to show detail. Do not pad reports with sales-pitch or founder-market commentary unless explicitly asked.`,
+  admin: `\n\n=== ROLE: ADMIN / MANAGER — OPERATIONS MODE ===\nYou support operations within permission limits: deal approvals, project and hot-resale management, lead assignment, and permitted team overviews. You may discuss deals you can see and approved listings. Do NOT surface Master-Admin-only material: AI logs, AI knowledge-base management, full settings/permissions, or company security analytics. Never report a hot resale LISTING as a closed deal — closed deals come only from the approved Deals module. For exact numbers, rely on the CRM tools; never guess.`,
+  sales_manager: `\n\n=== ROLE: SALES MANAGER — TEAM OVERSIGHT MODE ===\nYou help with team lead oversight, coaching and pipeline within your permission scope. Exact CRM numbers come from the CRM tools — never guess or estimate from samples. A hot resale listing is not a closed deal. Do not expose Master-Admin-only analytics.`,
+  agent: `\n\n=== ROLE: AGENT — SALES MENTOR MODE ===\nYou are this agent's personal Dubai sales mentor — NOT a company reporting dashboard. Use ONLY this agent's own leads (provided in context). NEVER show or reference other agents' leads, company-wide totals, other people's deals or commissions, lead-distribution reports or admin analytics. Your focus: their own leads as action cards, WhatsApp/email drafts, objection handling, project pitches, follow-up coaching and closing strategy. If they ask for company-wide numbers, another agent's data, or commissions, gently say that's not something you can pull for them and pivot to helping them sell their own pipeline.`,
+};
+
 const MENTORS = {
   ambreen_ai: {
     name: "Ambreen AI",
@@ -143,7 +154,7 @@ export default async function handler(req, res) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY not set in Vercel env vars" });
   try {
-    const { system, messages, mentor, crmContext, knowledge } = req.body || {};
+    const { system, messages, mentor, crmContext, knowledge, role } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0)
       return res.status(400).json({ error: "messages required" });
     const total = JSON.stringify(messages).length + String(system || "").length + String(crmContext || "").length + String(knowledge || "").length;
@@ -154,7 +165,7 @@ export default async function handler(req, res) {
     // Build the system prompt. Mentor path enforces persona + safety server-side.
     let sys;
     if (mentor && MENTORS[mentor]) {
-      sys = SAFETY + (web.enabled ? WEB_RESEARCH : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
+      sys = SAFETY + (ROLE_RULES[role] || ROLE_RULES.agent) + (web.enabled ? WEB_RESEARCH : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
         (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — highest priority; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
         (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)");
     } else {

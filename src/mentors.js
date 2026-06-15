@@ -76,9 +76,23 @@ export async function buildCrmContext(user, lead) {
       const { data: hd } = await supabase.from("hot_resale_deals")
         .select("project_name, area, property_type, bedrooms, price, why_hot, agent_name, client_suitability, whatsapp_pitch")
         .eq("status", "Approved").limit(25);
-      if (hd && hd.length) ctx += "\n\nApproved hot resale deals (shared board — ONLY use these, never invent a deal):\n" +
+      if (hd && hd.length) ctx += "\n\nAPPROVED HOT RESALE LISTINGS (agent-posted property listings on the shared board — these are LISTINGS, NOT closed or won deals; never report, count or describe them as closed deals or commission):\n" +
         JSON.stringify(hd.map((d) => ({ project: d.project_name, area: d.area, type: d.property_type, beds: d.bedrooms, price: d.price, why: d.why_hot, suitability: d.client_suitability, postedBy: d.agent_name })));
     } catch (e) {}
+    // Real CLOSED DEALS summary (Deals module) — reporting roles only — so the model never
+    // confuses hot resale LISTINGS with closed DEALS. Agents get a sales-mentor experience, not reports.
+    if (!isAgent) {
+      try {
+        const ym = today.slice(0, 7);
+        const { data: dl } = await supabase.from("deals").select("status, gross_commission, net_commission, final_net, property_value, decided_at, submitted_at, created_at").eq("deleted", false).eq("status", "approved").limit(1000);
+        const appr = (dl || []).filter((d) => ((d.decided_at || d.submitted_at || d.created_at || "").slice(0, 7) === ym));
+        const gross = appr.reduce((s, d) => s + Number(d.gross_commission || 0), 0);
+        const net = appr.reduce((s, d) => s + Number(d.net_commission || d.final_net || 0), 0);
+        ctx += "\n\nCLOSED DEALS THIS MONTH (from the Deals module — APPROVED deals only; this is the ONLY source of truth for closed/won deals and commission, never the hot resale board): " +
+          JSON.stringify({ approvedClosedDeals: appr.length, grossCommissionAED: Math.round(gross), netToAmberAED: Math.round(net) }) +
+          ". For an exact per-agent or per-period deal/lead count, the precise figure is produced by the CRM reporting tools — never estimate it from the sample lists above.";
+      } catch (e) {}
+    }
     return ctx;
   } catch (e) { return null; }
 }
