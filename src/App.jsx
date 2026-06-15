@@ -5906,14 +5906,27 @@ function HotDeals({ user, go }) {
   const badge = (s) => { const [c, b] = STATUS_TONE[s] || [T.muted, T.hairSoft]; return <span style={{ fontSize: 10, fontWeight: 700, color: c, background: b, borderRadius: 6, padding: "2px 8px" }}>{s}</span>; };
 
   const copyPitch = (d) => {
-    const txt = d.whatsapp_pitch && d.whatsapp_pitch.trim() ? d.whatsapp_pitch
-      : "🔥 Hot Resale — " + d.project_name + ", " + d.area + "\n" + d.property_type + (d.bedrooms ? " · " + d.bedrooms : "") + " · " + d.price + "\n\n" + d.why_hot + "\n\nKeen to know more? Let's talk.";
+    let txt;
+    if (d.whatsapp_pitch && d.whatsapp_pitch.trim()) {
+      txt = d.whatsapp_pitch.trim();
+    } else {
+      const where = [d.project_name, d.area].filter(Boolean).join(", ");
+      const unit = [d.property_type, d.bedrooms ? d.bedrooms + " bed" : "", d.size_sqft ? d.size_sqft + " sqft" : ""].filter(Boolean).join(" · ");
+      const lines = ["Hello, hope you're doing well.", ""];
+      lines.push("A strong new resale opportunity has just come in" + (where ? " in " + where : "") + ".");
+      const factLine = [unit, d.price ? "asking " + d.price : ""].filter(Boolean).join(" — ");
+      if (factLine) lines.push(factLine);
+      if (d.why_hot && d.why_hot.trim()) lines.push(d.why_hot.trim());
+      lines.push("");
+      lines.push("I'd be happy to share the full details. When is the best time I can give you a quick call to discuss?");
+      txt = lines.join("\n");
+    }
     try { navigator.clipboard.writeText(txt); } catch (e) {}
     flash("WhatsApp pitch copied"); audit("hot_deal_pitch_copied", d);
   };
   const askAmber = (d) => {
     audit("hot_deal_ask_amber", d);
-    window.dispatchEvent(new CustomEvent("amber-open", { detail: { prompt: "Help me pitch this approved hot resale deal: " + d.project_name + " in " + d.area + ", " + d.property_type + (d.bedrooms ? " " + d.bedrooms : "") + ", " + d.price + ". Why it's hot: " + d.why_hot + ". Draft a short WhatsApp message and tell me which of my clients might match." } }));
+    window.dispatchEvent(new CustomEvent("amber-open", { detail: { prompt: "Help me pitch this approved hot resale deal: " + d.project_name + " in " + d.area + ", " + d.property_type + (d.bedrooms ? " " + d.bedrooms : "") + ", " + d.price + ". Why it's hot: " + d.why_hot + ". Draft a warm, client-ready WhatsApp in Dubai style — short greeting, the deal, the value angle, then ask the best time for a quick call (do NOT mention viewing). Then in one short line, which of my clients might match?" } }));
   };
   const openDetail = (d) => { setDetail(d); setNoteDraft(d.approval_notes || ""); audit("hot_deal_viewed", d); };
 
