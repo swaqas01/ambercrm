@@ -5214,11 +5214,6 @@ function AskAmber({ narrow, user, openLead }) {
                 borderRadius: 13, padding: "9px 12px", fontSize: 12.8, lineHeight: 1.55, whiteSpace: m.role === "user" ? "pre-wrap" : "normal",
                 overflowWrap: "anywhere", wordBreak: "break-word",
                 boxShadow: m.role === "user" ? "none" : T.shadow }}>{m.role === "user" ? m.text : <RichText text={m.text} />}</div>
-              {m.sources && m.sources.length > 0 && (
-                <div style={{ maxWidth: "88%", marginTop: 4, fontSize: 10.5, color: T.faint, display: "flex", alignItems: "center", gap: 4, paddingLeft: 2 }}>
-                  <BookOpen size={11} /> Based on: {m.sources.join(" · ")}
-                </div>
-              )}
               {m.leads && m.leads.length > 0 && (
                 <div style={{ width: "100%", display: "grid", gap: 8, marginTop: 8 }}>
                   {m.leads.map((ld) => {
