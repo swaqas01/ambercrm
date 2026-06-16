@@ -4581,6 +4581,26 @@ function leadIntent(text, role) {
   else if (LT) t = t.replace(/\b(buyer|seller|tenant)s?\b/g, " ");
   if (LT) t = t.replace(/\s+/g, " ").trim();
 
+  // ===== ADVISORY / OBJECTION / HOW-TO GUARD =====
+  // If the agent is asking for mentor help — handling a client objection, what to say, how to pitch,
+  // is-it-worth-it, price/bubble concerns — do NOT hijack it with a structured lead/launch/report
+  // query. Let it reach the model (which has founder knowledge + objection playbooks). This is what
+  // makes Ask Amber feel intelligent instead of returning a canned project/lead dump.
+  const _adv =
+    /\bclient(s|.?s| is| was| who| that)?\b[^.?!]*\b(say|saying|said|think|thinks|feel|feels|told|worried|concerned|hesitant|object|not sure|unsure|not convinced|cold feet|nervous|doubt|reluctant|pushing back)\b/.test(t)
+    || /\b(too )?(expensive|over ?priced|pricey|costly)\b/.test(t)
+    || /\bprice\b[^.?!]*\b(high|too much|expensive|issue|problem|concern|drop|reduce|negotiat)\b/.test(t)
+    || /\b(bubble|crash|overheated|too risky|risky)\b/.test(t)
+    || /\b(objection|rebuttal|push ?back|counter ?argument)\b/.test(t)
+    || /\bhow (do|should|can|would|to)\b[^.?!]*\b(respond|reply|handle|deal|pitch|approach|convince|close|counter|sell|answer|tell|say|position|overcome|negotiat|present)\b/.test(t)
+    || /\bwhat\b[^.?!]*\b(should|do|can|would|to)\b[^.?!]*\b(say|tell|reply|respond|send|do|pitch)\b/.test(t)
+    || /\bhelp me\b[^.?!]*\b(respond|reply|handle|convince|close|counter|pitch|approach|answer|deal|sell|overcome|negotiat|write|draft)\b/.test(t)
+    || /\b(respond|reply) to\b/.test(t)
+    || /\b(convince|reassure|counter|overcome)\b/.test(t)
+    || /\bshould (i|we|my client|the client|they)\b[^.?!]*\b(buy|wait|invest|book|hold|negotiat)\b/.test(t)
+    || /\bis (it|this|now|palm|emaar|sobha|the market|dubai)\b[^.?!]*\b(worth|good|safe|right time|a good|overpriced|bubble)\b/.test(t);
+  if (_adv) return null;
+
   // ===== CRM REPORT INTENTS (module-separated; admin-gated in runReportQuery) =====
   // These MUST come before the generic lead rules so "deals"/"commission"/"hot resale" questions
   // are never answered from the leads module or the model's memory. Each maps to ONE CRM module.
@@ -4611,8 +4631,13 @@ function leadIntent(text, role) {
   // "match my/company leads to (upcoming) launches" — all launches at once.
   if (/\bmatch\b[^.]*\blead/.test(t) && /\blaunch/.test(t) && !launch) return { kind: "matchLaunches", target };
   if ((/launch matching report/.test(t) || /\bleads?\b[^.]*\b(for|to)\b[^.]*\bupcoming\b/.test(t)) && !launch) return { kind: "matchLaunches", target };
-  // a specific launch/project — "who should I pitch X to", "which of my leads fit X", "X leads", "show my X leads"
-  if (launch && (/\b(match|fit|good for|suitable for|pitch|offer|send|recommend)\b/.test(t) || /\blead/.test(t) || /\bclients?\b/.test(t) || /who should/.test(t))) {
+  // a specific launch/project — fire ONLY for genuine lead-matching intent ("who should I pitch X to",
+  // "match my leads to X", "which of my leads fit X", "show my X leads"), NOT for any stray mention of
+  // "client"/"lead" (e.g. an objection about that project — those are handled by the advisory guard above).
+  const _matchVerb = /\b(match|matches|matching|fits?|suitable|good for|good fit|recommend)\b/.test(t);
+  const _whoPitch = /\bwho (should|to|do|can) i (pitch|offer|send|target|approach|show|recommend|call|contact)\b/.test(t);
+  const _listLeads = /\b(leads?|clients?|buyers?)\b/.test(t) && /\b(match|fit|suitable|for|interested|want|looking|show|list|find|get|which|my|any|who)\b/.test(t);
+  if (launch && (_matchVerb || _whoPitch || _listLeads)) {
     if (whichAgents) return { kind: "matchLaunch", launchKey: launch.key, byAgent: true, adminOnly: true };
     return { kind: "matchLaunch", launchKey: launch.key, target };
   }
