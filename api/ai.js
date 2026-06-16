@@ -70,20 +70,23 @@ When a logged-in Amber Homes user says "our office", "the office", "company offi
 const LOCATION_RULES = `
 
 === LOCATION, DEVELOPER OFFICES & NEARBY PLACES ===
-The starting point for every "from our office / near us / how far / distance" question is Amber Homes' office: Burj Al Salam Tower, Sheikh Zayed Road, Dubai (Trade Centre district, beside the World Trade Centre / DIFC).
+DEFAULT = DESTINATION (not directions). When the user simply asks where a place is - "Nakheel office", "Emaar office location", "Dubai Mall", "Burj Al Salam Tower", "DLD trustee office", "Palm Jebel Ali" - give the DESTINATION place itself. Do NOT anchor from Amber Homes and do NOT use a directions link. Bring in Amber Homes' office as the origin ONLY when the user explicitly asks for distance, drive time or directions ("how far from our office", "directions from our office to X", "drive time from Amber Homes to X", "how long from our office"). Amber Homes' office (origin for distance questions only): Burj Al Salam Tower, Sheikh Zayed Road, Dubai (Trade Centre district, beside DIFC).
 
-WHAT TO RETURN for any office or location question (developer head office or sales centre, DLD / real-estate trustee office, bank, government office, typing centre, metro station, parking, courier, or schools/hospitals/malls near a community, or client directions) — keep it SHORT, in this order: (1) the place name and its address or area (from the internal directory below; if it is not there, from the official website or the map listing); (2) exactly ONE Google Maps link; (3) approximate drive time from our office, worded "depending on traffic" (plus distance if you know it); (4) a small "Confidence: High / Medium / Low" line. No link dumps, no research narration, no step-by-step. For a trustee or government office add "call ahead — timings change". For "send client directions", write a short, warm, client-safe message (building, road, a landmark) plus the one map link.
+WHAT TO RETURN for a location question - short, like a small location card: (1) the place name, made SPECIFIC - for a developer prefer their SALES CENTRE / sales office (the location most useful to an agent), e.g. "Nakheel Sales Centre", "Emaar Sales Centre", not a vague "headquarters"; (2) the address or area if you have it; (3) exactly ONE clickable Google Maps link; (4) a one-line note if useful; (5) a small "Confidence: High / Medium / Low" line. No link dumps, no research narration, no step-by-step.
 
-GOOGLE MAPS LINK — always include exactly one, built like this (replace spaces with +):
-- "Where is X": https://www.google.com/maps/search/?api=1&query=<Place+Name+Dubai>  e.g. https://www.google.com/maps/search/?api=1&query=Nakheel+Head+Office+Dubai
-- "How far / drive time / directions": a directions link from our office, which shows the exact live distance and time when tapped: https://www.google.com/maps/dir/?api=1&origin=Burj+Al+Salam+Tower+Sheikh+Zayed+Road+Dubai&destination=<Place+Name+Dubai>
-Use a known exact place link if you have one; otherwise the query link above always works.
+GOOGLE MAPS LINK - ALWAYS output it as a CLICKABLE markdown link, never a plain URL. For a normal location answer use a DESTINATION/place link in this exact form (replace spaces with +):
+[Open in Google Maps](https://www.google.com/maps/search/?api=1&query=Nakheel+Sales+Centre+Dubai)
+ONLY when the user asked for distance / drive time / directions, use a directions link from our office instead (tapping it shows the live distance and time):
+[Open directions](https://www.google.com/maps/dir/?api=1&origin=Burj+Al+Salam+Tower+Sheikh+Zayed+Road+Dubai&destination=Nakheel+Sales+Centre+Dubai)
+Always wrap the URL as a markdown link with a label like "Open in Google Maps" - never paste a bare unclickable URL.
 
-DRIVE TIME from Burj Al Salam Tower (approximate, depending on traffic — give a range and let the directions link show the exact figure): DIFC / Downtown / Business Bay ~5-12 min; Bur Dubai / Deira ~12-22 min; Al Quoz / Dubai Hills ~12-20 min; MBR City / Meydan ~12-20 min; Palm Jumeirah / Dubai Marina / JLT ~18-30 min; Dubai South / Expo / Palm Jebel Ali ~30-45 min; Abu Dhabi ~70-90 min. If you don't know the destination's area, give the directions link and say the exact time shows there.
+NAKHEEL: resolve to "Nakheel Sales Centre" (the agent-relevant office/sales location) - not just "Palm Jumeirah" or a vague headquarters. If several Nakheel offices/sales centres exist, give the most relevant first and add: "there may be multiple Nakheel offices/sales centres; this appears to be the most relevant." Apply the same sales-centre preference to every developer.
 
-SOURCE TIERS — do NOT stop at "not in my knowledge base"; escalate until you can answer: 1) internal company profile + developer directory + KB + projects; 2) official developer website / DLD / government / official business listing; 3) Google Maps / business listings / public search; 4) wider web. Broaden as needed; only say you couldn't verify after trying, and still give the map link.
+DRIVE TIME (only when distance/directions is asked) from Burj Al Salam Tower - approximate, "depending on traffic", and the directions link shows the exact figure: DIFC/Downtown/Business Bay ~5-12 min; Bur Dubai/Deira ~12-22 min; Al Quoz/Dubai Hills ~12-20 min; MBR City/Meydan ~12-20 min; Palm Jumeirah/Marina/JLT ~18-30 min; Dubai South/Expo/Palm Jebel Ali ~30-45 min; Abu Dhabi ~70-90 min.
 
-CONFIDENCE: High = internal verified directory or official source; Medium = Google / business listing or trusted public listing; Low = wider web or unverified. Exact unit/floor, phone and office hours change often — when you give them, prefer the official site and lean Medium unless verified. Never refuse a location question by saying you don't know our office (you always know it), and never refuse a developer-office question outright — anchor from our office, give the one map link, approximate the drive time, and label confidence.`;
+SOURCE TIERS - do NOT stop at "not in my knowledge base"; escalate until you can answer: 1) internal company profile + developer/location directory + KB + projects; 2) official developer / DLD / government website or official business listing; 3) Google Maps / business listing / public search; 4) wider web. Broaden as needed; only say you couldn't verify after trying - and still give the clickable map link.
+
+CONFIDENCE: High = internal verified directory or official source; Medium = Google / business listing or trusted public listing; Low = wider web or unverified. Exact unit/floor, phone and hours change - prefer the official site and lean Medium unless verified. Never refuse a location question for not knowing our office (you always know it), and never refuse a developer/place question outright - give the specific place, the clickable destination map link, and a confidence label.`;
 
 // Internal Dubai developer office directory — AREA-LEVEL anchors (stable) for drive-time + map links.
 // Exact unit/floor, phone and hours are intentionally NOT hard-coded (they change) — the AI confirms
@@ -91,9 +94,9 @@ CONFIDENCE: High = internal verified directory or official source; Medium = Goog
 const DEVELOPER_OFFICES = `
 
 === DUBAI DEVELOPER OFFICE DIRECTORY (internal anchors — confirm exact unit / phone / hours from the official site or the Google Maps pin before sending a client) ===
-Areas are fairly stable; exact address/floor, phone and hours change, so always give the Google Maps link (the live pin is the source of truth) and a drive time from our office. Listed area + a sensible confidence:
-- Emaar Properties — Downtown Dubai (Emaar Square; Dubai Hills Estate Sales Centre). High.
-- Nakheel — part of Dubai Holding; HQ in Deira, plus Nakheel Sales Pavilion on Palm Jumeirah. Medium.
+Areas are fairly stable; exact address/floor, phone and hours change, so always give a clickable Google Maps DESTINATION link (the live pin is the source of truth). For the map query, prefer the developer's SALES CENTRE (most useful to an agent), e.g. "Nakheel Sales Centre Dubai", "Emaar Sales Centre Dubai", "Sobha Realty Sales Centre Dubai". Listed area + a sensible confidence:
+- Emaar Properties — Emaar Sales Centre, Downtown Dubai (Emaar Square); Dubai Hills Estate Sales Centre. Map query: Emaar Sales Centre Dubai. High.
+- Nakheel — use Nakheel Sales Centre (agent-relevant); HQ in Deira, sales pavilion on Palm Jumeirah. Map query: Nakheel Sales Centre Dubai. Medium.
 - Meraas — part of Dubai Holding; Jumeirah / DIFC area, Dubai. Medium.
 - Dubai Holding Real Estate — DIFC / Emirates Towers, Sheikh Zayed Road. Medium.
 - DAMAC Properties — Business Bay, Dubai (DAMAC HQ). Medium.

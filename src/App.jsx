@@ -4973,10 +4973,22 @@ async function runReportQuery(intent, user) {
 // bullet/numbered lists, clean paragraphs and line breaks. No raw markdown shown, no lone
 // punctuation lines, and long tokens wrap instead of overflowing on mobile.
 function richInline(s, keyBase) {
-  const parts = []; const re = /\*\*([^*]+)\*\*|__([^_]+)__/g; let last = 0, m, idx = 0;
+  const parts = []; let last = 0, m, idx = 0;
+  // markdown link [label](url) | **bold** / __bold__ | bare http(s) url
+  const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*\*([^*]+)\*\*|__([^_]+)__|(https?:\/\/[^\s)]+)/g;
+  const isMap = (u) => /google\.[a-z.]+\/maps|maps\.google|maps\.app\.goo\.gl|goo\.gl\/maps/i.test(u);
+  const looksUrl = (x) => /^https?:\/\//i.test(String(x || ""));
+  const linkEl = (url, label) => {
+    const lbl = label && !looksUrl(label) ? label : null;
+    return isMap(url)
+      ? <a key={keyBase + "-l" + idx++} href={url} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 11px", margin: "2px 0", borderRadius: 999, background: T.goldSoft, border: `1px solid ${T.goldEdge}`, color: T.gold, fontWeight: 700, fontSize: 11.5, textDecoration: "none", whiteSpace: "nowrap" }}><MapPin size={12} /> {lbl || "Open in Google Maps"}</a>
+      : <a key={keyBase + "-l" + idx++} href={url} target="_blank" rel="noopener noreferrer" style={{ color: T.gold, textDecoration: "underline", wordBreak: "break-word" }}>{lbl || url}</a>;
+  };
   while ((m = re.exec(s))) {
     if (m.index > last) parts.push(s.slice(last, m.index));
-    parts.push(<strong key={keyBase + "-" + idx++}>{m[1] || m[2]}</strong>);
+    if (m[2]) parts.push(linkEl(m[2], m[1]));
+    else if (m[3] || m[4]) parts.push(<strong key={keyBase + "-b" + idx++}>{m[3] || m[4]}</strong>);
+    else if (m[5]) parts.push(linkEl(m[5], null));
     last = re.lastIndex;
   }
   if (last < s.length) parts.push(s.slice(last));
