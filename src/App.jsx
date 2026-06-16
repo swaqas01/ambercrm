@@ -4869,10 +4869,62 @@ async function runLeadQuery(intent, user) {
     const rowsA = Object.entries(byAg).sort((a, b) => b[1].won - a[1].won || b[1].total - a[1].total).slice(0, 15);
     heading = rowsA.length ? "Agent performance (leads · hot · overdue · won/lost):\n" + rowsA.map(([a, s]) => `• ${a} — ${s.total} leads · ${s.hot} hot · ${s.overdue} overdue · ${s.won}W/${s.lost}L`).join("\n") : "No agent data yet.";
     picked = [];
-  } else { // plan
-    const overdue = overdueOf(open).sort(byDue); const due = open.filter((l) => d10(l.next_followup) === today); const hot = open.filter((l) => hotRank(l) <= 1 && d10(l.next_followup) !== today && !overdue.includes(l));
-    const seen = new Set(); picked = []; [...overdue, ...due, ...hot].forEach((l) => { if (!seen.has(l.id)) { seen.add(l.id); picked.push(l); } });
-    heading = picked.length ? `Your plan — ${overdue.length} overdue, ${due.length} due today, plus hot leads. Work top to bottom:` : "Your pipeline is clear for today. Add follow-up dates and I'll build your day around them.";
+  } else { // plan — proactive daily briefing (leads + follow-ups + colleagues' hot deals + launches)
+    const overdue = overdueOf(open).sort(byDue);
+    const due = open.filter((l) => d10(l.next_followup) === today);
+    const hot = open.filter((l) => hotRank(l) <= 1 && d10(l.next_followup) !== today && !overdue.includes(l) && !due.includes(l));
+    const noDate = open.filter((l) => !d10(l.next_followup) && !hot.includes(l) && !overdue.includes(l) && !due.includes(l));
+
+    // Cross-sell: pull the approved hot-resale board (colleagues' postings) and match it to this
+    // agent's open leads, so the brief can say "X just posted a villa — pitch it to <client>".
+    let deals = [];
+    try { const { data: hd } = await supabase.from("hot_resale_deals").select("*").eq("status", "Approved").order("created_at", { ascending: false }).limit(60); deals = hd || []; } catch (e) { deals = []; }
+    const dealNew = (d) => createdOf(d) && createdOf(d) >= weekAgo; // posted in the last 7 days
+    const crossSell = [];
+    open.forEach((l) => { let best = null; deals.forEach((d) => { const sc = scoreLeadForDeal(l, d); if (sc.qualifies && (!best || sc.score > best.score)) best = { d, ...sc }; }); if (best) crossSell.push({ l, ...best }); });
+    crossSell.sort((a, b) => (Number(dealNew(b.d)) - Number(dealNew(a.d))) || b.score - a.score || hotRank(a.l) - hotRank(b.l));
+
+    // Upcoming launches matched to this agent's open leads.
+    const launchMatch = {}; LAUNCHES.forEach((x) => { launchMatch[x.key] = []; });
+    open.forEach((l) => { let best = null; LAUNCHES.forEach((x) => { const sc = scoreLeadForLaunch(l, x); if (sc.qualifies && (!best || sc.score > best.score)) best = { launch: x, ...sc }; }); if (best) launchMatch[best.launch.key].push(l); });
+    const launchLines = LAUNCHES.map((x) => { const arr = launchMatch[x.key]; if (!arr.length) return null; const names = arr.slice(0, 3).map((l) => l.client_name || "a lead").join(", "); return `Launching: ${x.name} (${x.developer}, ${x.area}) — you have ${arr.length} lead${arr.length > 1 ? "s" : ""} who could fit (${names}${arr.length > 3 ? ", +" + (arr.length - 3) + " more" : ""}). Pitch angle: ${x.pitch}`; }).filter(Boolean);
+
+    // Assemble the brief.
+    const parts = [];
+    if (open.length) {
+      const hotN = open.filter((l) => hotRank(l) <= 1).length, warmN = open.filter((l) => l.temperature === "Warm").length;
+      parts.push(`${isAgent ? "You have" : (scopeLabel || "The team") + " has"} ${open.length} open lead${open.length > 1 ? "s" : ""} — ${hotN} hot, ${warmN} warm. ${due.length} due today, ${overdue.length} overdue.`);
+    } else {
+      parts.push(isAgent ? "No open leads on your desk right now." : `No open leads${forLbl}.`);
+    }
+    if (overdue.length || due.length) parts.push(`First, clear your follow-ups: ${due.length} due today${overdue.length ? " and " + overdue.length + " overdue (do these first)" : ""}.`);
+
+    const csTop = crossSell.slice(0, 3);
+    csTop.forEach((s) => {
+      const what = [s.d.bedrooms ? s.d.bedrooms + "BR" : "", s.d.property_type || "", s.d.project_name ? "at " + s.d.project_name : (s.d.area ? "in " + s.d.area : "")].filter(Boolean).join(" ").trim() || "a resale unit";
+      const poster = (dealNew(s.d) && s.d.agent_name) ? s.d.agent_name + " just posted" : (dealNew(s.d) ? "Just posted on the board" : "Hot deal on the board");
+      parts.push(`${poster}: ${what} — pitch it to ${s.l.client_name || "your client"} (${s.reasons.slice(0, 2).join(", ") || "good fit"}). Price ${s.d.price || "on request"}.`);
+    });
+
+    launchLines.slice(0, 2).forEach((ln) => parts.push(ln));
+
+    if (open.length && !overdue.length && !due.length && !csTop.length && !launchLines.length) {
+      parts.push("None of your leads have follow-up dates and nothing matches the launches or hot-deal board yet. Set follow-up dates on your hot leads so I can sequence your day — the cards below are who to touch first.");
+    } else if (!open.length && (csTop.length || launchLines.length)) {
+      parts.push("Pipeline's clear, but there's movement above worth acting on — and a good time to claim open leads or chase referrals.");
+    } else if (!open.length) {
+      parts.push("Pipeline's clear. Good window to claim open leads, chase referrals, and add follow-up dates as new leads come in so I can build your day.");
+    } else {
+      parts.push("Work the cards below top to bottom.");
+    }
+    heading = parts.join("\n");
+
+    // Prioritised cards: follow-ups, hot, cross-sell-matched, then undated — dedup + annotate matches.
+    const seen = new Set(); picked = [];
+    const add = (l) => { if (l && !seen.has(l.id)) { seen.add(l.id); picked.push(l); } };
+    overdue.forEach(add); due.forEach(add); hot.forEach(add);
+    csTop.forEach((s) => add(s.l)); noDate.slice(0, 5).forEach(add);
+    crossSell.forEach((s) => { if (seen.has(s.l.id) && !matchInfo[s.l.id]) { const where = [s.d.area, s.d.property_type].filter(Boolean).join(" · "); matchInfo[s.l.id] = { match: (s.d.project_name || "Resale unit") + (where ? " — " + where : ""), reason: "Matches: " + (s.reasons.slice(0, 3).join(", ") || s.d.property_type || s.d.area), pitch: "Share with " + (s.l.client_name || "your client") + " and offer a quick call. Price " + (s.d.price || "on request") + " — subject to availability." }; } });
   }
 
   const reasonFor = (l) => {
