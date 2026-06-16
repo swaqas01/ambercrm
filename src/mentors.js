@@ -36,11 +36,13 @@ const BAD = [
 export function classifyInappropriate(text) {
   const t = String(text || "");
   if (isPureGreeting(t)) return null; // courtesy is always allowed
+  // Only explicit sexual content is hard-blocked before the model is called. Everything else —
+  // cursing in frustration, gossip, "off-topic", entertainment, political/religious/medical/personal —
+  // now goes to the model, which decides with judgment per the HARD LIMITS in its prompt. Keyword
+  // pre-blocking was too brittle: it refused legitimate work ("this f***ing lead won't reply, help me",
+  // "draft an email", "translate this") and made the assistant feel limited. The model handles the
+  // sensitive categories far better, and the server prompt still enforces every hard limit.
   if (BAD[0].test(t)) return "sexual";
-  if (BAD[1].test(t)) return "personal";
-  if (BAD[2].test(t)) return "gossip";
-  if (BAD[3].test(t)) return "abusive";
-  if (BAD[4].test(t)) return "non_work";
   return null;
 }
 
