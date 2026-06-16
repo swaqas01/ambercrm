@@ -66,11 +66,57 @@ Head office: Burj Al Salam Tower, Sheikh Zayed Road, Dubai, UAE
 Production CRM: https://crm.amberhomes.ai
 When a logged-in Amber Homes user says "our office", "the office", "company office", "Amber Homes office", "head office", "near us", "near Amber Homes" or "office location", it ALWAYS means Amber Homes' office at Burj Al Salam Tower, Sheikh Zayed Road, Dubai. You ALWAYS know this address — NEVER reply that you don't have the company or office location.`;
 
-// How to handle "nearest/closest X to our office" and client-direction questions.
+// How to handle developer-office, "nearest X to our office", maps, distance and client-direction questions.
 const LOCATION_RULES = `
 
-=== LOCATION & NEARBY PLACES ===
-For any "nearest/closest X to our office" or "near us / near Amber Homes" question — DLD or real-estate trustee office, typing centre, bank branch, developer sales office, government office, metro station, parking, courier/printing, or directions for a client coming in — ALWAYS anchor from Amber Homes' office: Burj Al Salam Tower, Sheikh Zayed Road, Dubai (this is on Sheikh Zayed Road near the World Trade Centre / Trade Centre district). Then: if web research is available, look it up — prefer official DLD / government sources for trustee and government offices — and give ONE practical answer: the place name, a rough distance/time if you can, and a one-line tip (for a trustee/government office, tell them to call ahead because timings and availability change). Keep it short — no link dumps, no long explanation unless asked — and end with a small confidence label (Confidence: High / Medium / Low). If web research is off, still give the office address and your best general guidance from known Dubai geography, mark it Confidence: Low, and suggest verifying. For "send client directions", draft a short, warm, client-safe message with the building, road and a landmark. NEVER refuse a location question by saying you don't know our office location — you always know it.`;
+=== LOCATION, DEVELOPER OFFICES & NEARBY PLACES ===
+The starting point for every "from our office / near us / how far / distance" question is Amber Homes' office: Burj Al Salam Tower, Sheikh Zayed Road, Dubai (Trade Centre district, beside the World Trade Centre / DIFC).
+
+WHAT TO RETURN for any office or location question (developer head office or sales centre, DLD / real-estate trustee office, bank, government office, typing centre, metro station, parking, courier, or schools/hospitals/malls near a community, or client directions) — keep it SHORT, in this order: (1) the place name and its address or area (from the internal directory below; if it is not there, from the official website or the map listing); (2) exactly ONE Google Maps link; (3) approximate drive time from our office, worded "depending on traffic" (plus distance if you know it); (4) a small "Confidence: High / Medium / Low" line. No link dumps, no research narration, no step-by-step. For a trustee or government office add "call ahead — timings change". For "send client directions", write a short, warm, client-safe message (building, road, a landmark) plus the one map link.
+
+GOOGLE MAPS LINK — always include exactly one, built like this (replace spaces with +):
+- "Where is X": https://www.google.com/maps/search/?api=1&query=<Place+Name+Dubai>  e.g. https://www.google.com/maps/search/?api=1&query=Nakheel+Head+Office+Dubai
+- "How far / drive time / directions": a directions link from our office, which shows the exact live distance and time when tapped: https://www.google.com/maps/dir/?api=1&origin=Burj+Al+Salam+Tower+Sheikh+Zayed+Road+Dubai&destination=<Place+Name+Dubai>
+Use a known exact place link if you have one; otherwise the query link above always works.
+
+DRIVE TIME from Burj Al Salam Tower (approximate, depending on traffic — give a range and let the directions link show the exact figure): DIFC / Downtown / Business Bay ~5-12 min; Bur Dubai / Deira ~12-22 min; Al Quoz / Dubai Hills ~12-20 min; MBR City / Meydan ~12-20 min; Palm Jumeirah / Dubai Marina / JLT ~18-30 min; Dubai South / Expo / Palm Jebel Ali ~30-45 min; Abu Dhabi ~70-90 min. If you don't know the destination's area, give the directions link and say the exact time shows there.
+
+SOURCE TIERS — do NOT stop at "not in my knowledge base"; escalate until you can answer: 1) internal company profile + developer directory + KB + projects; 2) official developer website / DLD / government / official business listing; 3) Google Maps / business listings / public search; 4) wider web. Broaden as needed; only say you couldn't verify after trying, and still give the map link.
+
+CONFIDENCE: High = internal verified directory or official source; Medium = Google / business listing or trusted public listing; Low = wider web or unverified. Exact unit/floor, phone and office hours change often — when you give them, prefer the official site and lean Medium unless verified. Never refuse a location question by saying you don't know our office (you always know it), and never refuse a developer-office question outright — anchor from our office, give the one map link, approximate the drive time, and label confidence.`;
+
+// Internal Dubai developer office directory — AREA-LEVEL anchors (stable) for drive-time + map links.
+// Exact unit/floor, phone and hours are intentionally NOT hard-coded (they change) — the AI confirms
+// those from the official site or the live Google Maps pin. Easy to update later: edit the lines below.
+const DEVELOPER_OFFICES = `
+
+=== DUBAI DEVELOPER OFFICE DIRECTORY (internal anchors — confirm exact unit / phone / hours from the official site or the Google Maps pin before sending a client) ===
+Areas are fairly stable; exact address/floor, phone and hours change, so always give the Google Maps link (the live pin is the source of truth) and a drive time from our office. Listed area + a sensible confidence:
+- Emaar Properties — Downtown Dubai (Emaar Square; Dubai Hills Estate Sales Centre). High.
+- Nakheel — part of Dubai Holding; HQ in Deira, plus Nakheel Sales Pavilion on Palm Jumeirah. Medium.
+- Meraas — part of Dubai Holding; Jumeirah / DIFC area, Dubai. Medium.
+- Dubai Holding Real Estate — DIFC / Emirates Towers, Sheikh Zayed Road. Medium.
+- DAMAC Properties — Business Bay, Dubai (DAMAC HQ). Medium.
+- Sobha Realty — Sobha Hartland, MBR City, Dubai. High.
+- Ellington Properties — Business Bay, Dubai. Medium.
+- Omniyat — Business Bay / DIFC, Dubai. Medium.
+- Binghatti Developers — Business Bay / Al Jaddaf, Dubai. Medium.
+- Danube Properties — Sheikh Zayed Road / Al Quoz, Dubai. Medium.
+- Azizi Developments — Sheikh Zayed Road (Conrad Tower area) / Meydan. Medium.
+- wasl (wasl Properties) — wasl HQ, Al Kifaf / Za'abeel, Dubai. Medium.
+- Majid Al Futtaim (Tilal Al Ghaf) — MAF HQ at City Centre Deira; Tilal Al Ghaf Sales Pavilion off Hessa Street. Medium.
+- Aldar Properties — HQ in Abu Dhabi (Al Raha Beach); Dubai office — confirm via official site. Medium.
+- Nshama (Town Square) — Town Square Dubai Sales Centre, Al Qudra Road. Medium.
+- Select Group — Business Bay / Dubai Marina. Medium.
+- Samana Developers — Business Bay, Dubai. Medium.
+- Object 1 — Business Bay / JVC, Dubai. Low.
+- Reportage Properties — HQ Abu Dhabi; Dubai office — confirm via official site. Low.
+- Arada — HQ Sharjah; Dubai office — confirm via official site. Low.
+- MAG (MAG Property Development) — Business Bay, Dubai. Low.
+- Tiger Properties — Business Bay / Deira, Dubai. Low.
+- Imtiaz Developments — Business Bay, Dubai. Low.
+- Deyaar Development — Deira (Deyaar HQ) / Business Bay, Dubai. Medium.
+Most of these sales/head offices cluster around Business Bay, DIFC and Sheikh Zayed Road — short hops (about 5-15 min) from our office. If a developer is not listed or you are unsure, do NOT refuse: give where it is generally understood to be, the Google Maps search link, an approximate drive time, and Confidence: Low with a note to verify on the official site.`;
 
 // Instructions that apply ONLY when Master Admin has enabled web research. They
 // raise confidence by pulling from approved sources instead of general memory.
@@ -181,7 +227,7 @@ export default async function handler(req, res) {
     // Build the system prompt. Mentor path enforces persona + safety server-side.
     let sys;
     if (mentor && MENTORS[mentor]) {
-      sys = SAFETY + COMPANY_PROFILE + LOCATION_RULES + (ROLE_RULES[role] || ROLE_RULES.agent) + (web.enabled ? WEB_RESEARCH : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
+      sys = SAFETY + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + (ROLE_RULES[role] || ROLE_RULES.agent) + (web.enabled ? WEB_RESEARCH : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
         (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — highest priority; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
         (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)");
     } else {
