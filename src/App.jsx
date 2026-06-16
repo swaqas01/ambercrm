@@ -4465,6 +4465,34 @@ function scoreLeadForLaunch(l, launch) {
   const reasons = [...new Set([...sHits, ...wHits])];
   return { qualifies, score, reasons };
 }
+// Waterfront / beachfront communities — used to match "waterfront" leads to waterfront deals & projects.
+const WATERFRONT_TERMS = ["palm jumeirah", "palm jebel ali", "dubai islands", "emaar beachfront", "dubai marina", "jbr", "bluewaters", "dubai harbour", "dubai maritime", "creek harbour", "rashid yachts", "mina rashid", "port de la mer", "la mer", "jumeirah beach", "beachfront", "waterfront", "sea view", "seaview", "marina"];
+const isWaterfrontText = (s) => { const x = String(s || "").toLowerCase(); return WATERFRONT_TERMS.some((w) => x.includes(w)); };
+// Parse a budget/price string ("AED 8,000,000", "8M", "8.5 m") into a number, else 0.
+function budgetNum(s) {
+  const t = String(s || "").toLowerCase().replace(/aed|usd|,|\s/g, "");
+  const m = t.match(/([0-9]*\.?[0-9]+)\s*([mk]?)/);
+  if (!m) return 0;
+  let v = parseFloat(m[1]); if (!v) return 0;
+  if (m[2] === "m" || /million/.test(t)) v *= 1e6; else if (m[2] === "k" || /thousand/.test(t)) v *= 1e3;
+  return v;
+}
+// Score how well one of the agent's leads matches an approved hot resale deal (property type, area,
+// waterfront affinity, budget proximity, bedrooms). Mirrors the launch scorer's shape.
+function scoreLeadForDeal(l, d) {
+  const hay = leadHay(l);
+  const dealType = String(d.property_type || "").toLowerCase();
+  const dealArea = String(d.area || "").toLowerCase();
+  let score = 0; const reasons = [];
+  if (dealType && hay.includes(dealType)) { score += 3; reasons.push(dealType); }
+  if (dealArea && hay.includes(dealArea)) { score += 3; reasons.push(d.area); }
+  if (isWaterfrontText(hay) && (isWaterfrontText(dealArea) || isWaterfrontText(d.project_name))) { score += 2; if (!reasons.includes("waterfront")) reasons.push("waterfront"); }
+  const lb = budgetNum(l.budget), dp = budgetNum(d.price);
+  if (lb && dp) { const r = dp / lb; if (r >= 0.7 && r <= 1.3) { score += 2; reasons.push("budget fit"); } else if (r >= 0.5 && r <= 1.6) { score += 1; } }
+  const lbed = String(l.bedrooms || "").replace(/\D/g, ""), dbed = String(d.bedrooms || "").replace(/\D/g, "");
+  if (lbed && dbed && lbed === dbed) { score += 1; reasons.push(dbed + "-bed"); }
+  return { qualifies: score >= 3, score, reasons: [...new Set(reasons)] };
+}
 function parseLeadType(text) {
   const t = String(text || "").toLowerCase();
   if (/\bbuyers?\b/.test(t)) return "Buyer";
@@ -4589,6 +4617,17 @@ function leadIntent(text, role) {
     return { kind: "matchLaunch", launchKey: launch.key, target };
   }
 
+  // ---- Match the agent's OWN clients to approved HOT RESALE deals (cross-sell intelligence) ----
+  if (/\bmatch\b[^.]*\b(lead|client)s?\b[^.]*\bhot\b/.test(t) || /\bmatch\b[^.]*\bhot (deal|resale|propert)/.test(t) || /\b(hot deals?|hot resale)\b[^.]*\bmatch/.test(t) || /(which|what) (of my )?(lead|client)s?[^.]*\bhot (deal|resale)/.test(t)) {
+    return { kind: "matchHotDeals", target };
+  }
+  // ---- Filter the agent's own leads by property type / waterfront / ready vs off-plan ----
+  const PT = t.match(/\b(townhouse|villa|apartment|penthouse|plot|commercial)s?\b/);
+  if (PT && /\b(client|lead|buyer)s?\b/.test(t)) return { kind: "byType", ptype: PT[1].charAt(0).toUpperCase() + PT[1].slice(1) };
+  if (/\b(waterfront|beachfront|sea ?view)\b/.test(t) && /\b(client|lead|buyer)s?\b/.test(t)) return { kind: "byWaterfront" };
+  if (/\b(ready|completed|ready[- ]?to[- ]?move)\b/.test(t) && /\b(client|lead|buyer|propert)\w*\b/.test(t) && !/off.?plan/.test(t)) return { kind: "byReady", ready: "Ready" };
+  if (/\boff.?plan\b/.test(t) && /\b(client|lead|buyer|propert)\w*\b/.test(t)) return { kind: "byReady", ready: "Off-plan" };
+
   // ---- Admin-only report intents (Master Admin / Admin / Sales Manager) ----
   if (/(unassigned|not assigned)\s*leads?/.test(t)) return { kind: "unassigned", adminOnly: true };
   if (isAdmin && (/agent (performance|leaderboard|ranking|scoreboard|stats|numbers)|team performance|(all|every|each|everyone'?s?|the team'?s?)\s*(agents?\s*)?(performance|stats|numbers|leaderboard|ranking|scoreboard)|how (is|are) (the )?(team|agents?|everyone) (doing|performing)|performance (of|across) (all )?(agents?|the team)/.test(t))) return { kind: "perfAll", adminOnly: true };
@@ -4702,6 +4741,38 @@ async function runLeadQuery(intent, user) {
     heading = all.length
       ? `${isAgent ? "Your" : "Company"} leads matched to current launches:\n` + lines.join("\n") + `\n\nShowing the strongest ${Math.min(8, picked.length)} below. Ask "who should I pitch <project> to" for a full per-launch list. Verify launch details before sharing.`
       : `I couldn't match ${isAgent ? "your" : "the"} leads to the current launches yet. Add area/project interest to leads, or ask about a specific launch.`;
+  } else if (intent.kind === "matchHotDeals") {
+    let deals = [];
+    try { const { data: hd } = await supabase.from("hot_resale_deals").select("*").eq("status", "Approved").limit(60); deals = hd || []; } catch (e) { deals = []; }
+    if (!deals.length) { heading = "There are no approved hot resale deals on the board right now to match against. As soon as one is approved, I'll match it to your clients."; picked = []; }
+    else {
+      const scored = rows.map((l) => {
+        let best = null;
+        deals.forEach((d) => { const sc = scoreLeadForDeal(l, d); if (sc.qualifies && (!best || sc.score > best.score)) best = { d, ...sc }; });
+        return best ? { l, ...best } : null;
+      }).filter(Boolean).sort((a, b) => b.score - a.score || hotRank(a.l) - hotRank(b.l));
+      scored.forEach((s) => {
+        const where = [s.d.area, s.d.property_type].filter(Boolean).join(" · ");
+        matchInfo[s.l.id] = { match: (s.d.project_name || "Resale unit") + (where ? " — " + where : ""),
+          reason: "Matches: " + (s.reasons.slice(0, 4).join(", ") || s.d.property_type || s.d.area),
+          pitch: "Share this resale with " + (s.l.client_name || "your client") + " and offer a quick call. Price " + (s.d.price || "on request") + " — subject to availability." };
+      });
+      picked = scored.map((s) => s.l);
+      heading = scored.length
+        ? `${scored.length} of your client${scored.length > 1 ? "s" : ""} match a current hot resale deal${scored.length > 8 ? " (top 8)" : ""}. Start here:`
+        : "None of your current clients clearly match an approved hot resale deal yet. Add area/budget/type detail to your leads, or ask me to match them to upcoming launches instead.";
+    }
+  } else if (intent.kind === "byType") {
+    const pt = String(intent.ptype || "").toLowerCase();
+    picked = rows.filter((l) => String(l.property_type || "").toLowerCase().includes(pt) || leadHay(l).includes(pt)).sort((a, b) => hotRank(a) - hotRank(b) || byNew(a, b));
+    heading = picked.length ? `${picked.length} ${isAgent ? "of your " : ""}${intent.ptype.toLowerCase()} client${picked.length > 1 ? "s" : ""}${picked.length > 8 ? " (top 8)" : ""}:` : `No ${intent.ptype.toLowerCase()} clients found in ${isAgent ? "your" : "the"} leads yet.`;
+  } else if (intent.kind === "byWaterfront") {
+    picked = rows.filter((l) => isWaterfrontText(leadHay(l))).sort((a, b) => hotRank(a) - hotRank(b) || byNew(a, b));
+    heading = picked.length ? `${picked.length} ${isAgent ? "of your " : ""}waterfront / beachfront client${picked.length > 1 ? "s" : ""}${picked.length > 8 ? " (top 8)" : ""}:` : `No waterfront clients found in ${isAgent ? "your" : "the"} leads yet. I look for Palm, Marina, Beachfront, Dubai Islands, Harbour and similar.`;
+  } else if (intent.kind === "byReady") {
+    const want = intent.ready === "Ready" ? "ready" : "off";
+    picked = rows.filter((l) => { const v = String(l.ready_offplan || "").toLowerCase(); return want === "ready" ? /ready|complete|secondary/.test(v) : /off|plan|under con|pre.?launch/.test(v); }).sort((a, b) => hotRank(a) - hotRank(b) || byNew(a, b));
+    heading = picked.length ? `${picked.length} ${isAgent ? "of your " : ""}${intent.ready} client${picked.length > 1 ? "s" : ""}${picked.length > 8 ? " (top 8)" : ""}:` : `No ${intent.ready} clients recorded in ${isAgent ? "your" : "the"} leads yet (the lead's Ready/Off-plan field needs to be set).`;
   } else if (intent.kind === "latest") {
     picked = [...rows].sort(byNew).slice(0, 1);
     heading = picked.length ? `Your latest lead${forLbl} is below.` : `No leads found${forLbl}.`;
@@ -4984,6 +5055,20 @@ function AskAmber({ narrow, user, openLead }) {
     logLeadAction("draft_message", ld);
     send(q, true);   // forceModel: draft directly, never re-run lead matching
   };
+  const ctxBitsFor = (ld) => {
+    const bits = [];
+    if (ld.project && ld.project !== "—") bits.push("interested in " + ld.project);
+    if (ld.area && ld.area !== ld.project && ld.area !== "—") bits.push("area " + ld.area);
+    if (ld.budget) bits.push("budget " + ld.budget);
+    if (ld.temp && ld.temp !== "—") bits.push(String(ld.temp).toLowerCase() + " lead");
+    return bits.length ? " (" + bits.join(", ") + ")" : "";
+  };
+  const draftEmailFor = (ld) => {
+    const q = `Write a short, professional, client-safe EMAIL to my client ${ld.name || "the client"}${ctxBitsFor(ld)}. Start with "Subject:" then the body: a warm greeting, 2-3 concise sentences on the opportunity, and a clear call to action to schedule a quick call. No guarantees of price, ROI, premium, appreciation, rental income or Golden Visa. Use "subject to availability / developer confirmation" where relevant. Output only the email.`;
+    logLeadAction("draft_email", ld);
+    send(q, true);
+  };
+  const scheduleFollowupFor = (ld) => { logLeadAction("schedule_followup", ld); if (openLead) { openLead(ld.id); setOpen(false); } };
   const send = async (q, forceModel) => {
     const text = (q != null ? q : input).trim();
     if (!text || busy || !mentor) return;
@@ -5144,7 +5229,9 @@ function AskAmber({ narrow, user, openLead }) {
                           {ph && !revealedAi[ld.id] && <button onClick={() => revealAi(ld)} title="Reveal contact" style={{ ...cardBtn, borderRadius: 999, borderColor: T.gold, color: T.gold }}><Eye size={11} /> Reveal</button>}
                           {ph && revealedAi[ld.id] && <button onClick={() => { logLeadAction("whatsapp", ld); window.open(waHref(ld.phone), "_blank"); }} style={{ ...cardBtn, borderColor: WA, color: WA }}><MessageCircle size={11} /> WhatsApp</button>}
                           {ph && revealedAi[ld.id] && <button onClick={() => { logLeadAction("call", ld); window.location.href = telHref(ld.phone); }} style={cardBtn}><Phone size={11} /> Call</button>}
-                          <button onClick={() => draftFor(ld)} style={cardBtn}><Sparkle size={11} /> Draft message</button>
+                          <button onClick={() => draftFor(ld)} style={cardBtn}><MessageCircle size={11} /> Draft WhatsApp</button>
+                          <button onClick={() => draftEmailFor(ld)} style={cardBtn}><Mail size={11} /> Draft email</button>
+                          {openLead && <button onClick={() => scheduleFollowupFor(ld)} style={cardBtn}><Calendar size={11} /> Schedule follow-up</button>}
                         </div>
                       </div>
                     );
@@ -5157,7 +5244,7 @@ function AskAmber({ narrow, user, openLead }) {
         </div>
         {msgs.filter((m) => m.role === "user").length === 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 14px 10px", background: T.bone }}>
-            {["What's launching soon?", "Match my leads to upcoming launches", "What should I focus on today?", "Show me my hot leads", "Draft a WhatsApp follow-up"].map((s) => (
+            {["What's launching soon?", "Match my leads to upcoming launches", "Match my leads to hot deals", "What should I focus on today?", "Show me my hot leads", "Draft a WhatsApp follow-up"].map((s) => (
               <button key={s} onClick={() => send(s)} style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold,
                 borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>{s}</button>))}
           </div>
