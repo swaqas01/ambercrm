@@ -5104,22 +5104,24 @@ function AskAmber({ narrow, user, openLead }) {
   const [ctx, setCtx] = useState(null);
   const [kb, setKb] = useState([]);                // Amber Homes knowledge (loaded once per session)
   const [revealedAi, setRevealedAi] = useState({}); // { [leadId]: true } — gate WhatsApp/Call behind Reveal in chat cards
+  const [leadInfo, setLeadInfo] = useState(null);   // { name } when a specific lead is open in chat (for context-aware quick actions)
   const boxRef = useRef(null);
   useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight; }, [msgs, busy]);
 
   const pick = async (m, leadCtx) => {
     setMentor(m);
     setMsgs([{ role: "assistant", text: m.greeting }]);
+    setLeadInfo(leadCtx && leadCtx.client_name ? { name: leadCtx.client_name } : null);
     setCtx(await buildCrmContext(user, leadCtx)); // fetch permitted CRM context once per session
     fetchKnowledge(user).then(setKb).catch(() => setKb([])); // verified company knowledge
   };
-  const reset = () => { setMentor(null); setMsgs([]); setInput(""); };
+  const reset = () => { setMentor(null); setMsgs([]); setInput(""); setLeadInfo(null); };
   useEffect(() => {
     const onOpen = async (e) => {
       const d = e && e.detail;
       setOpen(true);
       if (!mentor) pick(MENTORS[0], d && d.lead);
-      else if (d && d.lead) { try { setCtx(await buildCrmContext(user, d.lead)); } catch (err) {} }
+      else if (d && d.lead) { try { setCtx(await buildCrmContext(user, d.lead)); setLeadInfo(d.lead.client_name ? { name: d.lead.client_name } : null); } catch (err) {} }
       if (d && d.prompt) setInput(d.prompt);
     };
     window.addEventListener("amber-open", onOpen);
@@ -5328,7 +5330,7 @@ function AskAmber({ narrow, user, openLead }) {
         </div>
         {msgs.filter((m) => m.role === "user").length === 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 14px 10px", background: T.bone }}>
-            {["What's launching soon?", "Match my leads to upcoming launches", "Match my leads to hot deals", "What should I focus on today?", "Show me my hot leads", "Draft a WhatsApp follow-up"].map((s) => (
+            {(leadInfo ? [`What should I do next with ${leadInfo.name}?`, `Profile ${leadInfo.name}`] : []).concat(["Compare two projects", "Analyze a client chat", "Practice a tough client", "What's launching soon?", "Match my leads to hot deals", "What should I focus on today?", "Show me my hot leads", "Draft a WhatsApp follow-up"]).map((s) => (
               <button key={s} onClick={() => send(s)} style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold,
                 borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>{s}</button>))}
           </div>
