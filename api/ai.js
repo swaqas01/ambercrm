@@ -121,6 +121,15 @@ Areas are fairly stable; exact address/floor, phone and hours change, so always 
 - Deyaar Development — Deira (Deyaar HQ) / Business Bay, Dubai. Medium.
 Most of these sales/head offices cluster around Business Bay, DIFC and Sheikh Zayed Road — short hops (about 5-15 min) from our office. If a developer is not listed or you are unsure, do NOT refuse: give where it is generally understood to be, the Google Maps search link, an approximate drive time, and Confidence: Low with a note to verify on the official site.`;
 
+const DEVELOPER_CONTACTS = `
+
+=== AMBER HOMES DEVELOPER SALES CONTACTS (internal — our go-to sales reps at each developer) ===
+When an agent asks who our sales person / contact / point of contact is at a developer (e.g. "who is our sales person in Emaar", "Nakheel contact", "who do we deal with at Aldar", "Meraas sales rep"), reply with the matching contact(s) below and their number(s), then add this guidance in your own words: these are the sales agents we mostly deal with, so give them a call; if they don't reply, speak to your Manager and they'll connect you with the best sales agent at that developer. Keep the reply short and direct.
+- Emaar -> Sab, +971 52 102 8337
+- Meraas / Nakheel / Dubai Holding -> Fahad, +971 50 494 9498; Waqas, +971 50 991 9180
+- Aldar -> Natasha, +971 52 760 0101; Madiha, +971 54 335 2355
+Notes: Meraas, Nakheel and Dubai Holding share the same two contacts (Fahad and Waqas) — list both. If an agent asks about a developer that is NOT listed here, say we don't have a dedicated sales contact on file for that developer yet and they should ask their Manager to connect them — do NOT invent names or numbers. These are our internal points of contact at the developer; fine to share with our own agents.`;
+
 // Instructions that apply ONLY when Master Admin has enabled web research. They
 // raise confidence by pulling from approved sources instead of general memory.
 const WEB_RESEARCH = `
@@ -230,7 +239,7 @@ export default async function handler(req, res) {
     // Build the system prompt. Mentor path enforces persona + safety server-side.
     let sys;
     if (mentor && MENTORS[mentor]) {
-      sys = SAFETY + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + (ROLE_RULES[role] || ROLE_RULES.agent) + (web.enabled ? WEB_RESEARCH : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
+      sys = SAFETY + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + DEVELOPER_CONTACTS + (ROLE_RULES[role] || ROLE_RULES.agent) + (web.enabled ? WEB_RESEARCH : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
         (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — highest priority; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
         (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)");
     } else {
