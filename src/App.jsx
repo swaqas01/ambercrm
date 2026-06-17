@@ -1565,6 +1565,7 @@ function AgentDash({ go, user, openLead, onAvatar }) {
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span style={{ fontWeight: 600, fontSize: 14 }}>{l.client_name}</span>
                   {(l.temperature === "Hot" || l.temperature === "Very Hot") && <Chip tone="bad">{l.temperature}</Chip>}
+                  {(() => { const sc = leadScore(l).score; return <span title="Lead score (0-100)" style={{ fontSize: 10, fontWeight: 800, background: sc >= 75 ? T.okSoft : sc >= 55 ? T.goldSoft : T.bone, color: sc >= 75 ? T.ok : sc >= 55 ? T.gold : T.muted, border: sc < 55 ? `1px solid ${T.hair}` : "none", borderRadius: 6, padding: "1px 6px" }}>★ {sc}</span>; })()}
                 </div>
                 <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{[l.area, l.project, l.budget].filter(Boolean).join(" · ") || "—"}</div>
               </div>
@@ -1985,6 +1986,7 @@ function LeadDetail({ leadId, user, go, openLead, from }) {
             <span style={{ fontSize: 11.5, fontWeight: 700, color: T.goldBright }}>{leadIdFmt}</span>
             <span style={{ fontSize: 10.5, fontWeight: 700, background: "rgba(255,255,255,.14)", color: "#fff", borderRadius: 6, padding: "2px 8px" }}>{statusText}</span>
             {(lead.temperature === "Hot" || lead.temperature === "Very Hot") && <span style={{ fontSize: 10.5, fontWeight: 700, background: "rgba(225,90,80,.25)", color: "#ffd9d5", borderRadius: 6, padding: "2px 8px" }}>{lead.temperature}</span>}
+            {(() => { const ls = leadScore(lead); return <span title="Lead score (0-100)" style={{ fontSize: 10.5, fontWeight: 700, background: "rgba(212,175,92,.22)", color: T.goldBright, borderRadius: 6, padding: "2px 8px" }}>★ {ls.score} · {ls.band}</span>; })()}
           </div>
         </div>
         <button onClick={askAmberLead} style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "rgba(212,175,92,.18)", border: `1px solid ${T.goldEdge}`, color: "#fff", borderRadius: 999, padding: "9px 15px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}><Sparkle size={15} color={T.goldBright} /> Ask Amber</button>
@@ -4487,6 +4489,58 @@ function budgetNum(s) {
   if (m[2] === "m" || /million/.test(t)) v *= 1e6; else if (m[2] === "k" || /thousand/.test(t)) v *= 1e3;
   return v;
 }
+
+// Smart lead score (0-100), computed live from the lead's own fields — no extra queries, no schema.
+// It reflects how much attention a lead deserves: temperature, budget size, urgency/recency,
+// data completeness and pipeline stage. Returns { score, band, reasons } for display on cards.
+function leadScore(l) {
+  if (!l) return { score: 0, band: "Low", reasons: [] };
+  const reasons = [];
+  let s = 0;
+  const day = (v) => { if (!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); };
+  const today = new Date().toISOString().slice(0, 10);
+
+  const temp = l.temperature || "";
+  if (temp === "Very Hot") { s += 30; reasons.push("Very hot"); }
+  else if (temp === "Hot") { s += 24; reasons.push("Hot"); }
+  else if (temp === "Warm") { s += 14; reasons.push("Warm"); }
+  else if (temp === "Cold") { s += 4; }
+  else { s += 8; } // new / unset still has upside
+
+  const b = budgetNum(l.budget);
+  if (b >= 1e7) { s += 22; reasons.push("AED 10M+ budget"); }
+  else if (b >= 5e6) { s += 18; reasons.push("AED 5M+ budget"); }
+  else if (b >= 3e6) { s += 14; reasons.push("strong budget"); }
+  else if (b >= 1.5e6) { s += 10; }
+  else if (b > 0) { s += 6; }
+
+  const nf = day(l.next_followup), lc = day(l.last_contacted);
+  if (nf) {
+    if (nf < today) { s += 20; reasons.push("follow-up overdue"); }
+    else if (nf === today) { s += 18; reasons.push("follow-up due today"); }
+    else { const days = Math.round((new Date(nf).getTime() - new Date(today).getTime()) / 864e5); if (days <= 3) { s += 14; reasons.push("follow-up soon"); } else { s += 8; } }
+  } else if (lc) {
+    const days = Math.round((new Date(today).getTime() - new Date(lc).getTime()) / 864e5);
+    if (days <= 7) { s += 12; reasons.push("contacted recently"); }
+    else if (days <= 30) { s += 6; }
+    else { s += 2; reasons.push("going cold"); }
+  } else { s += 5; reasons.push("needs first contact"); }
+
+  let comp = 0; if (l.area) comp += 3; if (l.property_type) comp += 3; if (b > 0) comp += 3; if (l.purpose) comp += 3;
+  s += comp; if (comp <= 3) reasons.push("missing details");
+
+  const st = (l.status || "").toLowerCase();
+  if (/eoi|booking|negotiat|offer|spa|won/.test(st)) { s += 12; reasons.push("late-stage"); }
+  else if (/qualified|site visit|viewing|meeting|zoom|options sent|shortlist/.test(st)) { s += 8; reasons.push("engaged"); }
+  else if (/contacted|first contact|follow/.test(st)) { s += 4; }
+  else { s += 2; }
+
+  if (/invest/i.test(l.purpose || "")) s += 4; else if (/end.?user|live|family|own use/i.test(l.purpose || "")) s += 3;
+
+  const score = Math.max(0, Math.min(100, Math.round(s)));
+  const band = score >= 75 ? "Hot priority" : score >= 55 ? "Strong" : score >= 35 ? "Warm" : "Low";
+  return { score, band, reasons: reasons.slice(0, 3) };
+}
 // Score how well one of the agent's leads matches an approved hot resale deal (property type, area,
 // waterfront affinity, budget proximity, bedrooms). Mirrors the launch scorer's shape.
 function scoreLeadForDeal(l, d) {
@@ -4950,7 +5004,7 @@ async function runLeadQuery(intent, user) {
     return {
       id: l.id, name: l.client_name || "Lead", code: l.lead_code || l.lead_no || "", project: l.project || l.area || "—", area: l.area || "",
       status: l.is_open ? "Open" : (l.status || "—"), temp: l.temperature || "—", budget: l.budget || "",
-      due: fmtDue(l.next_followup), phone: l.phone || "", lead_type: l.lead_type || "Buyer",
+      due: fmtDue(l.next_followup), phone: l.phone || "", lead_type: l.lead_type || "Buyer", score: leadScore(l).score,
       reason: mi ? mi.reason : reasonFor(l), match: mi ? mi.match : null, pitch: mi ? mi.pitch : null,
     };
   });
@@ -5312,7 +5366,10 @@ function AskAmber({ narrow, user, openLead }) {
                       <div key={ld.id} style={{ background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 12, padding: "10px 12px", boxShadow: T.shadow }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
                           <div style={{ fontWeight: 700, fontSize: 12.8, color: T.ink }}>{ld.name}{ld.code ? <span style={{ fontSize: 10, color: T.faint, fontWeight: 600, marginLeft: 6 }}>{ld.code}</span> : null}</div>
-                          <div style={{ fontSize: 10.5, fontWeight: 700, color: tcol, whiteSpace: "nowrap" }}>{ld.temp}</div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                            {typeof ld.score === "number" && <span title="Lead score (0-100)" style={{ fontSize: 10, fontWeight: 800, background: ld.score >= 75 ? T.okSoft : ld.score >= 55 ? T.goldSoft : T.bone, color: ld.score >= 75 ? T.ok : ld.score >= 55 ? T.gold : T.muted, borderRadius: 6, padding: "1px 6px" }}>★ {ld.score}</span>}
+                            <span style={{ fontSize: 10.5, fontWeight: 700, color: tcol }}>{ld.temp}</span>
+                          </div>
                         </div>
                         <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{ld.project} · {ld.status}{ld.budget ? " · " + ld.budget : ""} · {ld.due}</div>
                         {ld.area && ld.area !== "—" && ld.area !== ld.project && <div style={{ fontSize: 10.5, color: T.faint, marginTop: 2, display: "inline-flex", alignItems: "center", gap: 4 }}><MapPin size={10} /> {ld.area}</div>}
