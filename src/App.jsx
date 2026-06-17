@@ -898,6 +898,75 @@ function BackupExport({ user }) {
   );
 }
 
+function DuplicateLeads({ user }) {
+  const [busy, setBusy] = useState(false);
+  const [groups, setGroups] = useState(null); // null = not scanned yet
+  const [err, setErr] = useState("");
+  if (!user || user.role !== "master_admin") return null; // needs full-table read (master via RLS)
+  const scan = async () => {
+    setBusy(true); setErr(""); setGroups(null);
+    try {
+      const { data, error } = await supabase.from("leads")
+        .select("id, client_name, phone, email, assigned_agent_name, status, temperature, is_open, created_at")
+        .eq("deleted", false).limit(10000);
+      if (error) throw error;
+      const byKey = {};
+      const add = (key, kind, l) => { if (!key) return; const k = kind + "|" + key; (byKey[k] = byKey[k] || { key, kind, leads: [] }).leads.push(l); };
+      (data || []).forEach((l) => {
+        const ph = normIntl(l.phone); if (ph && ph.length >= 7) add(ph, "phone", l);
+        const em = String(l.email || "").trim().toLowerCase(); if (/.+@.+\..+/.test(em)) add(em, "email", l);
+      });
+      const clusters = Object.values(byKey).map((g) => {
+        const seen = new Set(); const uniq = g.leads.filter((l) => (seen.has(l.id) ? false : (seen.add(l.id), true)));
+        const agents = Array.from(new Set(uniq.map((l) => (l.assigned_agent_name || "").trim()).filter(Boolean)));
+        return { ...g, leads: uniq, agents, crossAgent: agents.length > 1 };
+      }).filter((g) => g.leads.length > 1);
+      clusters.sort((a, b) => (Number(b.crossAgent) - Number(a.crossAgent)) || b.leads.length - a.leads.length);
+      setGroups(clusters);
+    } catch (e) { setErr("Couldn't scan leads. Please try again."); }
+    setBusy(false);
+  };
+  const fmtDate = (d) => { try { return new Date(d).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }); } catch (e) { return ""; } };
+  return (<>
+    <SectionTitle>Duplicate leads <span style={{ fontSize: 10.5, color: T.muted, fontWeight: 600 }}>· same phone or email</span></SectionTitle>
+    <div style={{ ...card, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <button onClick={scan} disabled={busy} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold, opacity: busy ? 0.5 : 1 }}>{busy ? "Scanning…" : "Scan for duplicates"}</button>
+        <span style={{ fontSize: 11.5, color: T.muted }}>Read-only — finds leads sharing a phone or email so you can review and clean them up.</span>
+      </div>
+      {err && <div style={{ marginTop: 10, fontSize: 12.5, color: T.bad }}>{err}</div>}
+      {groups && groups.length === 0 && <div style={{ marginTop: 12, fontSize: 13, color: T.muted, display: "flex", alignItems: "center", gap: 8 }}><CheckCircle2 size={16} color={T.ok} /> No duplicate leads found.</div>}
+      {groups && groups.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{groups.length} possible duplicate group{groups.length > 1 ? "s" : ""} · {groups.reduce((n, g) => n + g.leads.length, 0)} leads {groups.some((g) => g.crossAgent) ? "· some span different agents" : ""}</div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {groups.slice(0, 50).map((g, i) => (
+              <div key={i} style={{ border: `1px solid ${g.crossAgent ? T.badSoft : T.hair}`, borderRadius: 10, padding: "10px 12px", background: T.bone }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft }}>{g.kind === "phone" ? "Phone: +" + g.key : "Email: " + g.key}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, background: T.goldSoft, color: T.gold, borderRadius: 6, padding: "1px 6px" }}>{g.leads.length} leads</span>
+                  {g.crossAgent && <span style={{ fontSize: 10, fontWeight: 700, background: T.badSoft, color: T.bad, borderRadius: 6, padding: "1px 6px" }}>{g.agents.length} different agents</span>}
+                </div>
+                <div style={{ display: "grid", gap: 4 }}>
+                  {g.leads.map((l) => (
+                    <div key={l.id} style={{ fontSize: 12, color: T.inkSoft, display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
+                      <span style={{ fontWeight: 600 }}>{l.client_name || "Unnamed"}</span><span style={{ color: T.faint }}>·</span>
+                      <span>{l.assigned_agent_name || (l.is_open ? "Open pool" : "Unassigned")}</span><span style={{ color: T.faint }}>·</span>
+                      <span style={{ color: T.muted }}>{l.status || "—"}</span><span style={{ color: T.faint }}>·</span>
+                      <span style={{ color: T.faint }}>{fmtDate(l.created_at)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          {groups.length > 50 && <div style={{ fontSize: 11, color: T.faint, marginTop: 8 }}>Showing the first 50 groups.</div>}
+        </div>
+      )}
+    </div>
+  </>);
+}
+
 function AdminDash({ go, user }) {
   const [leads, setLeads] = useState(null);
   const [acts, setActs] = useState([]);
@@ -1156,6 +1225,7 @@ function AdminDash({ go, user }) {
         </button>
       ))}
     </div>
+    <DuplicateLeads user={user} />
     <BackupExport user={user} />
   </div>;
 }
