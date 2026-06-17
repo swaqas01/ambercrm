@@ -236,6 +236,27 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY not set in Vercel env vars" });
+
+  // --- AUTH GATE: only signed-in Amber Homes staff may call this endpoint ---
+  // Verifies the caller's Supabase session token against Supabase Auth (using the public
+  // anon key, the same key the browser already holds). No service role, no DB access — this
+  // only confirms the request comes from a logged-in user, so the AI endpoint can't be used
+  // anonymously to burn the Anthropic quota or as a free proxy. Data access is unchanged
+  // (all CRM context is still gathered client-side under the user's own RLS-bound session).
+  {
+    const authz = req.headers.authorization || "";
+    const token = authz.startsWith("Bearer ") ? authz.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "Not signed in." });
+    try {
+      const who = await fetch(SUPABASE_URL + "/auth/v1/user", { headers: { apikey: ANON_KEY, Authorization: "Bearer " + token } });
+      if (!who.ok) return res.status(401).json({ error: "Invalid session." });
+      const u = await who.json();
+      if (!u || !u.id) return res.status(401).json({ error: "Invalid session." });
+    } catch (e) {
+      return res.status(401).json({ error: "Could not verify session." });
+    }
+  }
+
   try {
     const { system, messages, mentor, crmContext, knowledge, role } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0)

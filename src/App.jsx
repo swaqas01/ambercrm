@@ -282,6 +282,17 @@ const ROLE_OPTIONS = [
   ["accounts", "Accounts"],
 ];
 function roleLabel(r) { const m = { master_admin: "Master Admin", admin: "Admin", sales_manager: "Sales Manager", agent: "Agent", marketing: "Marketing", accounts: "Accounts" }; return m[r] || (r ? String(r) : "—"); }
+
+// All /api/ai calls go through here so the caller's Supabase session token is attached.
+// The serverless function rejects requests without a valid token — this keeps the AI
+// endpoint usable only by signed-in staff (no anonymous quota/proxy abuse).
+async function callAi(body) {
+  let token = null;
+  try { token = (await supabase.auth.getSession()).data.session?.access_token || null; } catch (e) {}
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = "Bearer " + token;
+  return fetch("/api/ai", { method: "POST", headers, body: JSON.stringify(body) });
+}
 // Log a lead action to the activity trail (RLS: actor must be the signed-in user).
 function logAction(action, lead, actorId, extra) {
   if (!actorId) return;
@@ -1282,8 +1293,7 @@ function AgentDash({ go, user, openLead, onAvatar }) {
         "5) End with one short motivational line.\n" +
         "Keep it tight and practical. Do not invent leads, names, or numbers that are not in my data.";
       const mentor = mentorById("ambreen_ai") || MENTORS[0];
-      const res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mentor: mentor.id, crmContext: ctx, role: user && user.role, messages: [{ role: "user", content: prompt }] }) });
+      const res = await callAi({ mentor: mentor.id, crmContext: ctx, role: user && user.role, messages: [{ role: "user", content: prompt }] });
       const data = await res.json();
       if (data.error) { setPlanErr("Plan My Day is temporarily unavailable. Please try again."); }
       else {
@@ -5202,9 +5212,8 @@ function AskAmber({ narrow, user, openLead }) {
     setMsgs(next); setBusy(true);
     const picked = pickKnowledge(text, kb, mentor.id); // relevant verified knowledge for THIS question
     try {
-      const res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mentor: mentor.id, crmContext: ctx, knowledge: picked.text, role: user && user.role,
-          messages: next.slice(-12).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })) }) });
+      const res = await callAi({ mentor: mentor.id, crmContext: ctx, knowledge: picked.text, role: user && user.role,
+          messages: next.slice(-12).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })) });
       const data = await res.json();
       if (data.error) {
         setMsgs((m) => [...m, { role: "assistant", text: "Ask Amber is temporarily unavailable. Please try again." }]);
@@ -5937,10 +5946,9 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
   const extract = async () => {
     if (!aiText.trim()) return; setAiBusy(true); setAiErr("");
     try {
-      const res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const res = await callAi({
           system: "Extract real-estate lead fields from the user's text. Reply with ONLY a JSON object, no prose, with keys: client_name, phone, email, area, project, budget, property_type, ready_offplan, purpose, nationality, followup_note. Use empty string for anything not present. budget should keep currency like 'AED 8,000,000'. ready_offplan should be 'Off-plan' or 'Ready' or ''.",
-          messages: [{ role: "user", content: aiText.slice(0, 4000) }] }) });
+          messages: [{ role: "user", content: aiText.slice(0, 4000) }] });
       const data = await res.json();
       if (data.error) { setAiErr("AI not available: " + data.error); setAiBusy(false); return; }
       let txt = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
