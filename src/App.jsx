@@ -4741,8 +4741,11 @@ function leadIntent(text, role) {
   const _period = parsePeriod(text);
   const _agent = extractAgentName(t);
   const dealWords = /\b(close[ds]?|closing|won|win|approv\w*|submitt?ed?|revenue|sales? (?:made|done|closed))\b/;
+  // "hot resale / hot deals / resale" phrasing belongs to the LISTINGS module, never the closed-DEALS
+  // module — guard the deals branch so e.g. "how many hot resale deals did X post" isn't miscounted.
+  const _hotResale = /\bhot\s+(resale|listing|deals?|propert\w*)\b|\bresale\b/.test(t);
   // DEALS module (closed/approved deals) — never hot resale.
-  if ((/\bdeals?\b/.test(t) && (dealWords.test(t) || /how many|number of|count|total/.test(t))) || /\bclosed?\b[^.]*\bdeals?\b/.test(t)) {
+  if (!_hotResale && ((/\bdeals?\b/.test(t) && (dealWords.test(t) || /how many|number of|count|total/.test(t))) || /\bclosed?\b[^.]*\bdeals?\b/.test(t))) {
     if (/\bcommission|net to amber|gross|revenue\b/.test(t)) return _agent ? { kind: "commissionByAgent", target: _agent, adminOnly: true, period: _period } : { kind: "commissionAll", adminOnly: true, period: _period };
     return _agent ? { kind: "dealsByAgent", target: _agent, adminOnly: true, period: _period } : { kind: "dealsAll", adminOnly: true, period: _period };
   }
@@ -4782,10 +4785,12 @@ function leadIntent(text, role) {
   }
   // ---- Filter the agent's own leads by property type / waterfront / ready vs off-plan ----
   const PT = t.match(/\b(townhouse|villa|apartment|penthouse|plot|commercial)s?\b/);
-  if (PT && /\b(client|lead|buyer)s?\b/.test(t)) return { kind: "byType", ptype: PT[1].charAt(0).toUpperCase() + PT[1].slice(1) };
-  if (/\b(waterfront|beachfront|sea ?view)\b/.test(t) && /\b(client|lead|buyer)s?\b/.test(t)) return { kind: "byWaterfront" };
-  if (/\b(ready|completed|ready[- ]?to[- ]?move)\b/.test(t) && /\b(client|lead|buyer|propert)\w*\b/.test(t) && !/off.?plan/.test(t)) return { kind: "byReady", ready: "Ready" };
-  if (/\boff.?plan\b/.test(t) && /\b(client|lead|buyer|propert)\w*\b/.test(t)) return { kind: "byReady", ready: "Off-plan" };
+  const _leadish = /\b(client|lead|buyer)s?\b/.test(t) || !!LT;   // LT (buyer/seller/tenant) still confirms a lead filter after the type word is stripped
+  const _leadishP = /\b(client|lead|buyer|propert)\w*\b/.test(t) || !!LT;
+  if (PT && _leadish) return { kind: "byType", ptype: PT[1].charAt(0).toUpperCase() + PT[1].slice(1) };
+  if (/\b(waterfront|beachfront|sea ?view)\b/.test(t) && _leadish) return { kind: "byWaterfront" };
+  if (/\b(ready|completed|ready[- ]?to[- ]?move)\b/.test(t) && _leadishP && !/off.?plan/.test(t)) return { kind: "byReady", ready: "Ready" };
+  if (/\boff.?plan\b/.test(t) && _leadishP) return { kind: "byReady", ready: "Off-plan" };
 
   // ---- Admin-only report intents (Master Admin / Admin / Sales Manager) ----
   if (/(unassigned|not assigned)\s*leads?/.test(t)) return { kind: "unassigned", adminOnly: true };
