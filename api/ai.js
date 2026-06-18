@@ -212,6 +212,19 @@ const DEFAULT_SOURCES = [
   "arabianbusiness.com", "gulfnews.com", "khaleejtimes.com", "zawya.com", "thenationalnews.com",
 ];
 
+// Sources for a CLIENT LOOKUP (a named person, not a project). Public/professional/news only — no
+// people-finder, data-broker or social-stalking sites. Used ONLY when clientLookup is requested.
+const PEOPLE_SOURCES = [
+  "linkedin.com", "crunchbase.com", "bloomberg.com", "forbes.com", "ft.com", "reuters.com",
+  "wikipedia.org", "arabianbusiness.com", "gulfnews.com", "khaleejtimes.com", "thenationalnews.com",
+  "zawya.com", "gulfbusiness.com", "meed.com", "entrepreneur.com", "businessinsider.com",
+];
+const CLIENT_LOOKUP = `
+
+=== CLIENT LOOKUP (public professional background only) ===
+The agent wants a quick read on whether this named person is notable / high-profile so they can tailor their approach. Search the approved public sources for the name (add "Dubai", "UAE", or a business/industry term if it helps). Report ONLY public, professional information: current role, company, industry, public profile, board or leadership positions, notable press mentions, and any clear signal they are an executive, public figure or high-net-worth.
+HARD RULES: (1) Name matching is easily ambiguous — if you are not confident it is the SAME person, say so plainly ("this may not be your client — common name; verify before relying on this") and give a confidence level. (2) NEVER report private, sensitive or unverified details — home address, family, religion, health, personal finances beyond public business info, or rumours. (3) If nothing solid comes back, say so directly — do NOT invent or pad. (4) Keep it tight: who they appear to be, why it matters for the pitch, and one tailored next move. End with the standard Confidence and Source lines.`;
+
 // --- Server-side web-research config, cached 60s. Default ON with approved sources;
 // the database (if configured) can disable it or supply a custom whitelist. ---
 let _webCache = { at: 0, enabled: true, domains: DEFAULT_SOURCES };
@@ -273,11 +286,13 @@ export default async function handler(req, res) {
     if (total > 70000) return res.status(413).json({ error: "request too large" });
 
     let web = (mentor && MENTORS[mentor]) ? await getWebConfig() : { enabled: false, domains: [] };
+    const wantLookup = !!(req.body && req.body.clientLookup);
+    if (wantLookup && web.enabled) web = { ...web, domains: PEOPLE_SOURCES };   // person lookup → public/professional sources, not property sites
 
     // Build the system prompt. Mentor path enforces persona + safety server-side.
     let sys;
     if (mentor && MENTORS[mentor]) {
-      sys = SAFETY + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + DEVELOPER_CONTACTS + (ROLE_RULES[role] || ROLE_RULES.agent) + POWER_TOOLS + ((role === "agent" || !role) ? AGENT_DRIVE : "") + (web.enabled ? WEB_RESEARCH : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
+      sys = SAFETY + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + DEVELOPER_CONTACTS + (ROLE_RULES[role] || ROLE_RULES.agent) + POWER_TOOLS + ((role === "agent" || !role) ? AGENT_DRIVE : "") + (web.enabled ? WEB_RESEARCH : "") + (wantLookup && web.enabled ? CLIENT_LOOKUP : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
         (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — highest priority; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
         (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)");
     } else {

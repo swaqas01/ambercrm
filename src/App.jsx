@@ -2105,7 +2105,10 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
 
   return <div>
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-      <button onClick={() => go(backTo.screen)} style={{ ...miniBtn() }}>← {backTo.label}</button>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={() => go(backTo.screen)} style={{ ...miniBtn() }}>← {backTo.label}</button>
+        {lead && lead.client_name && <button onClick={() => { try { window.dispatchEvent(new CustomEvent("amber-open", { detail: { lead, lookup: true } })); } catch (e) {} }} title="Search public/professional sources for this client" style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}><Search size={13} /> Look up client online</button>}
+      </div>
       {sibs.length > 1 && sibIdx >= 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button onClick={() => prevLeadId && openLead(prevLeadId, sibs)} disabled={!prevLeadId} style={{ ...miniBtn(), opacity: prevLeadId ? 1 : 0.45, cursor: prevLeadId ? "pointer" : "default" }}>‹ Prev</button>
@@ -5310,6 +5313,7 @@ function AskAmber({ narrow, user, openLead }) {
   const [kb, setKb] = useState([]);                // Amber Homes knowledge (loaded once per session)
   const [revealedAi, setRevealedAi] = useState({}); // { [leadId]: true } — gate WhatsApp/Call behind Reveal in chat cards
   const [leadInfo, setLeadInfo] = useState(null);   // { name } when a specific lead is open in chat (for context-aware quick actions)
+  const [pendingLookup, setPendingLookup] = useState(null);   // client name to auto-look-up once a mentor is ready (from the lead-page button)
   const boxRef = useRef(null);
   useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight; }, [msgs, busy]);
 
@@ -5328,6 +5332,7 @@ function AskAmber({ narrow, user, openLead }) {
       if (!mentor) pick(MENTORS[0], d && d.lead);
       else if (d && d.lead) { try { setCtx(await buildCrmContext(user, d.lead)); setLeadInfo(d.lead.client_name ? { name: d.lead.client_name } : null); } catch (err) {} }
       if (d && d.prompt) setInput(d.prompt);
+      if (d && d.lookup && d.lead && d.lead.client_name) setPendingLookup(d.lead.client_name);
     };
     window.addEventListener("amber-open", onOpen);
     return () => window.removeEventListener("amber-open", onOpen);
@@ -5365,7 +5370,7 @@ function AskAmber({ narrow, user, openLead }) {
     send(q, true);
   };
   const scheduleFollowupFor = (ld) => { logLeadAction("schedule_followup", ld); if (openLead) { openLead(ld.id); setOpen(false); } };
-  const send = async (q, forceModel) => {
+  const send = async (q, forceModel, lookup) => {
     const text = (q != null ? q : input).trim();
     if (!text || busy || !mentor) return;
     setInput("");
@@ -5389,7 +5394,7 @@ function AskAmber({ narrow, user, openLead }) {
       return;
     }
     // CRM lead-list question → answer with actionable lead cards (RLS limits to permitted leads).
-    const li = forceModel ? null : leadIntent(text, user && user.role);
+    const li = (forceModel || lookup) ? null : leadIntent(text, user && user.role);
     if (li) { const lt = parseLeadType(text); if (lt) li.leadType = lt; }
     if (li) {
       setMsgs((m) => [...m, { role: "user", text }]); setBusy(true);
@@ -5407,7 +5412,7 @@ function AskAmber({ narrow, user, openLead }) {
     setMsgs(next); setBusy(true);
     const picked = pickKnowledge(text, kb, mentor.id); // relevant verified knowledge for THIS question
     try {
-      const res = await callAi({ mentor: mentor.id, crmContext: ctx, knowledge: picked.text, role: user && user.role,
+      const res = await callAi({ mentor: mentor.id, crmContext: ctx, knowledge: picked.text, role: user && user.role, clientLookup: lookup || undefined,
           messages: next.slice(-12).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })) });
       const data = await res.json();
       if (data.error) {
@@ -5434,6 +5439,10 @@ function AskAmber({ narrow, user, openLead }) {
       logAi({ user, mentor, question: text, status: "error" });
     } finally { setBusy(false); }
   };
+
+  const lookupQueryFor = (nm) => `Look up "${nm}" online and tell me if they appear to be a notable, senior or high-profile person I should tailor my approach to. Public professional background only — role, company, public profile, any high-net-worth or public-figure signal. If it's a common name and you're not sure it's the same person, say so and give a confidence level.`;
+  const runLookup = (nm) => { if (!nm || busy || !mentor) return; logLeadAction("client_lookup", { id: nm, name: nm }); send(lookupQueryFor(nm), true, true); };
+  useEffect(() => { if (pendingLookup && mentor && !busy) { const n = pendingLookup; setPendingLookup(null); runLookup(n); } }, [pendingLookup, mentor, busy]); // eslint-disable-line
 
   // floating launcher
   if (!open) return (
@@ -5537,6 +5546,7 @@ function AskAmber({ narrow, user, openLead }) {
         </div>
         {msgs.filter((m) => m.role === "user").length === 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 14px 10px", background: T.bone }}>
+            {leadInfo && <button key="lookup" onClick={() => runLookup(leadInfo.name)} style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold, borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 5 }}><Search size={11} /> Look up {leadInfo.name} online</button>}
             {(leadInfo ? [`What should I do next with ${leadInfo.name}?`, `Profile ${leadInfo.name}`] : []).concat(["Compare two projects", "Analyze a client chat", "Practice a tough client", "What's launching soon?", "Match my leads to hot deals", "What should I focus on today?", "Show me my hot leads", "Draft a WhatsApp follow-up"]).map((s) => (
               <button key={s} onClick={() => send(s)} style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold,
                 borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>{s}</button>))}
