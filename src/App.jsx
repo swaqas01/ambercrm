@@ -5743,6 +5743,8 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const [selected, setSelected] = useState({});            // { [leadId]: true }
   const [showBulk, setShowBulk] = useState(false);
   const [toast, setToast] = useState("");
+  const [renderLimit, setRenderLimit] = useState(120);     // cap DOM rows for speed; counts/filters/bulk still use the full set
+  useEffect(() => { setRenderLimit(120); }, [q, tab, agentFilter, typeFilter, sort, leads]);
 
   const load = async () => {
     setErr("");
@@ -5853,19 +5855,31 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     if (mode === "assign") { toName = agentName(agentId); shared = { assigned_agent: agentId, assigned_agent_name: toName, current_owner: agentId, assigned_at: nowIso, is_open: false, opened_reason: null, opened_by: null, opened_at: null }; }
     else if (mode === "open") { shared = { is_open: true, assigned_agent: null, assigned_agent_name: null, current_owner: null, opened_reason: reason || "Lead redistribution", opened_by: me?.id || null, opened_at: nowIso }; }
     else { shared = { is_open: false, assigned_agent: null, assigned_agent_name: null, current_owner: null }; }
+    const CHUNK = 150;   // keep each .in(id,...) URL well under proxy limits; a single 2700-id call fails
+    const chunks = (arr) => { const o = []; for (let i = 0; i < arr.length; i += CHUNK) o.push(arr.slice(i, i + CHUNK)); return o; };
     try {
-      const { error } = await supabase.from("leads").update(shared).in("id", ids);
-      if (error) throw error;
-      if (mode === "open") { for (const l of sel.filter((x) => !x.original_agent && x.assigned_agent)) { try { await supabase.from("leads").update({ original_agent: l.assigned_agent }).eq("id", l.id); } catch (e) {} } }
+      setToast("Working on " + ids.length + " lead" + (ids.length === 1 ? "" : "s") + "… please keep this open.");
+      // 1) main update — BATCHED. A single .in("id", [thousands]) builds a URL too long for the API and fails.
+      for (const part of chunks(ids)) {
+        const { error } = await supabase.from("leads").update(shared).in("id", part);
+        if (error) throw error;
+      }
+      // 2) preserve original_agent when opening previously-assigned leads — grouped by agent, batched (no per-row loop)
+      if (mode === "open") {
+        const byAgent = {};
+        sel.filter((x) => !x.original_agent && x.assigned_agent).forEach((l) => { (byAgent[l.assigned_agent] = byAgent[l.assigned_agent] || []).push(l.id); });
+        for (const ag of Object.keys(byAgent)) { for (const part of chunks(byAgent[ag])) { try { await supabase.from("leads").update({ original_agent: ag }).in("id", part); } catch (e) {} } }
+      }
+      // 3) ownership history — batched, best-effort
       try {
         const hist = sel.map((l) => ({ lead_id: l.id, from_agent: l.assigned_agent || null, to_agent: mode === "assign" ? agentId : null, reason: reason || (mode === "open" ? "Moved to Open Leads" : mode === "unassign" ? "Unassigned" : "Bulk reassignment"), changed_by: me?.id || null }));
-        if (hist.length) await supabase.from("lead_ownership_history").insert(hist);
+        for (const part of chunks(hist)) { await supabase.from("lead_ownership_history").insert(part); }
       } catch (e) {}
       if (mode === "assign" && agentId) { try { await supabase.from("notifications").insert({ user_id: agentId, kind: "lead_assigned", title: ids.length + (ids.length === 1 ? " lead assigned to you" : " leads assigned to you"), body: "You have " + ids.length + " newly assigned " + (ids.length === 1 ? "lead" : "leads") + (reason ? " — " + reason : ""), link_screen: "live" }); } catch (e) {} }
+      // 4) audit — summary always; per-row only for smaller batches (avoid thousands of audit rows on a big redistribution)
       try {
         await supabase.from("admin_audit").insert({ action: mode === "assign" ? "leads_bulk_assigned" : mode === "open" ? "leads_bulk_opened" : "leads_bulk_unassigned", performed_by: me?.id || null, new_value: { count: ids.length, to: toName, mode, reason: reason || null }, detail: ids.length + (mode === "assign" ? " → " + (toName || "agent") : mode === "open" ? " → Open Leads" : " → Unassigned") });
-        const per = sel.map((l) => ({ action: "lead_assigned", performed_by: me?.id || null, affected_user: mode === "assign" ? agentId : null, old_value: { agent: l.assigned_agent_name || null }, new_value: { mode, to: toName }, detail: (l.lead_code || l.client_name || "lead") }));
-        if (per.length) await supabase.from("admin_audit").insert(per);
+        if (sel.length <= 400) { const per = sel.map((l) => ({ action: "lead_assigned", performed_by: me?.id || null, affected_user: mode === "assign" ? agentId : null, old_value: { agent: l.assigned_agent_name || null }, new_value: { mode, to: toName }, detail: (l.lead_code || l.client_name || "lead") })); for (const part of chunks(per)) { await supabase.from("admin_audit").insert(part); } }
       } catch (e) {}
       setShowBulk(false); clearSel(); await load();
       flash(mode === "assign" ? ids.length + " leads assigned to " + (toName || "agent") : mode === "open" ? ids.length + " leads moved to Open Leads" : ids.length + " leads set to unassigned");
@@ -6001,7 +6015,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
               {isAgent ? <><span>Client</span><span>Project</span><span>Location</span><span>Budget</span><span>Next follow-up</span><span>Status</span><span>Contact</span></>
                        : <><span style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 3, background: T.bone, margin: "-10px 0", padding: "10px 0" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Client</span><span>Phone</span><span>Email</span><span>Agent</span><span>Type</span><span>Project</span><span>Area</span><span>Source</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
             </div>
-            {filtered.map((l, i) => (isAgent ? (
+            {filtered.slice(0, renderLimit).map((l, i) => (isAgent ? (
               <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5, cursor: "pointer" }}>
                 <div style={{ minWidth: 0 }}>
@@ -6054,6 +6068,13 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 <span style={{ fontSize: 11, color: T.faint }}>{createdByLabel(l)}</span>
               </div>
             )))}
+            {filtered.length > renderLimit && (
+              <div style={{ padding: "14px 16px", borderTop: `1px solid ${T.hairSoft}`, display: "flex", alignItems: "center", justifyContent: "center", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: T.muted }}>Showing {renderLimit} of {filtered.length} — narrow with search or filters for speed</span>
+                <button onClick={() => setRenderLimit((n) => n + 250)} style={{ ...miniBtn() }}>Show 250 more</button>
+                <button onClick={() => setRenderLimit(filtered.length)} style={{ ...miniBtn() }}>Show all {filtered.length}</button>
+              </div>
+            )}
           </div>
         </div>
       </div>
