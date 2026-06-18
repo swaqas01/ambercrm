@@ -1016,9 +1016,10 @@ function AdminDash({ go, user }) {
   useEffect(() => {
     (async () => {
       try {
+        const monthStartIso = new Date(dubaiToday().slice(0, 7) + "-01T00:00:00+04:00").toISOString();   // every activity metric is today/month/10-min, so only this month is needed
         const [lr, ar, pr] = await Promise.all([
           fetchAllRows("leads", "created_at,updated_at,status,temperature,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,source,next_followup,deal_value,commission_value").then((data) => ({ data })).catch((error) => ({ error })),
-          supabase.from("lead_activity").select("actor_id,action,created_at").order("created_at", { ascending: false }).limit(5000),
+          supabase.from("lead_activity").select("actor_id,action,created_at").gte("created_at", monthStartIso).order("created_at", { ascending: false }).limit(5000),
           supabase.from("profiles").select("id,full_name,role,active").limit(500),
         ]);
         if (lr.error) { setErr("load"); setLeads([]); return; }
@@ -1293,7 +1294,21 @@ function AgentDash({ go, user, openLead, onAvatar }) {
       const { data: { user: au } } = await supabase.auth.getUser();
       const uid = au?.id;
       const [lr, ar, dr] = await Promise.all([
-        fetchAllRows("leads", "id, client_name, phone, project, area, budget, status, temperature, next_followup, last_contacted, is_open, assigned_agent, current_owner, created_by, deal_value, commission_value, created_at, created_on").then((data) => ({ data })).catch((error) => ({ error })),
+        (async () => { try {
+          if (!uid) return { data: [] };
+          let out = [], from = 0;
+          for (;;) {
+            const { data, error } = await supabase.from("leads")
+              .select("id, client_name, phone, project, area, budget, status, temperature, next_followup, last_contacted, is_open, assigned_agent, current_owner, created_by, deal_value, commission_value, created_at, created_on")
+              .or(`assigned_agent.eq.${uid},current_owner.eq.${uid},created_by.eq.${uid}`)
+              .order("created_at", { ascending: false }).range(from, from + 999);
+            if (error) return { error };
+            out = out.concat(data || []);
+            if (!data || data.length < 1000) break;
+            from += 1000; if (from >= 50000) break;
+          }
+          return { data: out };
+        } catch (error) { return { error }; } })(),
         supabase.from("lead_activity").select("action, created_at").eq("actor_id", uid).order("created_at", { ascending: false }).limit(5000),
         supabase.from("deals").select("status, deal_type, property_value, gross_commission, net_commission, agent_commission, decided_at, created_at").eq("agent_id", uid).limit(1000),
       ]);
