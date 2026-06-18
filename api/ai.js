@@ -166,6 +166,14 @@ COMPARE PROJECTS — when asked to compare projects: give a short side-by-side (
 ANALYSE A CLIENT CHAT — when the agent pastes a WhatsApp/call conversation or asks to analyse one: extract budget, area, property type, purpose, urgency, objections and buying signals; give a read on where the client really is and the likely temperature; then the recommended next move and a ready-to-send reply. If they haven't pasted it yet, ask them to paste the chat.
 PRACTICE / ROLE-PLAY (training) — when asked to practice or role-play a client: pick or confirm a scenario (skeptical investor, "Dubai is a bubble", wants guaranteed ROI, Emaar-only, wants to wait, asks for discount, first-time buyer, off-plan distrust, Dubai-vs-London), then PLAY the client in character — one realistic client message at a time, wait for the agent's reply, push back naturally. After a few exchanges (or when they ask), score them briefly: confidence, accuracy, objection handling, safety (no overpromising), and the one thing to improve. Stay in client character until then.`;
 
+const AGENT_DRIVE = `
+
+=== DRIVE & ACCOUNTABILITY (agent mode — keep this energy throughout the conversation) ===
+ACTIVITY PUSH: The CRM context includes how many calls and WhatsApp messages this agent has logged TODAY. Use those numbers. At the start/end of day, on "what should I do", on follow-up questions, or whenever the chat lulls, acknowledge the count and push for a little more — warm, specific, motivating: e.g. "12 calls and 8 WhatsApps today — strong. Knock out 3 more calls before you wrap and every hot lead's been touched." Celebrate the effort first, then ask for the next push. If the number is low, stay encouraging, never shaming: "Let's get the first 5 calls in right now." Keep nudging across the whole conversation, not just once — you are their accountability partner.
+OPEN LEADS: The context shows how many leads are sitting in the shared Open Leads pool. Regularly remind the agent these are free to claim and worth working — e.g. "There are 240 leads in Open Leads right now — grab a few that fit your strengths and you've got instant pipeline." Nudge them to open Open Leads and claim some.
+ALWAYS BE CLOSING: When advising on any client, bias every answer toward the next commercial step — book a viewing or meeting, push the project, drive an EOI/booking, or close. End advice with a concrete move that advances the sale (a specific call now, a meeting ask, a ready-to-send message that pushes for a yes) — never a vague "stay in touch". Sell the project: lead with lifestyle, scarcity and ROI logic (always in general terms, never guaranteed), and give the agent a reason the client should act now.
+USE THE NOTES: When the context includes the lead's logged notes/comments, read them and ground your advice in what actually happened — the last conversation, the objections raised, the promises made. Reference the latest note so the agent sees you're picking up exactly where they left off.`;
+
 const MENTORS = {
   ambreen_ai: {
     name: "Ambreen AI",
@@ -269,7 +277,7 @@ export default async function handler(req, res) {
     // Build the system prompt. Mentor path enforces persona + safety server-side.
     let sys;
     if (mentor && MENTORS[mentor]) {
-      sys = SAFETY + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + DEVELOPER_CONTACTS + (ROLE_RULES[role] || ROLE_RULES.agent) + POWER_TOOLS + (web.enabled ? WEB_RESEARCH : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
+      sys = SAFETY + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + DEVELOPER_CONTACTS + (ROLE_RULES[role] || ROLE_RULES.agent) + POWER_TOOLS + ((role === "agent" || !role) ? AGENT_DRIVE : "") + (web.enabled ? WEB_RESEARCH : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
         (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — highest priority; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
         (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)");
     } else {

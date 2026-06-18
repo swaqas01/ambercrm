@@ -70,10 +70,32 @@ export async function buildCrmContext(user, lead) {
     const list = rows.slice(0, 40).map((l) => ({ name: l.client_name, area: l.area, project: l.project,
       status: l.is_open ? "Open" : l.status, temp: l.temperature, budget: l.budget, next: l.next_followup, purpose: l.purpose }));
     let ctx = "Today: " + today + "\nSummary: " + JSON.stringify(summary) + "\nLeads:\n" + JSON.stringify(list);
+    // Today's logged activity for THIS user (drives the motivational push) + open-pool size (cross-sell).
+    try {
+      const todayStart = new Date(today + "T00:00:00+04:00").toISOString();
+      if (au) {
+        const { data: acts } = await supabase.from("lead_activity").select("action").eq("actor_id", au.id).gte("created_at", todayStart);
+        const calls = (acts || []).filter((a) => a.action === "call").length;
+        const was = (acts || []).filter((a) => a.action === "whatsapp").length;
+        const reveals = (acts || []).filter((a) => a.action === "view_number" || a.action === "reveal_phone").length;
+        ctx += "\n\nTHIS AGENT'S ACTIVITY LOGGED TODAY (use to motivate — celebrate the effort, then push for a few more; never shame or guilt): " + JSON.stringify({ calls, whatsapp: was, contactsRevealed: reveals });
+      }
+      const { count: openCount } = await supabase.from("leads").select("id", { count: "exact", head: true }).eq("is_open", true);
+      if (typeof openCount === "number") ctx += "\nOPEN LEADS POOL (shared leads free to claim — encourage the agent to grab and work a few): " + openCount + " available right now.";
+    } catch (e) {}
     if (lead) ctx += "\n\nThe agent is currently viewing this specific lead (use this context for 'this client' questions):\n" +
       JSON.stringify({ name: lead.client_name, area: lead.area, project: lead.project, status: lead.status,
         temp: lead.temperature, budget: lead.budget, purpose: lead.purpose, ready_offplan: lead.ready_offplan,
         timeline: lead.timeline, next: lead.next_followup });
+    if (lead && lead.id) {
+      try {
+        const { data: cm } = await supabase.from("lead_comments")
+          .select("body, created_at, author:profiles!lead_comments_author_id_fkey(full_name)")
+          .eq("lead_id", lead.id).eq("deleted", false).order("created_at", { ascending: false }).limit(12);
+        if (cm && cm.length) ctx += "\n\nNOTES / COMMENTS logged on this lead (most recent first — READ THESE and ground your advice in what actually happened: last conversation, stated objections, promises made):\n" +
+          JSON.stringify(cm.map((c) => ({ by: c.author && c.author.full_name, when: (c.created_at || "").slice(0, 10), note: c.body })));
+      } catch (e) {}
+    }
     try {
       const { data: hd } = await supabase.from("hot_resale_deals")
         .select("project_name, area, property_type, bedrooms, price, why_hot, agent_name, client_suitability, whatsapp_pitch")
