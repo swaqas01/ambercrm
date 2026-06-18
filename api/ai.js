@@ -212,24 +212,20 @@ const DEFAULT_SOURCES = [
   "arabianbusiness.com", "gulfnews.com", "khaleejtimes.com", "zawya.com", "thenationalnews.com",
 ];
 
-// Sources for a CLIENT LOOKUP (a named person, not a project). Public/professional/news only — no
-// people-finder, data-broker or social-stalking sites. Used ONLY when clientLookup is requested.
-const PEOPLE_SOURCES = [
-  "linkedin.com", "crunchbase.com", "bloomberg.com", "forbes.com", "ft.com", "reuters.com",
-  "wikipedia.org", "arabianbusiness.com", "gulfnews.com", "khaleejtimes.com", "thenationalnews.com",
-  "zawya.com", "gulfbusiness.com", "meed.com", "entrepreneur.com", "businessinsider.com",
-];
+// A CLIENT LOOKUP (a named person, not a project) searches the OPEN web — like Google — because real
+// people surface on LinkedIn, company sites, social profiles, property portals and news, NOT only on a
+// short "approved sources" list. The public/professional + no-private-data guardrails live in the prompt.
 const CLIENT_LOOKUP = `
 
 === CLIENT LOOKUP (public professional background only) ===
-The agent gives a client NAME and wants to know who this person could be. Search the approved public sources and return a SHORT, SCANNABLE result — NOT an essay or a long write-up.
+The agent gives a client NAME and wants to know who this person could be. For THIS lookup, search the OPEN web broadly — the "approved sources only" rule above is for project/market research and does NOT apply here. Search the way Google would: check LinkedIn, company and personal sites, About.me, social profiles (Instagram, Facebook, X), property portals (Property Finder, Bayut), and news. Run a few searches and add a location/industry term when it helps disambiguate (most Amber clients sit in the Dubai / UAE real-estate and investment world, so bias toward that — e.g. add "Dubai", "UAE", "real estate", or "property"). Return a SHORT, SCANNABLE result — NOT an essay.
 
 FOLLOW THIS FORMAT EXACTLY:
 - One line on the name itself: its likely origin/background (e.g. "Name is typically Japanese", "German surname") — one line, nothing more.
-- Then a heading "Top matches I found:" followed by a NUMBERED list of up to 3–5 real, DISTINCT people who plausibly match this name online. For each candidate, ONE line: **Full name** — role, company or field, city/country, and one notable detail (public figure, executive, founder, HNWI, etc.).
+- Then a heading "Top matches I found:" followed by a NUMBERED list of up to 3–5 real, DISTINCT people who plausibly match this name online. For each candidate, ONE line: **Full name** — role, company or field, city/country, and one notable detail (public figure, executive, founder, HNWI, etc.). Number them 1, 2, 3 — never repeat "1".
 - Then one closing line: tell the agent these are public matches and to open each person's full profile (LinkedIn, company site, news) to confirm which one — if any — is their actual client, since identity can't be confirmed from a name alone.
 
-RULES: Give the BEST 3–5 candidates even when unsure — surfacing options to verify IS the job. Mark anyone clearly high-profile or high-net-worth. NEVER include private or sensitive details (home address, family, religion, health, personal finances, rumours). If you genuinely find no plausible public matches, say that in one line — do NOT invent people or pad. Stay concise throughout. End with the standard Confidence and Source lines.`;
+RULES: Give the BEST 3–5 distinct candidates even when unsure — surfacing options to verify IS the job. If a Dubai/UAE real-estate or business figure clearly matches, put them FIRST and mark them high-profile. NEVER include private or sensitive details (home address, family, religion, health, personal finances, rumours). If you genuinely find no plausible public matches, say that in one line — do NOT invent people or pad. Stay concise throughout. End with the standard Confidence and Source lines.`;
 
 // --- Server-side web-research config, cached 60s. Default ON with approved sources;
 // the database (if configured) can disable it or supply a custom whitelist. ---
@@ -293,7 +289,7 @@ export default async function handler(req, res) {
 
     let web = (mentor && MENTORS[mentor]) ? await getWebConfig() : { enabled: false, domains: [] };
     const wantLookup = !!(req.body && req.body.clientLookup);
-    if (wantLookup && web.enabled) web = { ...web, domains: PEOPLE_SOURCES };   // person lookup → public/professional sources, not property sites
+    if (wantLookup && web.enabled) web = { ...web, openWeb: true };   // person lookup → search the open web (like Google), not a restricted source list
 
     // Build the system prompt. Mentor path enforces persona + safety server-side.
     let sys;
@@ -313,7 +309,18 @@ export default async function handler(req, res) {
       messages: messages.slice(-12),
     };
     if (web.enabled) {
-      body.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4, allowed_domains: web.domains }];
+      if (web.openWeb) {
+        // Person lookup: search the whole web like Google (no domain filter), with a Dubai/UAE
+        // location bias so the people Amber actually deals with rank first. Extra search allowed
+        // to let the model refine/disambiguate a common name.
+        body.tools = [{
+          type: "web_search_20250305", name: "web_search", max_uses: 5,
+          user_location: { type: "approximate", country: "AE", city: "Dubai", timezone: "Asia/Dubai" },
+        }];
+      } else {
+        // Project / market research: stay on Amber's approved source list.
+        body.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4, allowed_domains: web.domains }];
+      }
     }
 
     let r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body) });
