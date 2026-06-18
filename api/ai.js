@@ -227,6 +227,20 @@ FOLLOW THIS FORMAT EXACTLY:
 
 RULES: Give the BEST 3–5 distinct candidates even when unsure — surfacing options to verify IS the job. If a Dubai/UAE real-estate or business figure clearly matches, put them FIRST and mark them high-profile. NEVER include private or sensitive details (home address, family, religion, health, personal finances, rumours). If you genuinely find no plausible public matches, say that in one line — do NOT invent people or pad. Stay concise throughout. End with the standard Confidence and Source lines.`;
 
+const LANG = `
+
+=== LANGUAGE ===
+Agents and clients in Dubai speak many languages. If the user writes in Arabic, Urdu, Hindi, Russian, Farsi, Chinese, French or any other language, understand it fully and reply in THAT same language, naturally — never force English on someone who didn't use it. Default to English only when the user writes in English. Keep key real-estate and CRM terms clear in either language.`;
+
+const FEWSHOT = `
+
+=== HOW TO ANSWER (worked examples — match this directness and usefulness; never pad, never lecture) ===
+Agent: "client ghosting after i sent payment plan wht do"
+Ambreen: Silence after a payment plan is usually sticker-shock or quiet comparison-shopping — not a dead lead. Today, send ONE value-add WhatsApp, not a chase: "Hi [name], quick one — I can hold this payment plan and the launch incentive till [date]; after that pricing moves. Want me to lock it?" No reply in 48h, call once on a fresh angle (a unit/floor that fits them better). Two touches, then give it air. Want me to draft that WhatsApp?
+
+Agent: "is sobha worth it for an investor"
+Ambreen: Sobha's investor case is build quality plus Sobha Hartland's location — that's real. The honest counter: premium entry price means rental yield is tighter than cheaper communities, so the play is capital appreciation and handover resale, not cash-flow. Pitch it as a quality/appreciation hold, and check the specific unit against recent comparables before promising upside. Want the latest on a specific Sobha project?`;
+
 // --- Server-side web-research config, cached 60s. Default ON with approved sources;
 // the database (if configured) can disable it or supply a custom whitelist. ---
 let _webCache = { at: 0, enabled: true, domains: DEFAULT_SOURCES };
@@ -292,11 +306,24 @@ export default async function handler(req, res) {
     if (wantLookup && web.enabled) web = { ...web, openWeb: true };   // person lookup → search the open web (like Google), not a restricted source list
 
     // Build the system prompt. Mentor path enforces persona + safety server-side.
-    let sys;
+    let sys = null;        // legacy string path
+    let sysBlocks = null;  // mentor path: [cached static prefix, dynamic per-request tail]
     if (mentor && MENTORS[mentor]) {
-      sys = SAFETY + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + DEVELOPER_CONTACTS + (ROLE_RULES[role] || ROLE_RULES.agent) + POWER_TOOLS + ((role === "agent" || !role) ? AGENT_DRIVE : "") + (web.enabled ? WEB_RESEARCH : "") + (wantLookup && web.enabled ? CLIENT_LOOKUP : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt +
+      const isAgentRole = (role === "agent" || !role);
+      const staticPrefix = SAFETY + LANG + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + DEVELOPER_CONTACTS +
+        (ROLE_RULES[role] || ROLE_RULES.agent) + POWER_TOOLS + (isAgentRole ? AGENT_DRIVE : "") +
+        (web.enabled ? WEB_RESEARCH : "") + (wantLookup && web.enabled ? CLIENT_LOOKUP : "") +
+        (isAgentRole ? FEWSHOT : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt;
+      const dynamicTail =
         (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — highest priority; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
         (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)");
+      // Prompt caching: the static prefix (instructions + persona + examples) is byte-identical across
+      // calls for a given role, so cache it; only the per-request knowledge + CRM tail stays uncached.
+      // This cuts input cost/latency dramatically once warm and lets the prompt stay rich.
+      sysBlocks = [
+        { type: "text", text: staticPrefix, cache_control: { type: "ephemeral" } },
+        { type: "text", text: dynamicTail },
+      ];
     } else {
       sys = String(system || "").slice(0, 30000); // legacy path (e.g. lead extraction)
     }
@@ -305,7 +332,7 @@ export default async function handler(req, res) {
     const body = {
       model: MODEL,
       max_tokens: web.enabled ? 1100 : 700,
-      system: sys,
+      system: sysBlocks || sys,
       messages: messages.slice(-12),
     };
     if (web.enabled) {

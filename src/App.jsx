@@ -9,7 +9,7 @@ import {
   Flame, Clock, MapPin, Eye, EyeOff, Lock, AlertTriangle, CheckCircle2,
   TrendingUp, Users, Wallet, Star, Calendar, Filter, Plus, ArrowUpRight,
   ArrowDownRight, CircleDot, Ban, Download, Globe, Smartphone, Sun, Moon, Unlock, Send, Bot, Fingerprint, KeyRound, LogOut,
-  Database, RefreshCw, Upload, Sparkle, Zap, ShieldCheck, Camera, Target, PhoneCall, BedDouble, Home, Share2
+  Database, RefreshCw, Upload, Sparkle, Zap, ShieldCheck, Camera, Target, PhoneCall, BedDouble, Home, Share2, ThumbsUp, ThumbsDown
 } from "lucide-react";
 
 /* ================================ TOKENS ================================= */
@@ -5314,6 +5314,7 @@ function AskAmber({ narrow, user, openLead }) {
   const [revealedAi, setRevealedAi] = useState({}); // { [leadId]: true } — gate WhatsApp/Call behind Reveal in chat cards
   const [leadInfo, setLeadInfo] = useState(null);   // { name } when a specific lead is open in chat (for context-aware quick actions)
   const [pendingLookup, setPendingLookup] = useState(null);   // client name to auto-look-up once a mentor is ready (from the lead-page button)
+  const [fb, setFb] = useState({});                 // { [msgIndex]: 'up' | 'down' } — answer-quality feedback
   const boxRef = useRef(null);
   useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight; }, [msgs, busy]);
 
@@ -5339,6 +5340,23 @@ function AskAmber({ narrow, user, openLead }) {
   }, [mentor]);
 
   const logLeadAction = (action, ld) => { try { logAi({ user, mentor, question: "[lead action: " + action + "] " + (ld.name || ld.id), responseSum: "lead_action:" + action, category: "crm", status: "success" }); } catch (e) {} };
+  // Answer-quality feedback (👍/👎) → ai_feedback table. Append-only; powers the weekly review of what works.
+  const sendFeedback = async (i, rating) => {
+    if (fb[i]) return;
+    setFb((p) => ({ ...p, [i]: rating }));
+    try {
+      const q = (i > 0 && msgs[i - 1] && msgs[i - 1].role === "user") ? msgs[i - 1].text : "";
+      const a = (msgs[i] && msgs[i].text) || "";
+      const { data: { user: au } } = await supabase.auth.getUser();
+      await supabase.from("ai_feedback").insert({
+        user_id: au ? au.id : null,
+        mentor: mentor ? mentor.id : null,
+        rating,
+        question: String(q).slice(0, 2000),
+        response_summary: String(a).slice(0, 4000),
+      });
+    } catch (e) { /* feedback is best-effort; never block the chat */ }
+  };
   // Reveal a chat-card contact: log server-side (reveal_contact RPC, same as Lead Detail) then unlock WhatsApp/Call.
   const revealAi = async (ld) => {
     setRevealedAi((r) => ({ ...r, [ld.id]: true }));
@@ -5506,6 +5524,16 @@ function AskAmber({ narrow, user, openLead }) {
                 borderRadius: 13, padding: "9px 12px", fontSize: 12.8, lineHeight: 1.55, whiteSpace: m.role === "user" ? "pre-wrap" : "normal",
                 overflowWrap: "anywhere", wordBreak: "break-word",
                 boxShadow: m.role === "user" ? "none" : T.shadow }}>{m.role === "user" ? m.text : <RichText text={m.text} />}</div>
+              {m.role !== "user" && m.text && i > 0 && (
+                <div style={{ display: "flex", gap: 6, marginTop: 4, marginLeft: 2 }}>
+                  {!fb[i] ? (<>
+                    <button onClick={() => sendFeedback(i, "up")} title="Helpful" style={{ background: "none", border: `1px solid ${T.hair}`, borderRadius: 7, padding: "3px 7px", cursor: "pointer", color: T.muted, display: "inline-flex", alignItems: "center" }}><ThumbsUp size={12} /></button>
+                    <button onClick={() => sendFeedback(i, "down")} title="Not helpful" style={{ background: "none", border: `1px solid ${T.hair}`, borderRadius: 7, padding: "3px 7px", cursor: "pointer", color: T.muted, display: "inline-flex", alignItems: "center" }}><ThumbsDown size={12} /></button>
+                  </>) : (
+                    <span style={{ fontSize: 10.5, color: T.faint }}>{fb[i] === "up" ? "Thanks for the feedback" : "Thanks — noted for improvement"}</span>
+                  )}
+                </div>
+              )}
               {m.leads && m.leads.length > 0 && (
                 <div style={{ width: "100%", display: "grid", gap: 8, marginTop: 8 }}>
                   {m.leads.map((ld) => {

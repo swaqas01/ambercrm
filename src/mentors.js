@@ -89,6 +89,30 @@ export async function buildCrmContext(user, lead) {
         timeline: lead.timeline, next: lead.next_followup });
     if (lead && lead.id) {
       try {
+        // Timing / lifecycle signals for THIS lead, read fresh from the DB (RLS-bound).
+        const { data: lrows } = await supabase.from("leads")
+          .select("created_at, created_on, last_contacted, next_followup, source, status, temperature")
+          .eq("id", lead.id).limit(1);
+        const lr = lrows && lrows[0];
+        if (lr) {
+          const ageOf = (d) => { if (!d) return null; const ms = Date.now() - new Date(d).getTime(); return ms > 0 ? Math.floor(ms / 86400000) : 0; };
+          let fu = "none set";
+          if (lr.next_followup) {
+            const od = Math.floor((new Date(today).getTime() - new Date(lr.next_followup).getTime()) / 86400000);
+            fu = od > 0 ? (od + " day(s) OVERDUE") : (od === 0 ? "due TODAY" : ("scheduled in " + (-od) + " day(s)"));
+          }
+          ctx += "\n\nTIMING ON THIS LEAD (use it — a stale lead needs re-engagement, an overdue follow-up needs action NOW): " +
+            JSON.stringify({ leadAgeDays: ageOf(lr.created_at || lr.created_on), daysSinceLastContact: ageOf(lr.last_contacted), followUp: fu, source: lr.source || "—" });
+        }
+        // How much this lead has actually been worked (engagement signal).
+        const { data: la } = await supabase.from("lead_activity").select("action, created_at").eq("lead_id", lead.id).order("created_at", { ascending: false }).limit(200);
+        if (la && la.length) {
+          const c = la.filter((a) => a.action === "call").length;
+          const w = la.filter((a) => a.action === "whatsapp").length;
+          const v = la.filter((a) => a.action === "view_number" || a.action === "reveal_phone").length;
+          ctx += "\nENGAGEMENT ON THIS LEAD (touches logged so far — if this is low, the lead is under-worked; if high with no progress, change the approach): " +
+            JSON.stringify({ calls: c, whatsapp: w, contactReveals: v, lastTouch: (la[0].created_at || "").slice(0, 10) });
+        }
         const { data: cm } = await supabase.from("lead_comments")
           .select("body, created_at, author:profiles!lead_comments_author_id_fkey(full_name)")
           .eq("lead_id", lead.id).eq("deleted", false).order("created_at", { ascending: false }).limit(12);
