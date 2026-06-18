@@ -299,16 +299,36 @@ async function callAi(body) {
 // that. This pages with .range() until every row is loaded. Used by the leads list, pipeline and
 // dashboards so growing past 1000 leads never hides older records.
 async function fetchAllRows(table, columns = "*", orderCol = "created_at", ascending = false) {
-  let out = [], from = 0;
-  for (;;) {
+  const PAGE = 1000;
+  const fetchPage = async (from) => {
     let q = supabase.from(table).select(columns);
     if (orderCol) q = q.order(orderCol, { ascending });
-    const { data, error } = await q.range(from, from + 999);
-    if (error) { if (from === 0) throw error; break; }
-    out = out.concat(data || []);
-    if (!data || data.length < 1000) break;
-    from += 1000;
-    if (from >= 200000) break; // safety cap
+    const { data, error } = await q.range(from, from + PAGE - 1);
+    if (error) throw error;
+    return data || [];
+  };
+  // Get the row count first (head request, no rows) so all pages can be fetched IN PARALLEL instead of
+  // one-after-another — this is the main load-time win when there are several thousand rows.
+  let total = null;
+  try {
+    const { count, error } = await supabase.from(table).select("id", { count: "exact", head: true });
+    if (!error && typeof count === "number") total = count;
+  } catch (e) {}
+  if (total !== null) {
+    if (total === 0) return [];
+    const offsets = [];
+    for (let from = 0; from < total && from < 200000; from += PAGE) offsets.push(from);
+    const pages = await Promise.all(offsets.map((o) => fetchPage(o)));
+    return pages.flat();
+  }
+  // Fallback (count unavailable): sequential paging.
+  let out = [], from = 0;
+  for (;;) {
+    const data = await fetchPage(from);
+    out = out.concat(data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+    if (from >= 200000) break;
   }
   return out;
 }
@@ -5751,7 +5771,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     const { data: { user: au } } = await supabase.auth.getUser();
     setMe(au);
     let data;
-    try { data = await fetchAllRows("leads", "*", "created_at", false); }
+    try { data = await fetchAllRows("leads", "id,lead_code,client_name,phone,whatsapp,email,lead_type,project,area,budget,purpose,property_type,status,temperature,source,next_followup,last_contacted,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,original_agent,created_at,created_on,deleted", "created_at", false); }
     catch (error) { try { console.error("[Leads load failed]", { page: "leads", user: au && au.id, email: au && au.email, isAgent: !!isAgent, code: error.code, message: error.message, details: error.details, hint: error.hint, at: new Date().toISOString() }); } catch (e) {} setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); return; }
     let rows = data || [];
     // Agents: show only leads actually assigned to or created by them (RLS also returns the open pool — exclude that here).
