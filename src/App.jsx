@@ -652,8 +652,9 @@ export default function App() {
   const [filter, setFilter] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [leadFrom, setLeadFrom] = useState(null);  // screen a lead was opened from (drives the Back button)
+  const [leadSiblings, setLeadSiblings] = useState([]);  // ordered lead IDs of the list it was opened from (drives Prev/Next)
   const go = (s, f = null) => { setScreen(s); setFilter(f); setNavOpen(false); };
-  const openLead = (id) => { setLeadFrom((prev) => (screen === "lead" ? prev : screen)); setDetailId(id); setScreen("lead"); setFilter(null); setNavOpen(false); };
+  const openLead = (id, siblings) => { setLeadFrom((prev) => (screen === "lead" ? prev : screen)); setDetailId(id); setLeadSiblings(Array.isArray(siblings) ? siblings : []); setScreen("lead"); setFilter(null); setNavOpen(false); };
   const [dealDetailId, setDealDetailId] = useState(null);
   const openDeal = (id) => { setDealDetailId(id); setScreen("dealdetail"); setNavOpen(false); };
   // role guard — agents may only open their own surfaces
@@ -668,7 +669,7 @@ export default function App() {
     if (user && screen !== "lead" && screen !== "dealdetail") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <Performance go={go} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -1756,7 +1757,12 @@ function FocusList({ title, items, go, onClose }) {
 }
 
 /* ============================= 3 LEAD DETAIL ============================= */
-function LeadDetail({ leadId, user, go, openLead, from }) {
+function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
+  // Prev/Next step through the list the lead was opened from (the current page of that list).
+  const sibs = Array.isArray(siblings) ? siblings : [];
+  const sibIdx = sibs.indexOf(leadId);
+  const prevLeadId = sibIdx > 0 ? sibs[sibIdx - 1] : null;
+  const nextLeadId = (sibIdx >= 0 && sibIdx < sibs.length - 1) ? sibs[sibIdx + 1] : null;
   // Context-aware Back target/label based on where the lead was opened from.
   const backTo = from === "open" ? { screen: "open", label: "Back to Open Leads" }
     : from === "assign" ? { screen: "assign", label: "Back to Lead Assignment" }
@@ -2098,7 +2104,16 @@ function LeadDetail({ leadId, user, go, openLead, from }) {
     <Ic size={17} /> {label}</button>;
 
   return <div>
-    <button onClick={() => go(backTo.screen)} style={{ ...miniBtn(), marginBottom: 12 }}>← {backTo.label}</button>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+      <button onClick={() => go(backTo.screen)} style={{ ...miniBtn() }}>← {backTo.label}</button>
+      {sibs.length > 1 && sibIdx >= 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => prevLeadId && openLead(prevLeadId, sibs)} disabled={!prevLeadId} style={{ ...miniBtn(), opacity: prevLeadId ? 1 : 0.45, cursor: prevLeadId ? "pointer" : "default" }}>‹ Prev</button>
+          <span style={{ fontSize: 12, color: T.muted, whiteSpace: "nowrap", fontWeight: 600 }}>{sibIdx + 1} of {sibs.length}</span>
+          <button onClick={() => nextLeadId && openLead(nextLeadId, sibs)} disabled={!nextLeadId} style={{ ...miniBtn(), opacity: nextLeadId ? 1 : 0.45, cursor: nextLeadId ? "pointer" : "default" }}>Next ›</button>
+        </div>
+      )}
+    </div>
 
     {/* header */}
     <div style={{ ...card, padding: "18px 20px", background: T.hero, border: "none", boxShadow: T.shadowLg }}>
@@ -5759,36 +5774,42 @@ function LoginFlow({ onLogin }) {
   );
 }
 
+// Remembers each leads view's filter/search/tab/sort/page across open-lead → back (resets on full reload).
+const LEADS_VIEW_CACHE = {};
 function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, heading = null, sub = null }) {
   const isAgent = user && user.role === "agent";
   const isMaster = user && user.role === "master_admin";
   const isOpsAdmin = user && user.role === "admin";   // operational Admin: may only see unassigned/open leads (for assignment)
+  const viewKey = initialAgentFilter || "live";
+  const _vc = LEADS_VIEW_CACHE[viewKey] || {};
   const [leads, setLeads] = useState(null);   // null = loading; holds ONLY the current page
   const [err, setErr] = useState("");
-  const [q, setQ] = useState("");
-  const [dq, setDq] = useState("");           // debounced search term (drives the DB query)
-  const [tab, setTab] = useState("all");
+  const [q, setQ] = useState(_vc.q || "");
+  const [dq, setDq] = useState(_vc.dq || "");           // debounced search term (drives the DB query)
+  const [tab, setTab] = useState(_vc.tab || "all");
   const [revealed, setRevealed] = useState({});
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [me, setMe] = useState(null);
-  const [sort, setSort] = useState("newest");
-  const [agentFilter, setAgentFilter] = useState(initialAgentFilter);   // null | 'unassigned' | 'open' | <agentId>
-  const [typeFilter, setTypeFilter] = useState("");                     // "" | Buyer | Seller | Tenant | Agent
+  const [sort, setSort] = useState(_vc.sort || "newest");
+  const [agentFilter, setAgentFilter] = useState(_vc.agentFilter !== undefined ? _vc.agentFilter : initialAgentFilter);   // null | 'unassigned' | 'open' | <agentId>
+  const [typeFilter, setTypeFilter] = useState(_vc.typeFilter || "");                     // "" | Buyer | Seller | Tenant | Agent
   const [agents, setAgents] = useState([]);
   const [selected, setSelected] = useState({});            // { [leadId]: true } — current-page selection
   const [selectAllMatching, setSelectAllMatching] = useState(false);    // bulk over EVERY matching lead, not just the page
   const [showBulk, setShowBulk] = useState(false);
   const [toast, setToast] = useState("");
-  const [page, setPage] = useState(0);        // 0-based page (server-side pagination)
+  const [page, setPage] = useState(_vc.page || 0);        // 0-based page (server-side pagination)
   const [total, setTotal] = useState(0);      // total leads matching the current view
   const [tabCounts, setTabCounts] = useState({});
   const [loading, setLoading] = useState(true);
   const PAGE = 100;
   const LEAD_COLS = "id,lead_code,client_name,phone,whatsapp,email,lead_type,project,area,budget,purpose,property_type,status,temperature,source,next_followup,last_contacted,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,original_agent,created_at,created_on,deleted";
+  const firstRun = useRef(true);
   useEffect(() => { const id = setTimeout(() => setDq(q), 350); return () => clearTimeout(id); }, [q]);              // debounce search 350ms
-  useEffect(() => { setPage(0); setSelected({}); setSelectAllMatching(false); }, [dq, tab, agentFilter, typeFilter, sort]); // view change → page 1, clear selection
+  useEffect(() => { if (firstRun.current) { firstRun.current = false; return; } setPage(0); setSelected({}); setSelectAllMatching(false); }, [dq, tab, agentFilter, typeFilter, sort]); // real view change → page 1, clear selection (skip on mount/restore)
   useEffect(() => { setSelected({}); }, [page]);   // page-specific selection clears when paging
+  useEffect(() => { LEADS_VIEW_CACHE[viewKey] = { q, dq, tab, sort, agentFilter, typeFilter, page }; }, [viewKey, q, dq, tab, sort, agentFilter, typeFilter, page]); // remember filters across open-lead → back
 
   // Build the leads query with EVERY scope/permission rule + active filters applied AT THE DATABASE.
   // RLS independently enforces the same boundaries, so an agent can never receive another agent's leads.
@@ -6108,7 +6129,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                        : <><span style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 3, background: T.bone, margin: "-10px 0", padding: "10px 0" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Client</span><span>Phone</span><span>Email</span><span>Agent</span><span>Type</span><span>Project</span><span>Area</span><span>Source</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
             </div>
             {filtered.map((l, i) => (isAgent ? (
-              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
+              <div key={l.id} onClick={() => openLead && openLead(l.id, filtered.map((x) => x.id))} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5, cursor: "pointer" }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{l.client_name}
@@ -6141,7 +6162,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 </span>
               </div>
             ) : (
-              <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
+              <div key={l.id} onClick={() => openLead && openLead(l.id, filtered.map((x) => x.id))} style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12, cursor: "pointer", background: selected[l.id] ? T.goldSoft : "transparent" }}>
                 <span onClick={(e) => e.stopPropagation()} style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 2, background: selected[l.id] ? T.goldSoft : T.paper, margin: "-12px 0", padding: "12px 0" }}><input type="checkbox" checked={!!selected[l.id]} onChange={() => toggleSel(l.id)} style={{ cursor: "pointer", width: 14, height: 14 }} /></span>
                 <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 600, lineHeight: 1.3 }}>{fmtDubai(l.created_at || l.created_on)}</span>
