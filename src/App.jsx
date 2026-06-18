@@ -5748,9 +5748,10 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const isAgent = user && user.role === "agent";
   const isMaster = user && user.role === "master_admin";
   const isOpsAdmin = user && user.role === "admin";   // operational Admin: may only see unassigned/open leads (for assignment)
-  const [leads, setLeads] = useState(null);   // null = loading
+  const [leads, setLeads] = useState(null);   // null = loading; holds ONLY the current page
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
+  const [dq, setDq] = useState("");           // debounced search term (drives the DB query)
   const [tab, setTab] = useState("all");
   const [revealed, setRevealed] = useState({});
   const [showAdd, setShowAdd] = useState(false);
@@ -5760,30 +5761,95 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const [agentFilter, setAgentFilter] = useState(initialAgentFilter);   // null | 'unassigned' | 'open' | <agentId>
   const [typeFilter, setTypeFilter] = useState("");                     // "" | Buyer | Seller | Tenant | Agent
   const [agents, setAgents] = useState([]);
-  const [selected, setSelected] = useState({});            // { [leadId]: true }
+  const [selected, setSelected] = useState({});            // { [leadId]: true } — current-page selection
+  const [selectAllMatching, setSelectAllMatching] = useState(false);    // bulk over EVERY matching lead, not just the page
   const [showBulk, setShowBulk] = useState(false);
   const [toast, setToast] = useState("");
-  const [renderLimit, setRenderLimit] = useState(120);     // cap DOM rows for speed; counts/filters/bulk still use the full set
-  useEffect(() => { setRenderLimit(120); }, [q, tab, agentFilter, typeFilter, sort, leads]);
+  const [page, setPage] = useState(0);        // 0-based page (server-side pagination)
+  const [total, setTotal] = useState(0);      // total leads matching the current view
+  const [tabCounts, setTabCounts] = useState({});
+  const [loading, setLoading] = useState(true);
+  const PAGE = 100;
+  const LEAD_COLS = "id,lead_code,client_name,phone,whatsapp,email,lead_type,project,area,budget,purpose,property_type,status,temperature,source,next_followup,last_contacted,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,original_agent,created_at,created_on,deleted";
+  useEffect(() => { const id = setTimeout(() => setDq(q), 350); return () => clearTimeout(id); }, [q]);              // debounce search 350ms
+  useEffect(() => { setPage(0); setSelected({}); setSelectAllMatching(false); }, [dq, tab, agentFilter, typeFilter, sort]); // view change → page 1, clear selection
+  useEffect(() => { setSelected({}); }, [page]);   // page-specific selection clears when paging
 
+  // Build the leads query with EVERY scope/permission rule + active filters applied AT THE DATABASE.
+  // RLS independently enforces the same boundaries, so an agent can never receive another agent's leads.
+  const applyFilters = (query, tabVal, uid) => {
+    const tday = dubaiToday();
+    const NOT_CLOSED = (qq) => qq.neq("status", "Closed Won").neq("status", "Closed Lost");
+    // permission scope
+    if (isAgent) {
+      if (initialAgentFilter === "open") query = query.eq("is_open", true);
+      else if (uid) query = query.or(`assigned_agent.eq.${uid},current_owner.eq.${uid},created_by.eq.${uid}`);
+      else query = query.eq("id", "00000000-0000-0000-0000-000000000000");   // no session → match nothing
+    } else if (isOpsAdmin) {
+      query = query.or("is_open.eq.true,assigned_agent.is.null");            // ops-admin: unassigned + open only
+    }
+    // agent dropdown (non-agent)
+    if (!isAgent && agentFilter) {
+      if (agentFilter === "unassigned") query = query.is("assigned_agent", null).eq("is_open", false);
+      else if (agentFilter === "open") query = query.eq("is_open", true);
+      else query = query.eq("assigned_agent", agentFilter);
+    }
+    // entry filter prop (dashboard drill-downs)
+    if (filter) {
+      const v = filter.value;
+      if (filter.type === "unassigned") query = query.is("assigned_agent_name", null);
+      else if (filter.type === "temp") query = query.eq("temperature", v);
+      else if (filter.type === "status") query = query.eq("status", v);
+      else if (filter.type === "open") query = query.eq("is_open", true);
+      else if (filter.type === "source") query = (v === "Unknown") ? query.or("source.is.null,source.eq.Unknown") : query.eq("source", v);
+      else if (filter.type === "agent") query = (v === "Unassigned") ? query.is("assigned_agent_name", null) : query.eq("assigned_agent_name", v);
+      else if (filter.type === "hot") query = query.in("temperature", ["Hot", "Very Hot"]);
+      else if (filter.type === "due") query = NOT_CLOSED(query.not("next_followup", "is", null).lte("next_followup", tday));
+      else if (filter.type === "overdue") query = NOT_CLOSED(query.not("next_followup", "is", null).lt("next_followup", tday));
+    }
+    // lead type (Buyer also matches legacy null type, to mirror the old default)
+    if (typeFilter) query = (typeFilter === "Buyer") ? query.or("lead_type.eq.Buyer,lead_type.is.null") : query.eq("lead_type", typeFilter);
+    // search (server-side ilike; sanitized so the or-filter can't be broken)
+    if (dq.trim()) { const s = dq.trim().replace(/[,()%*"]/g, " ").replace(/\s+/g, " ").trim();
+      if (s) query = query.or(`client_name.ilike.%${s}%,project.ilike.%${s}%,area.ilike.%${s}%,assigned_agent_name.ilike.%${s}%,lead_code.ilike.%${s}%,status.ilike.%${s}%`); }
+    // tab
+    if (tabVal && tabVal !== "all") {
+      if (tabVal === "Follow-up due") query = NOT_CLOSED(query.not("next_followup", "is", null).lte("next_followup", tday));
+      else if (tabVal === "Overdue") query = NOT_CLOSED(query.not("next_followup", "is", null).lt("next_followup", tday));
+      else if (tabVal === "Hot" || tabVal === "Very Hot" || tabVal === "Warm" || tabVal === "Cold") query = query.eq("temperature", tabVal);
+      else query = query.eq("status", tabVal);
+    }
+    return query;
+  };
+  const SORT_COL = { newest: ["created_at", false], oldest: ["created_at", true], agent: ["assigned_agent_name", true], status: ["status", true], temp: ["temperature", true], source: ["source", true], project: ["project", true], area: ["area", true], lastcontact: ["last_contacted", false], nextfu: ["next_followup", true] };
   const load = async () => {
-    setErr("");
-    const { data: { user: au } } = await supabase.auth.getUser();
-    setMe(au);
-    let data;
-    try { data = await fetchAllRows("leads", "id,lead_code,client_name,phone,whatsapp,email,lead_type,project,area,budget,purpose,property_type,status,temperature,source,next_followup,last_contacted,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,original_agent,created_at,created_on,deleted", "created_at", false); }
-    catch (error) { try { console.error("[Leads load failed]", { page: "leads", user: au && au.id, email: au && au.email, isAgent: !!isAgent, code: error.code, message: error.message, details: error.details, hint: error.hint, at: new Date().toISOString() }); } catch (e) {} setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); return; }
-    let rows = data || [];
-    // Agents: show only leads actually assigned to or created by them (RLS also returns the open pool — exclude that here).
-    if (isAgent && au) rows = (initialAgentFilter === "open")
-      ? rows.filter((l) => l.is_open === true)
-      : rows.filter((l) => l.assigned_agent === au.id || l.current_owner === au.id || l.created_by === au.id);
-    setLeads(rows);
-    if (!isAgent) {
+    setLoading(true); setErr("");
+    let au = me;
+    if (!au) { try { const r = await supabase.auth.getUser(); au = r.data?.user; setMe(au); } catch (e) {} }
+    const uid = au?.id;
+    try {
+      const sc = SORT_COL[sort] || SORT_COL.newest;
+      const { data: rows, error } = await applyFilters(supabase.from("leads").select(LEAD_COLS), tab, uid)
+        .order(sc[0], { ascending: sc[1], nullsFirst: false }).range(page * PAGE, page * PAGE + PAGE - 1);
+      if (error) throw error;
+      setLeads(rows || []);
+      const tc = await applyFilters(supabase.from("leads").select("id", { count: "exact", head: true }), tab, uid);
+      setTotal(typeof tc.count === "number" ? tc.count : (rows || []).length);
+      const counts = {};
+      await Promise.all(TABS.map(async (t) => {
+        try { const r = await applyFilters(supabase.from("leads").select("id", { count: "exact", head: true }), t, uid); counts[t] = r.count ?? 0; } catch (e) { counts[t] = 0; }
+      }));
+      setTabCounts(counts);
+    } catch (error) {
+      try { console.error("[Leads load failed]", { page, tab, uid, code: error.code, message: error.message, details: error.details, hint: error.hint, at: new Date().toISOString() }); } catch (e) {}
+      setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); setTotal(0);
+    }
+    setLoading(false);
+    if (!isAgent && agents.length === 0) {
       try { const { data: ag } = await supabase.from("profiles").select("id, full_name, role, active").order("full_name"); setAgents(ag || []); } catch (e) {}
     }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [page, dq, tab, agentFilter, typeFilter, sort]);   // eslint-disable-line
 
   const today = dubaiToday();
   const fmtDubai = (ts) => { if (!ts) return "—"; try { const s = new Date(ts).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }); return s.replace(/\b(am|pm)\b/i, (m) => m.toUpperCase()); } catch (e) { return "—"; } };
@@ -5822,45 +5888,10 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     if (me) logAction("view_number", l, me.id);
   };
 
-  const matchFilter = (l) => {
-    if (!filter) return true;
-    switch (filter.type) {
-      case "unassigned": return !l.assigned_agent_name;
-      case "temp":       return l.temperature === filter.value;
-      case "status":     return l.status === filter.value;
-      case "open":       return l.is_open === true;
-      case "source":     return (l.source || "Unknown") === filter.value;
-      case "agent":      return (l.assigned_agent_name || "Unassigned") === filter.value;
-      case "hot":        return l.temperature === "Hot" || l.temperature === "Very Hot";
-      case "due":        return l.next_followup && l.next_followup <= today && l.status !== "Closed Won" && l.status !== "Closed Lost";
-      case "overdue":    return l.next_followup && l.next_followup < today && l.status !== "Closed Won" && l.status !== "Closed Lost";
-      default:           return true;
-    }
-  };
   const TABS = ["all", "New", "Hot", "Very Hot", "Warm", "Cold", "Follow-up due", "Overdue", "Closed Won", "Closed Lost"];
-  const tabDef = (t, l) => {
-    switch (t) {
-      case "all": return true;
-      case "Follow-up due": return l.next_followup && l.next_followup <= today && l.status !== "Closed Won" && l.status !== "Closed Lost";
-      case "Overdue": return l.next_followup && l.next_followup < today && l.status !== "Closed Won" && l.status !== "Closed Lost";
-      case "Hot": case "Very Hot": case "Warm": case "Cold": return l.temperature === t;
-      default: return l.status === t;
-    }
-  };
-  const matchTab = (l) => tabDef(tab, l);
-  const matchType = (l) => !typeFilter || (l.lead_type || "Buyer") === typeFilter;
-  // Operational Admin is hard-limited to unassigned + open-pool leads, regardless of the agent filter —
-  // they create and assign leads but must never browse another agent's assigned leads (security boundary).
-  const opsAdminScope = (l) => !isOpsAdmin || l.is_open === true || !l.assigned_agent;
-  const baseLeads = (leads || []).filter(matchFilter).filter(matchAgentFilter).filter(matchType).filter(opsAdminScope);
-  const tabCount = (t) => baseLeads.filter((l) => tabDef(t, l)).length;
   const TAB_TONE = { Hot: T.bad, "Very Hot": T.bad, Warm: T.warn, Cold: T.muted, "Closed Won": T.ok, "Closed Lost": T.bad, Overdue: T.bad, "Follow-up due": T.gold, New: T.gold };
-  const filteredRaw = (leads || []).filter(matchFilter).filter(matchTab).filter(matchAgentFilter).filter(matchType).filter(opsAdminScope).filter((l) => {
-    if (!q.trim()) return true;
-    const s = q.toLowerCase();
-    return [l.client_name, l.project, l.area, l.assigned_agent_name, l.lead_code, l.status].some((v) => (v || "").toLowerCase().includes(s));
-  });
-  const filtered = isAgent ? filteredRaw : [...filteredRaw].sort(sortCmp);
+  const tabCount = (t) => tabCounts[t] ?? 0;
+  const filtered = leads || [];   // current server page — scope, filters, search, sort + pagination already applied in the DB
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2800); };
   const selIds = Object.keys(selected).filter((k) => selected[k]);
   const toggleSel = (id) => setSelected((s) => ({ ...s, [id]: !s[id] }));
@@ -5868,8 +5899,23 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const toggleSelAll = () => { if (allVisibleSelected) { setSelected({}); } else { const n = {}; filtered.forEach((l) => { n[l.id] = true; }); setSelected(n); } };
   const clearSel = () => setSelected({});
   const runBulk = async ({ mode, agentId, reason }) => {
-    const ids = selIds; if (!ids.length) return;
-    const sel = (leads || []).filter((l) => selected[l.id]);
+    let ids = selIds;
+    let sel = (leads || []).filter((l) => selected[l.id]);
+    if (selectAllMatching) {
+      try {
+        setToast("Gathering all matching leads…");
+        ids = []; let from = 0;
+        for (;;) {
+          const { data, error } = await applyFilters(supabase.from("leads").select("id"), tab, me?.id).order("created_at", { ascending: false }).range(from, from + 999);
+          if (error) throw error;
+          ids = ids.concat((data || []).map((r) => r.id));
+          if (!data || data.length < 1000) break;
+          from += 1000; if (from >= 200000) break;
+        }
+        sel = [];   // full set: row objects aren't all loaded; per-row history/audit skipped, summary audit records the count
+      } catch (e) { flash("Could not gather all matching leads: " + (e.message || "please try again")); return; }
+    }
+    if (!ids.length) return;
     const nowIso = new Date().toISOString();
     let shared = {}, toName = null;
     if (mode === "assign") { toName = agentName(agentId); shared = { assigned_agent: agentId, assigned_agent_name: toName, current_owner: agentId, assigned_at: nowIso, is_open: false, opened_reason: null, opened_by: null, opened_at: null }; }
@@ -5901,7 +5947,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
         await supabase.from("admin_audit").insert({ action: mode === "assign" ? "leads_bulk_assigned" : mode === "open" ? "leads_bulk_opened" : "leads_bulk_unassigned", performed_by: me?.id || null, new_value: { count: ids.length, to: toName, mode, reason: reason || null }, detail: ids.length + (mode === "assign" ? " → " + (toName || "agent") : mode === "open" ? " → Open Leads" : " → Unassigned") });
         if (sel.length <= 400) { const per = sel.map((l) => ({ action: "lead_assigned", performed_by: me?.id || null, affected_user: mode === "assign" ? agentId : null, old_value: { agent: l.assigned_agent_name || null }, new_value: { mode, to: toName }, detail: (l.lead_code || l.client_name || "lead") })); for (const part of chunks(per)) { await supabase.from("admin_audit").insert(part); } }
       } catch (e) {}
-      setShowBulk(false); clearSel(); await load();
+      setShowBulk(false); clearSel(); setSelectAllMatching(false); await load();
       flash(mode === "assign" ? ids.length + " leads assigned to " + (toName || "agent") : mode === "open" ? ids.length + " leads moved to Open Leads" : ids.length + " leads set to unassigned");
     } catch (e) { setShowBulk(false); flash("Bulk action failed: " + (e.message || "please try again")); }
   };
@@ -5916,7 +5962,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
         <button onClick={() => go(isAgent ? "agent" : "admin")} style={{ ...miniBtn() }}>← {isAgent ? "Dashboard" : "Dashboard"}</button>
         <span style={{ fontSize: 12.5, color: T.muted }}>{isAgent ? "My Dashboard" : "Dashboard"} <span style={{ color: T.faint }}>›</span> {isAgent ? "My Leads" : "Leads"} <span style={{ color: T.faint }}>›</span> <b style={{ color: T.ink }}>{filter.label}</b></span>
         <span style={{ background: T.goldSoft, color: T.gold, borderRadius: 8, padding: "3px 10px", fontSize: 11.5, fontWeight: 700 }}>
-          {filtered.length} {filtered.length === 1 ? "lead" : "leads"}</span>
+          {total.toLocaleString()} {total === 1 ? "lead" : "leads"}</span>
       </div>
     )}
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
@@ -5924,12 +5970,12 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
         {isAgent ? (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.goldSoft, color: T.gold,
             borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}>
-            <UserCircle size={12} /> {leads === null ? "Loading…" : `${leads.length} ${leads.length === 1 ? "lead" : "leads"}`}</span>
+            <UserCircle size={12} /> {leads === null ? "Loading…" : `${total.toLocaleString()} ${total === 1 ? "lead" : "leads"}`}</span>
         ) : (<>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok,
             borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}>
             <span style={{ width: 7, height: 7, borderRadius: 7, background: T.ok }} /> LIVE DATABASE</span>
-          <span style={{ fontSize: 12.5, color: T.muted }}>{leads === null ? "Loading…" : `${leads.length} leads`}</span>
+          <span style={{ fontSize: 12.5, color: T.muted }}>{leads === null ? "Loading…" : `${total.toLocaleString()} leads`}{loading && leads !== null ? " · updating…" : ""}</span>
         </>)}
       </div>
       <div style={{ display: "flex", gap: 8 }}>
@@ -5947,7 +5993,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       <Search size={15} color={T.muted} />
       <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "Search my leads…" : "Search name, project, area, agent…"}
         style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 13, fontFamily: UI, color: T.ink }} />
-      {q && <span style={{ fontSize: 11.5, color: T.muted }}>{filtered.length} match</span>}
+      {q && <span style={{ fontSize: 11.5, color: T.muted }}>{loading ? "…" : total.toLocaleString() + " match"}</span>}
     </div>
 
     {isAgent && <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 10, flexWrap: "wrap" }}>
@@ -5986,11 +6032,14 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       </span>}
     </div>}
 
-    {!isAgent && selIds.length > 0 && (
+    {!isAgent && (selIds.length > 0 || selectAllMatching) && (
       <div style={{ ...card, padding: "12px 16px", marginTop: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: T.ink, color: "#fff", borderColor: T.ink }}>
-        <span style={{ fontWeight: 700, fontSize: 13.5 }}>{selIds.length} selected</span>
-        <button onClick={() => setShowBulk(true)} style={{ background: T.gold, color: "#1a1205", border: "none", borderRadius: 9, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 6 }}><UserPlus size={14} /> Assign to agent</button>
-        <button onClick={clearSel} style={{ background: "rgba(255,255,255,.12)", color: "#fff", border: "1px solid rgba(255,255,255,.2)", borderRadius: 9, padding: "9px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Clear</button>
+        <span style={{ fontWeight: 700, fontSize: 13.5 }}>{(selectAllMatching ? total : selIds.length).toLocaleString()} selected{selectAllMatching ? " (all matching)" : ""}</span>
+        {!selectAllMatching && allVisibleSelected && total > selIds.length && (
+          <button onClick={() => setSelectAllMatching(true)} style={{ background: "rgba(255,255,255,.16)", color: "#fff", border: "1px solid rgba(255,255,255,.3)", borderRadius: 9, padding: "8px 13px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Select all {total.toLocaleString()} matching</button>
+        )}
+        <button onClick={() => setShowBulk(true)} style={{ background: T.gold, color: "#1a1205", border: "none", borderRadius: 9, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 6 }}><UserPlus size={14} /> Assign / move</button>
+        <button onClick={() => { clearSel(); setSelectAllMatching(false); }} style={{ background: "rgba(255,255,255,.12)", color: "#fff", border: "1px solid rgba(255,255,255,.2)", borderRadius: 9, padding: "9px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Clear</button>
       </div>
     )}
 
@@ -6014,17 +6063,25 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     </div>
 
     {leads === null ? (
-      <div style={{ ...card, padding: 40, marginTop: 14, textAlign: "center", color: T.muted }}>Loading your leads…</div>
-    ) : leads.length === 0 ? (
+      <div style={{ ...card, padding: 0, marginTop: 14, overflow: "hidden" }}>
+        {[0,1,2,3,4,5,6,7].map((i) => (
+          <div key={i} style={{ display: "flex", gap: 14, alignItems: "center", padding: "15px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none" }}>
+            <div style={{ width: 90, height: 11, borderRadius: 6, background: T.bone }} />
+            <div style={{ flex: 1, height: 11, borderRadius: 6, background: T.bone }} />
+            <div style={{ width: 130, height: 11, borderRadius: 6, background: T.bone }} />
+            <div style={{ width: 70, height: 11, borderRadius: 6, background: T.bone }} />
+          </div>
+        ))}
+      </div>
+    ) : total === 0 ? (
       <div style={{ ...card, padding: 44, marginTop: 14, textAlign: "center" }}>
         <UserCircle size={26} color={T.faint} style={{ marginBottom: 10 }} />
-        <div style={{ fontWeight: 700, fontSize: 15 }}>{isAgent ? "No leads assigned yet" : "No leads yet"}</div>
+        <div style={{ fontWeight: 700, fontSize: 15 }}>{(dq || (tab && tab !== "all") || agentFilter || typeFilter || filter) ? "No leads match" : (isAgent ? "No leads assigned yet" : "No leads yet")}</div>
         <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4, maxWidth: 360, marginInline: "auto", lineHeight: 1.5 }}>
-          {isAgent ? "When your manager assigns leads to you — or you add your own with the button above — they'll appear here."
-                   : "Import an Excel or CSV file, or use Add lead above to get started."}</div>
+          {(dq || (tab && tab !== "all") || agentFilter || typeFilter || filter) ? "Try clearing the search or filters above."
+            : isAgent ? "When your manager assigns leads to you — or you add your own with the button above — they'll appear here."
+            : "Import an Excel or CSV file, or use Add lead above to get started."}</div>
       </div>
-    ) : filtered.length === 0 ? (
-      <div style={{ ...card, padding: 36, marginTop: 14, textAlign: "center", color: T.muted, fontSize: 13 }}>No leads match this filter.</div>
     ) : (
       <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
         <div style={{ overflowX: "auto" }}>
@@ -6035,7 +6092,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
               {isAgent ? <><span>Client</span><span>Project</span><span>Location</span><span>Budget</span><span>Next follow-up</span><span>Status</span><span>Contact</span></>
                        : <><span style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 3, background: T.bone, margin: "-10px 0", padding: "10px 0" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Client</span><span>Phone</span><span>Email</span><span>Agent</span><span>Type</span><span>Project</span><span>Area</span><span>Source</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
             </div>
-            {filtered.slice(0, renderLimit).map((l, i) => (isAgent ? (
+            {filtered.map((l, i) => (isAgent ? (
               <div key={l.id} onClick={() => openLead && openLead(l.id)} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5, cursor: "pointer" }}>
                 <div style={{ minWidth: 0 }}>
@@ -6088,11 +6145,14 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 <span style={{ fontSize: 11, color: T.faint }}>{createdByLabel(l)}</span>
               </div>
             )))}
-            {filtered.length > renderLimit && (
-              <div style={{ padding: "14px 16px", borderTop: `1px solid ${T.hairSoft}`, display: "flex", alignItems: "center", justifyContent: "center", gap: 12, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, color: T.muted }}>Showing {renderLimit} of {filtered.length} — narrow with search or filters for speed</span>
-                <button onClick={() => setRenderLimit((n) => n + 250)} style={{ ...miniBtn() }}>Show 250 more</button>
-                <button onClick={() => setRenderLimit(filtered.length)} style={{ ...miniBtn() }}>Show all {filtered.length}</button>
+            {total > PAGE && (
+              <div style={{ padding: "14px 16px", borderTop: `1px solid ${T.hairSoft}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: T.muted }}>Showing {(page * PAGE + 1).toLocaleString()}–{Math.min((page + 1) * PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>‹ Prev</button>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, whiteSpace: "nowrap" }}>Page {page + 1} / {Math.max(1, Math.ceil(total / PAGE))}</span>
+                  <button onClick={() => setPage((p) => ((p + 1) * PAGE < total ? p + 1 : p))} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>Next ›</button>
+                </div>
               </div>
             )}
           </div>
@@ -6106,7 +6166,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
 
     {showAdd && <AddLeadModal me={me} user={user} openLead={openLead} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load(); }} />}
     {showImport && <ImportModal me={me} onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); load(); }} />}
-    {showBulk && <BulkAssignModal count={selIds.length} agents={assignable} onClose={() => setShowBulk(false)} onRun={runBulk} />}
+    {showBulk && <BulkAssignModal count={selectAllMatching ? total : selIds.length} agents={assignable} onClose={() => setShowBulk(false)} onRun={runBulk} />}
     {toast && <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.ink, color: "#fff", padding: "11px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600, zIndex: 200, boxShadow: T.shadowLg }}>{toast}</div>}
   </div>;
 }
