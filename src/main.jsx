@@ -34,5 +34,19 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 
 // Register the PWA service worker (public static shell only — no private data cached).
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });
+  // Auto-update: when a freshly deployed service worker takes control, reload the page once so the
+  // newest app bundle is used immediately. Without this the browser can keep running a cached old
+  // build after a deploy (e.g. a leads list still showing the pre-fix behaviour). The _reloading
+  // guard prevents any reload loop.
+  let _reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (_reloading) return; _reloading = true; window.location.reload();
+  });
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").then((reg) => {
+      const check = () => { try { reg.update(); } catch (e) {} };
+      window.addEventListener("focus", check);
+      document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check(); });
+    }).catch(() => {});
+  });
 }
