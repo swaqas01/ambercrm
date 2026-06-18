@@ -293,6 +293,25 @@ async function callAi(body) {
   if (token) headers.Authorization = "Bearer " + token;
   return fetch("/api/ai", { method: "POST", headers, body: JSON.stringify(body) });
 }
+
+// Fetch ALL rows from a table in pages of 1000. Supabase caps a single response at 1000 rows, so a
+// list ordered newest-first silently hides everything past the first 1000 once the table grows beyond
+// that. This pages with .range() until every row is loaded. Used by the leads list, pipeline and
+// dashboards so growing past 1000 leads never hides older records.
+async function fetchAllRows(table, columns = "*", orderCol = "created_at", ascending = false) {
+  let out = [], from = 0;
+  for (;;) {
+    let q = supabase.from(table).select(columns);
+    if (orderCol) q = q.order(orderCol, { ascending });
+    const { data, error } = await q.range(from, from + 999);
+    if (error) { if (from === 0) throw error; break; }
+    out = out.concat(data || []);
+    if (!data || data.length < 1000) break;
+    from += 1000;
+    if (from >= 200000) break; // safety cap
+  }
+  return out;
+}
 // Log a lead action to the activity trail (RLS: actor must be the signed-in user).
 function logAction(action, lead, actorId, extra) {
   if (!actorId) return;
@@ -978,7 +997,7 @@ function AdminDash({ go, user }) {
     (async () => {
       try {
         const [lr, ar, pr] = await Promise.all([
-          supabase.from("leads").select("created_at,updated_at,status,temperature,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,source,next_followup,deal_value,commission_value").limit(5000),
+          fetchAllRows("leads", "created_at,updated_at,status,temperature,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,source,next_followup,deal_value,commission_value").then((data) => ({ data })).catch((error) => ({ error })),
           supabase.from("lead_activity").select("actor_id,action,created_at").order("created_at", { ascending: false }).limit(5000),
           supabase.from("profiles").select("id,full_name,role,active").limit(500),
         ]);
@@ -1254,7 +1273,7 @@ function AgentDash({ go, user, openLead, onAvatar }) {
       const { data: { user: au } } = await supabase.auth.getUser();
       const uid = au?.id;
       const [lr, ar, dr] = await Promise.all([
-        supabase.from("leads").select("id, client_name, phone, project, area, budget, status, temperature, next_followup, last_contacted, is_open, assigned_agent, current_owner, created_by, deal_value, commission_value, created_at, created_on").limit(2000),
+        fetchAllRows("leads", "id, client_name, phone, project, area, budget, status, temperature, next_followup, last_contacted, is_open, assigned_agent, current_owner, created_by, deal_value, commission_value, created_at, created_on").then((data) => ({ data })).catch((error) => ({ error })),
         supabase.from("lead_activity").select("action, created_at").eq("actor_id", uid).order("created_at", { ascending: false }).limit(5000),
         supabase.from("deals").select("status, deal_type, property_value, gross_commission, net_commission, agent_commission, decided_at, created_at").eq("agent_id", uid).limit(1000),
       ]);
@@ -2281,10 +2300,7 @@ function Pipeline({ go, openLead }) {
   const load = async () => {
     setLoading(true); setErr(null);
     try {
-      const { data, error } = await supabase.from("leads")
-        .select("id,lead_code,client_name,project,area,budget,status,temperature,assigned_agent_name,is_open,deal_value,next_followup,deleted")
-        .order("created_at", { ascending: false }).limit(5000);
-      if (error) throw error;
+      const data = await fetchAllRows("leads", "id,lead_code,client_name,project,area,budget,status,temperature,assigned_agent_name,is_open,deal_value,next_followup,deleted", "created_at", false);
       setRows((data || []).filter((l) => !l.deleted));
     } catch (e) { setErr(e.message || "Could not load the pipeline."); }
     setLoading(false);
@@ -5732,10 +5748,9 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     setErr("");
     const { data: { user: au } } = await supabase.auth.getUser();
     setMe(au);
-    const { data, error } = await supabase.from("leads")
-      .select("*")
-      .order("created_at", { ascending: false }).limit(2000);
-    if (error) { try { console.error("[Leads load failed]", { page: "leads", user: au && au.id, email: au && au.email, isAgent: !!isAgent, code: error.code, message: error.message, details: error.details, hint: error.hint, at: new Date().toISOString() }); } catch (e) {} setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); return; }
+    let data;
+    try { data = await fetchAllRows("leads", "*", "created_at", false); }
+    catch (error) { try { console.error("[Leads load failed]", { page: "leads", user: au && au.id, email: au && au.email, isAgent: !!isAgent, code: error.code, message: error.message, details: error.details, hint: error.hint, at: new Date().toISOString() }); } catch (e) {} setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); return; }
     let rows = data || [];
     // Agents: show only leads actually assigned to or created by them (RLS also returns the open pool — exclude that here).
     if (isAgent && au) rows = (initialAgentFilter === "open")
