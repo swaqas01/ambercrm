@@ -5781,7 +5781,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const isMaster = user && user.role === "master_admin";
   const isOpsAdmin = user && user.role === "admin";   // operational Admin: may only see unassigned/open leads (for assignment)
   const viewKey = initialAgentFilter || "live";
-  const _vc = LEADS_VIEW_CACHE[viewKey] || {};
+  const _vc = (() => { try { const s = sessionStorage.getItem("amber_lv_" + viewKey); if (s) return JSON.parse(s); } catch (e) {} return LEADS_VIEW_CACHE[viewKey] || {}; })();
   const [leads, setLeads] = useState(null);   // null = loading; holds ONLY the current page
   const [err, setErr] = useState("");
   const [q, setQ] = useState(_vc.q || "");
@@ -5803,13 +5803,15 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const [total, setTotal] = useState(0);      // total leads matching the current view
   const [tabCounts, setTabCounts] = useState({});
   const [loading, setLoading] = useState(true);
-  const PAGE = 100;
+  const [pageSize, setPageSize] = useState([30, 50, 100].includes(_vc.pageSize) ? _vc.pageSize : 50);   // leads per page (adjustable)
+  const [allIds, setAllIds] = useState([]);   // all matching lead IDs (id-only, loaded in background) so Prev/Next can span pages
+  const PAGE = pageSize;
   const LEAD_COLS = "id,lead_code,client_name,phone,whatsapp,email,lead_type,project,area,budget,purpose,property_type,status,temperature,source,next_followup,last_contacted,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,original_agent,created_at,created_on,deleted";
   const firstRun = useRef(true);
   useEffect(() => { const id = setTimeout(() => setDq(q), 350); return () => clearTimeout(id); }, [q]);              // debounce search 350ms
-  useEffect(() => { if (firstRun.current) { firstRun.current = false; return; } setPage(0); setSelected({}); setSelectAllMatching(false); }, [dq, tab, agentFilter, typeFilter, sort]); // real view change → page 1, clear selection (skip on mount/restore)
+  useEffect(() => { if (firstRun.current) { firstRun.current = false; return; } setPage(0); setSelected({}); setSelectAllMatching(false); }, [dq, tab, agentFilter, typeFilter, sort, pageSize]); // real view change → page 1, clear selection (skip on mount/restore)
   useEffect(() => { setSelected({}); }, [page]);   // page-specific selection clears when paging
-  useEffect(() => { LEADS_VIEW_CACHE[viewKey] = { q, dq, tab, sort, agentFilter, typeFilter, page }; }, [viewKey, q, dq, tab, sort, agentFilter, typeFilter, page]); // remember filters across open-lead → back
+  useEffect(() => { const v = { q, dq, tab, sort, agentFilter, typeFilter, page, pageSize }; LEADS_VIEW_CACHE[viewKey] = v; try { sessionStorage.setItem("amber_lv_" + viewKey, JSON.stringify(v)); } catch (e) {} }, [viewKey, q, dq, tab, sort, agentFilter, typeFilter, page, pageSize]); // remember filters across open-lead → back (survives reload)
 
   // Build the leads query with EVERY scope/permission rule + active filters applied AT THE DATABASE.
   // RLS independently enforces the same boundaries, so an agent can never receive another agent's leads.
@@ -5859,7 +5861,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   };
   const SORT_COL = { newest: ["created_at", false], oldest: ["created_at", true], agent: ["assigned_agent_name", true], status: ["status", true], temp: ["temperature", true], source: ["source", true], project: ["project", true], area: ["area", true], lastcontact: ["last_contacted", false], nextfu: ["next_followup", true] };
   const load = async () => {
-    setLoading(true); setErr("");
+    setLoading(true); setErr(""); setAllIds([]);
     let au = me;
     if (!au) { try { const r = await supabase.auth.getUser(); au = r.data?.user; setMe(au); } catch (e) {} }
     const uid = au?.id;
@@ -5876,6 +5878,19 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
         try { const r = await applyFilters(supabase.from("leads").select("id", { count: "exact", head: true }), t, uid); counts[t] = r.count ?? 0; } catch (e) { counts[t] = 0; }
       }));
       setTabCounts(counts);
+      // background: gather ALL matching IDs (id-only, light) so Prev/Next can step across page boundaries
+      (async () => { try {
+        const sc2 = SORT_COL[sort] || SORT_COL.newest;
+        let ids = [], from = 0;
+        for (;;) {
+          const { data, error } = await applyFilters(supabase.from("leads").select("id"), tab, uid).order(sc2[0], { ascending: sc2[1], nullsFirst: false }).range(from, from + 999);
+          if (error) break;
+          ids = ids.concat((data || []).map((r) => r.id));
+          if (!data || data.length < 1000) break;
+          from += 1000; if (from >= 100000) break;
+        }
+        setAllIds(ids);
+      } catch (e) {} })();
     } catch (error) {
       try { console.error("[Leads load failed]", { page, tab, uid, code: error.code, message: error.message, details: error.details, hint: error.hint, at: new Date().toISOString() }); } catch (e) {}
       setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); setTotal(0);
@@ -5885,7 +5900,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       try { const { data: ag } = await supabase.from("profiles").select("id, full_name, role, active").order("full_name"); setAgents(ag || []); } catch (e) {}
     }
   };
-  useEffect(() => { load(); }, [page, dq, tab, agentFilter, typeFilter, sort]);   // eslint-disable-line
+  useEffect(() => { load(); }, [page, dq, tab, agentFilter, typeFilter, sort, pageSize]);   // eslint-disable-line
 
   const today = dubaiToday();
   const fmtDubai = (ts) => { if (!ts) return "—"; try { const s = new Date(ts).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }); return s.replace(/\b(am|pm)\b/i, (m) => m.toUpperCase()); } catch (e) { return "—"; } };
@@ -6129,7 +6144,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                        : <><span style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 3, background: T.bone, margin: "-10px 0", padding: "10px 0" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Client</span><span>Phone</span><span>Email</span><span>Agent</span><span>Type</span><span>Project</span><span>Area</span><span>Source</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
             </div>
             {filtered.map((l, i) => (isAgent ? (
-              <div key={l.id} onClick={() => openLead && openLead(l.id, filtered.map((x) => x.id))} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
+              <div key={l.id} onClick={() => openLead && openLead(l.id, allIds.length ? allIds : filtered.map((x) => x.id))} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5, cursor: "pointer" }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{l.client_name}
@@ -6162,7 +6177,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 </span>
               </div>
             ) : (
-              <div key={l.id} onClick={() => openLead && openLead(l.id, filtered.map((x) => x.id))} style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
+              <div key={l.id} onClick={() => openLead && openLead(l.id, allIds.length ? allIds : filtered.map((x) => x.id))} style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12, cursor: "pointer", background: selected[l.id] ? T.goldSoft : "transparent" }}>
                 <span onClick={(e) => e.stopPropagation()} style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 2, background: selected[l.id] ? T.goldSoft : T.paper, margin: "-12px 0", padding: "12px 0" }}><input type="checkbox" checked={!!selected[l.id]} onChange={() => toggleSel(l.id)} style={{ cursor: "pointer", width: 14, height: 14 }} /></span>
                 <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 600, lineHeight: 1.3 }}>{fmtDubai(l.created_at || l.created_on)}</span>
@@ -6181,9 +6196,16 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 <span style={{ fontSize: 11, color: T.faint }}>{createdByLabel(l)}</span>
               </div>
             )))}
-            {total > PAGE && (
+            {total > 30 && (
               <div style={{ padding: "14px 16px", borderTop: `1px solid ${T.hairSoft}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, color: T.muted }}>Showing {(page * PAGE + 1).toLocaleString()}–{Math.min((page + 1) * PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: T.muted }}>Showing {(page * PAGE + 1).toLocaleString()}–{Math.min((page + 1) * PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: T.muted }}>Per page
+                    <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))} style={{ border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, fontFamily: UI, color: T.ink, background: T.paper, cursor: "pointer" }}>
+                      <option value={30}>30</option><option value={50}>50</option><option value={100}>100</option>
+                    </select>
+                  </span>
+                </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>‹ Prev</button>
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, whiteSpace: "nowrap" }}>Page {page + 1} / {Math.max(1, Math.ceil(total / PAGE))}</span>
