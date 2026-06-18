@@ -222,8 +222,14 @@ const PEOPLE_SOURCES = [
 const CLIENT_LOOKUP = `
 
 === CLIENT LOOKUP (public professional background only) ===
-The agent wants a quick read on whether this named person is notable / high-profile so they can tailor their approach. Search the approved public sources for the name (add "Dubai", "UAE", or a business/industry term if it helps). Report ONLY public, professional information: current role, company, industry, public profile, board or leadership positions, notable press mentions, and any clear signal they are an executive, public figure or high-net-worth.
-HARD RULES: (1) Name matching is easily ambiguous — if you are not confident it is the SAME person, say so plainly ("this may not be your client — common name; verify before relying on this") and give a confidence level. (2) NEVER report private, sensitive or unverified details — home address, family, religion, health, personal finances beyond public business info, or rumours. (3) If nothing solid comes back, say so directly — do NOT invent or pad. (4) Keep it tight: who they appear to be, why it matters for the pitch, and one tailored next move. End with the standard Confidence and Source lines.`;
+The agent gives a client NAME and wants to know who this person could be. Search the approved public sources and return a SHORT, SCANNABLE result — NOT an essay or a long write-up.
+
+FOLLOW THIS FORMAT EXACTLY:
+- One line on the name itself: its likely origin/background (e.g. "Name is typically Japanese", "German surname") — one line, nothing more.
+- Then a heading "Top matches I found:" followed by a NUMBERED list of up to 3–5 real, DISTINCT people who plausibly match this name online. For each candidate, ONE line: **Full name** — role, company or field, city/country, and one notable detail (public figure, executive, founder, HNWI, etc.).
+- Then one closing line: tell the agent these are public matches and to open each person's full profile (LinkedIn, company site, news) to confirm which one — if any — is their actual client, since identity can't be confirmed from a name alone.
+
+RULES: Give the BEST 3–5 candidates even when unsure — surfacing options to verify IS the job. Mark anyone clearly high-profile or high-net-worth. NEVER include private or sensitive details (home address, family, religion, health, personal finances, rumours). If you genuinely find no plausible public matches, say that in one line — do NOT invent people or pad. Stay concise throughout. End with the standard Confidence and Source lines.`;
 
 // --- Server-side web-research config, cached 60s. Default ON with approved sources;
 // the database (if configured) can disable it or supply a custom whitelist. ---

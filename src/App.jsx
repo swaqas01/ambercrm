@@ -5440,7 +5440,7 @@ function AskAmber({ narrow, user, openLead }) {
     } finally { setBusy(false); }
   };
 
-  const lookupQueryFor = (nm) => `Look up "${nm}" online and tell me if they appear to be a notable, senior or high-profile person I should tailor my approach to. Public professional background only — role, company, public profile, any high-net-worth or public-figure signal. If it's a common name and you're not sure it's the same person, say so and give a confidence level.`;
+  const lookupQueryFor = (nm) => `Look up "${nm}" online. First one line on what the name's origin likely is, then list the top 3–5 public people who match this name (each: name — role, company/field, city), flag anyone high-profile, and remind me to open their full profiles to confirm which one is my client. Keep it short and scannable, no essay.`;
   const runLookup = (nm) => { if (!nm || busy || !mentor) return; logLeadAction("client_lookup", { id: nm, name: nm }); send(lookupQueryFor(nm), true, true); };
   useEffect(() => { if (pendingLookup && mentor && !busy) { const n = pendingLookup; setPendingLookup(null); runLookup(n); } }, [pendingLookup, mentor, busy]); // eslint-disable-line
 
