@@ -6362,6 +6362,7 @@ function miniBtn() { return { background: T.paper, color: T.ink, border: `1px so
 const DUBAI_AREAS = ["Downtown Dubai","Business Bay","Dubai Marina","Palm Jumeirah","Palm Jebel Ali","Dubai Hills Estate","Jumeirah Village Circle","JVC","Jumeirah Village Triangle","JVT","City Walk","Meydan","Dubai Creek Harbour","Dubai Islands","Emaar South","The Valley","Arabian Ranches","Arabian Ranches 2","Arabian Ranches 3","Tilal Al Ghaf","Damac Lagoons","Damac Hills","Damac Hills 2","Sobha Hartland","Dubai South","Jumeirah Golf Estates","Dubai Sports City","Motor City","Al Furjan","Mohammed Bin Rashid City","MBR City","District One","Dubai Production City","Dubai Investment Park","DIFC","Jumeirah Lake Towers","JLT","Bluewaters","Port de La Mer","Rashid Yachts and Marina","Dubai Design District","Nad Al Sheba","The Acres","Emirates Living","Springs","Meadows","The Lakes","Madinat Jumeirah Living","Expo City","Jumeirah Beach Residence","JBR","Al Barsha","Town Square","Dubailand","Discovery Gardens","International City","Mirdif","Jumeirah","Umm Suqeim"];
 const DUBAI_PROJECTS = ["Palm Jebel Ali","Dubai Hills Estate","Emaar South","The Valley","Rashid Yachts and Marina","Dubai Creek Harbour","City Walk","Madinat Jumeirah Living","Nad Al Sheba Gardens","District One","Damac Lagoons","Damac Hills","Sobha Hartland","Sobha One","Sobha Reserve","Tilal Al Ghaf","Arabian Ranches 3","Expo City","Dubai Islands","Bay Villas","Bluewaters Residences","Jumeirah Living"];
 const LEAD_TYPES = ["Buyer", "Seller", "Tenant", "Agent"];
+const LEAD_SOURCES = ["Property Finder", "Off Plan Campaign", "WhatsApp Marketing", "Email Marketing", "Social Media", "Personal Lead"];
 const normPhone = (p) => { if (!p) return ""; let d = String(p).replace(/[^\d+]/g, ""); if (d.startsWith("00")) d = "+" + d.slice(2); else if (!d.startsWith("+")) d = "+" + d; return d; };
 
 function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
@@ -6369,7 +6370,8 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
   const [mode, setMode] = useState("manual"); // manual | ai
   const [aiText, setAiText] = useState(""); const [aiBusy, setAiBusy] = useState(false); const [aiErr, setAiErr] = useState("");
   const [f, setF] = useState({ client_name: "", phone: "", whatsapp: "", waSame: true, email: "", project: "", area: "", budget: "",
-    property_type: "", ready_offplan: "", purpose: "", nationality: "", followup_note: "", lead_type: "Buyer",
+    property_type: "", ready_offplan: "", purpose: "", nationality: "", country_residence: "", language: "", developer: "",
+    finance: "", source: "", timeline: "", followup_note: "", lead_type: "Buyer",
     assigned_agent_name: isAgent ? (user.name || "") : "" });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   const [dup, setDup] = useState(null); // pending duplicate, requires confirm
@@ -6379,7 +6381,7 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
     if (!aiText.trim()) return; setAiBusy(true); setAiErr("");
     try {
       const res = await callAi({
-          system: "Extract real-estate lead fields from the user's text. Reply with ONLY a JSON object, no prose, with keys: client_name, phone, email, area, project, budget, property_type, ready_offplan, purpose, nationality, followup_note. Use empty string for anything not present. budget should keep currency like 'AED 8,000,000'. ready_offplan should be 'Off-plan' or 'Ready' or ''.",
+          system: "Extract real-estate lead fields from the user's text. Reply with ONLY a JSON object, no prose, with keys: client_name, phone, email, nationality, country_residence, language, lead_type, budget, purpose, area, project, developer, property_type, ready_offplan, finance, timeline, source, followup_note. Use empty string for anything not present. budget should keep currency like 'AED 8,000,000'. ready_offplan should be 'Off-plan' or 'Ready' or 'Either' or ''. finance should be 'Cash' or 'Mortgage' or 'Not decided' or ''. source should be one of 'Property Finder','Off Plan Campaign','WhatsApp Marketing','Email Marketing','Social Media','Personal Lead' or ''.",
           messages: [{ role: "user", content: aiText.slice(0, 4000) }] });
       const data = await res.json();
       if (data.error) { setAiErr("AI not available: " + data.error); setAiBusy(false); return; }
@@ -6434,8 +6436,11 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
       project: f.project.trim() || null, area: f.area.trim() || null, budget: f.budget.trim() || null,
       property_type: f.property_type.trim() || null, ready_offplan: f.ready_offplan.trim() || null,
       lead_type: f.lead_type || "Buyer",
-      purpose: f.purpose.trim() || null, nationality: f.nationality.trim() || null, followup_note: f.followup_note.trim() || null,
-      source: "Manual", status: "New", temperature: "Cold", created_by: myId, ...ownership,
+      purpose: f.purpose.trim() || null, nationality: f.nationality.trim() || null,
+      country_residence: f.country_residence.trim() || null, language: f.language.trim() || null,
+      developer: f.developer.trim() || null, finance: f.finance.trim() || null, timeline: f.timeline.trim() || null,
+      followup_note: f.followup_note.trim() || null,
+      source: f.source.trim() || "Manual", status: "New", temperature: "Hot", created_by: myId, ...ownership,
     };
     let { data: ins, error } = await supabase.from("leads").insert(payload).select("id").single();
     // Graceful degradation: if the lead_type column hasn't been added yet (migration 20 not applied), retry without it.
@@ -6484,6 +6489,15 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
         style={{ ...inp, opacity: opts.disabled ? .6 : 1 }} />
     </label>
   );
+  const selField = (lbl, k, options, ph) => (
+    <label style={{ display: "block", marginBottom: 10 }}>
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>{lbl}</span>
+      <select value={f[k]} onChange={(e) => set(k, e.target.value)} style={inp}>
+        <option value="">{ph || "Select…"}</option>
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </label>
+  );
 
   return <Modal title="Add lead" onClose={onClose}>
     <div style={{ display: "flex", gap: 6, marginBottom: 14, background: T.bone, borderRadius: 10, padding: 4 }}>
@@ -6527,20 +6541,27 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
         </label>
       )}
       {field("Email", "email", { ph: "optional" })}
+      {field("Nationality", "nationality")}
+      {field("Country of residence", "country_residence")}
+      {field("Language", "language", { ph: "e.g. English / Arabic / Russian" })}
+      {selField("Lead source", "source", LEAD_SOURCES, "Select source…")}
       <label style={{ display: "block", marginBottom: 10 }}>
         <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Lead type</span>
         <select value={f.lead_type} onChange={(e) => set("lead_type", e.target.value)} style={inp}>{LEAD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
       </label>
+      {field("Budget", "budget", { ph: "AED …" })}
+      {field("Purpose", "purpose", { ph: "Investment / End-use / Golden Visa" })}
       {field("Area / Community", "area", { list: "areas", ph: "Select or type a community" })}
       {field("Project name", "project", { ph: "Specific project/building, if known — type manually" })}
       <div style={{ fontSize: 10.5, color: T.faint, margin: "-4px 0 12px", lineHeight: 1.45 }}>Area is the community/location (e.g. Dubai Hills Estate). Project name is the specific project/building, if known (e.g. Sobha One).</div>
-      {field("Budget", "budget", { ph: "AED …" })}
-      {field("Property type", "property_type", { ph: "Villa / Apartment …" })}
-      {field("Ready / Off-plan", "ready_offplan", { ph: "Off-plan / Ready" })}
-      {field("Purpose", "purpose", { ph: "Investment / End-use" })}
-      {field("Nationality", "nationality")}
+      {field("Developer", "developer", { ph: "e.g. Emaar, Damac, Sobha" })}
+      {field("Property type", "property_type", { ph: "Villa / Apartment / Townhouse …" })}
+      {selField("Ready / Off-plan", "ready_offplan", ["Off-plan", "Ready", "Either"], "Select…")}
+      {selField("Finance", "finance", ["Cash", "Mortgage", "Not decided"], "Select…")}
+      {field("Timeline", "timeline", { ph: "e.g. 1–2 months, immediate" })}
       {field("Follow-up note", "followup_note")}
       {field(isAgent ? "Assigned to (you)" : "Assign to (agent name)", "assigned_agent_name", { disabled: isAgent })}
+      <div style={{ fontSize: 10.5, color: T.faint, margin: "-2px 0 8px", lineHeight: 1.45 }}>New leads are saved as <b>Hot</b> by default — change the temperature later from the lead's page if needed.</div>
       {err && <div style={{ color: T.bad, fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>{err}</div>}
       {dup && dup.kind === "mine" && <div style={{ ...card, padding: 12, marginBottom: 10, borderColor: T.warnSoft, background: T.warnSoft }}>
         <div style={{ fontSize: 12.5, fontWeight: 700, color: T.warn }}>This lead already exists in your leads.</div>
