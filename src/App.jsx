@@ -7512,12 +7512,25 @@ const normPhone = (p) => { if (!p) return ""; let d = String(p).replace(/[^\d+]/
 
 function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
   const isAgent = user && user.role === "agent";
+  // Only Master Admin / Admin may assign a lead to another account (matches RLS: non-admins can
+  // only insert a lead owned by themselves). Everyone else self-assigns.
+  const canAssignOthers = !!(user && (user.role === "master_admin" || user.role === "admin"));
+  const selfAssign = isAgent || !canAssignOthers;
+  const [agents, setAgents] = useState([]);
+  useEffect(() => {
+    if (!canAssignOthers) return;
+    let alive = true;
+    (async () => {
+      const { data } = await supabase.from("profiles").select("id,full_name,role,active").in("role", ["agent", "sales_manager", "admin", "master_admin"]).order("full_name", { ascending: true });
+      if (alive) setAgents((data || []).filter((p) => p.active !== false && String(p.full_name || "").trim()));
+    })();
+    return () => { alive = false; };
+  }, [canAssignOthers]);
   const [mode, setMode] = useState("manual"); // manual | ai
   const [aiText, setAiText] = useState(""); const [aiBusy, setAiBusy] = useState(false); const [aiErr, setAiErr] = useState("");
   const [f, setF] = useState({ client_name: "", phone: "", whatsapp: "", waSame: true, email: "", project: "", area: "", budget: "",
     property_type: "", ready_offplan: "", purpose: "", nationality: "", country_residence: "", language: "", developer: "",
-    finance: "", source: "", timeline: "", followup_note: "", lead_type: "Buyer",
-    assigned_agent_name: isAgent ? (user.name || "") : "" });
+    finance: "", source: "", timeline: "", followup_note: "", lead_type: "Buyer", assigned_agent: "" });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   const [dup, setDup] = useState(null); // pending duplicate, requires confirm
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -7533,8 +7546,7 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
       let txt = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
       txt = txt.replace(/^```json/i, "").replace(/```$/, "").trim();
       const j = JSON.parse(txt);
-      setF((s) => ({ ...s, ...Object.fromEntries(Object.entries(j).map(([k, v]) => [k, v || ""])),
-        assigned_agent_name: isAgent ? (user.name || "") : (j.assigned_agent_name || s.assigned_agent_name) }));
+      setF((s) => ({ ...s, ...Object.fromEntries(Object.entries(j).map(([k, v]) => [k, v || ""])) }));
       setMode("manual"); // show the filled form for review
     } catch (e) { setAiErr("Couldn't read AI response. Try again or enter manually."); }
     setAiBusy(false);
@@ -7573,9 +7585,16 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
     // created_by is always the creator. Agents MUST own the lead they create (RLS requires
     // created_by = assigned_agent = auth.uid()), and may not assign to anyone else. Admins/Master
     // Admin may leave it unassigned or assign by name via the form.
-    const ownership = isAgent
-      ? { assigned_agent: myId, current_owner: myId, assigned_agent_name: (user && user.name) || (me && me.full_name) || null, assigned_at: nowIso, is_open: false }
-      : { assigned_agent_name: f.assigned_agent_name.trim() || null };
+    // Assignment is always to a REAL account (chosen from the dropdown) or left Unassigned.
+    // The assigned_agent uuid (FK to profiles) is the source of truth; the display name is derived
+    // from that account — so a free-typed phantom like "Sir Saad" can no longer be saved.
+    const selName = (id) => { const a = agents.find((x) => x.id === id); return (a && a.full_name) || null; };
+    const ownName = (user && user.name) || (me && me.full_name) || null;
+    const ownership = selfAssign
+      ? { assigned_agent: myId, current_owner: myId, assigned_agent_name: ownName, assigned_at: nowIso, is_open: false }
+      : (f.assigned_agent
+          ? { assigned_agent: f.assigned_agent, current_owner: f.assigned_agent, assigned_agent_name: selName(f.assigned_agent), assigned_at: nowIso, is_open: false }
+          : { assigned_agent: null, current_owner: null, assigned_agent_name: null });
     const payload = {
       lead_code: code, client_name: f.client_name.trim(), phone, whatsapp, email: f.email.trim() || null,
       project: f.project.trim() || null, area: f.area.trim() || null, budget: f.budget.trim() || null,
@@ -7705,7 +7724,21 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
       {selField("Finance", "finance", ["Cash", "Mortgage", "Not decided"], "Select…")}
       {field("Timeline", "timeline", { ph: "e.g. 1–2 months, immediate" })}
       {field("Follow-up note", "followup_note")}
-      {field(isAgent ? "Assigned to (you)" : "Assign to (agent name)", "assigned_agent_name", { disabled: isAgent })}
+      {selfAssign ? (
+        <label style={{ display: "block", marginBottom: 10 }}>
+          <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Assigned to (you)</span>
+          <input value={(user && user.name) || ""} disabled style={{ ...inp, opacity: .6 }} />
+        </label>
+      ) : (
+        <label style={{ display: "block", marginBottom: 4 }}>
+          <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Assign to</span>
+          <select value={f.assigned_agent} onChange={(e) => set("assigned_agent", e.target.value)} style={inp}>
+            <option value="">Unassigned (add to pool)</option>
+            {agents.map((a) => <option key={a.id} value={a.id}>{a.full_name}{a.role && a.role !== "agent" ? " \u00b7 " + roleLabel(a.role) : ""}</option>)}
+          </select>
+        </label>
+      )}
+      {!selfAssign && <div style={{ fontSize: 10.5, color: T.faint, margin: "0 0 10px", lineHeight: 1.45 }}>Only existing accounts can be assigned — choose a name from the list, or leave <b>Unassigned</b> to add it to the pool.{agents.length === 0 ? " (No active accounts loaded yet.)" : ""}</div>}
       <div style={{ fontSize: 10.5, color: T.faint, margin: "-2px 0 8px", lineHeight: 1.45 }}>New leads are saved as <b>Hot</b> by default — change the temperature later from the lead's page if needed.</div>
       {err && <div style={{ color: T.bad, fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>{err}</div>}
       {dup && dup.kind === "mine" && <div style={{ ...card, padding: 12, marginBottom: 10, borderColor: T.warnSoft, background: T.warnSoft }}>
