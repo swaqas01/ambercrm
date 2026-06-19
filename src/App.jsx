@@ -6451,6 +6451,22 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
   };
   const [aiUsed] = useState(false);
 
+  const doReadd = async () => {
+    if (!dup || !dup.lead_id) return;
+    setBusy(true); setErr("");
+    const p_new = {
+      project: (f.project || "").trim(), area: (f.area || "").trim(), budget: (f.budget || "").trim(),
+      property_type: (f.property_type || "").trim(), purpose: (f.purpose || "").trim(),
+      ready_offplan: (f.ready_offplan || "").trim(), lead_type: f.lead_type || "",
+      nationality: (f.nationality || "").trim(), followup_note: (f.followup_note || "").trim(),
+    };
+    const { data, error } = await supabase.rpc("readd_lead", { p_lead_id: dup.lead_id, p_new });
+    setBusy(false);
+    if (error || !data || !data.ok) { setErr("Couldn't re-add to the existing lead. " + ((error && error.message) || (data && data.error) || "Please try again.")); return; }
+    setDup(null);
+    if (openLead) { openLead(dup.lead_id); onClose(); } else { onSaved(); }
+  };
+
   const save = () => {
     if (!f.client_name.trim()) { setErr("Client name is required."); return; }
     const p = toE164(f.phone); if (!p || digitsOnly(p).length < 8) { setErr("A valid phone number is required to create a lead."); return; }
@@ -6540,7 +6556,9 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
           Agent: {dup.assigned_agent_name || "Unassigned"} · Status: {dup.status || "New"}<br />
           {(dup.project || dup.area) ? ((dup.project || "") + (dup.project && dup.area ? " · " : "") + (dup.area || "")) : "No project/area"}{dup.created_at ? " · created " + new Date(dup.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : ""}
         </div>
+        <div style={{ fontSize: 10.5, color: T.faint, marginTop: 8, lineHeight: 1.45 }}>Re-add updates this existing lead with the new enquiry details and saves the previous details into its notes — no duplicate is created.</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+          {dup.lead_id && <button onClick={doReadd} disabled={busy} style={{ ...miniBtn(), borderColor: T.ok, color: T.ok }}>{busy ? "Re-adding…" : "Re-add (update existing)"}</button>}
           {dup.lead_id && <button onClick={() => { if (openLead) { openLead(dup.lead_id); onClose(); } }} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Open Existing Lead</button>}
           <button onClick={() => { setDup(null); doInsert(true); }} style={{ ...miniBtn(), borderColor: T.warn, color: T.warn }}>Create anyway</button>
           <button onClick={() => setDup(null)} style={{ ...miniBtn() }}>Cancel</button>
