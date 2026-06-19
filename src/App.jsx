@@ -622,10 +622,11 @@ export default function App() {
       if (!/type=recovery/.test(typeof window !== "undefined" ? (window.location.hash || "") : "")) {
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.user && mounted) {
-          // Hard 7-day session cap: force re-login one week after the last sign-in (independent of plan).
+          // Session cap: the Master Admin's session never expires here; everyone else is re-prompted after 30 days.
+          const isMaster = String(session.user.email || "").trim().toLowerCase() === MASTER_ADMIN_EMAIL;
           let loginAt = NaN; try { loginAt = parseInt(localStorage.getItem("amber_login_at") || "", 10); } catch (e) {}
-          if (Number.isFinite(loginAt)) {
-            if (Date.now() - loginAt > 7 * 24 * 3600 * 1000) { try { localStorage.removeItem("amber_login_at"); } catch (e) {} await supabase.auth.signOut(); if (mounted) setAuthChecked(true); return; }
+          if (!isMaster && Number.isFinite(loginAt)) {
+            if (Date.now() - loginAt > 30 * 24 * 3600 * 1000) { try { localStorage.removeItem("amber_login_at"); } catch (e) {} await supabase.auth.signOut(); if (mounted) setAuthChecked(true); return; }
           } else { try { localStorage.setItem("amber_login_at", String(Date.now())); } catch (e) {} } // start the clock for pre-existing sessions
           const { data: prof } = await supabase.from("profiles").select("full_name, role, active, force_password_change, first_login, password_expires_at, avatar_url").eq("id", session.user.id).single();
           if (prof && prof.active !== false) {
