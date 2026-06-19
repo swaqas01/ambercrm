@@ -5563,12 +5563,12 @@ function calcReady(d) {
 function waOffPlan(d, r, fut) {
   let s = `Hi ${d.clientName || "there"},\nPlease find the estimated off-plan resale breakdown below:\n\nProperty: ${[d.projectName, d.unitNumber].filter(Boolean).join(", ") || "—"}\nOriginal Price: ${brAed(r.originalPrice)}\nResale Price: ${brAed(r.resalePrice)}\nPaid to Developer: ${brAed(r.amountPaid)} (${r.pctPaid.toFixed(1)}%)`;
   if (r.hasNoc) {
-    s += `\nRequired Payment for NOC: ${brAed(r.nocRequiredAmount)} (${r.nocReqPct}%)`;
+    s += `\nRequired for NOC: ${brAed(r.nocRequiredAmount)} (${r.nocReqPct}%)`;
     s += `\nAdditional Needed for NOC: ${brAed(r.additionalForNoc)}`;
   }
-  s += `\n${r.isDiscount ? "Seller Discount" : "Seller Premium"}: ${brAed(Math.abs(r.premium))}\nPayable to Seller Now: ${brAed(r.payableToSeller)}`;
-  if (r.hasNoc && r.payableToDevBeforeNoc > 0) s += `\nPayable to Developer Before NOC: ${brAed(r.payableToDevBeforeNoc)}`;
-  s += `\nEstimated Buying Costs: ${brAed(r.totalBuying)}\nImmediate Cash Requirement: ${brAed(r.immediateCash)}\n${r.hasNoc ? "Remaining to Developer After NOC" : "Remaining to Developer"}: ${brAed(r.remainingAfterNoc)}`;
+  s += `\n${r.isDiscount ? "Seller Discount" : "Seller Premium"}: ${brAed(Math.abs(r.premium))}\nPayable to Seller: ${brAed(r.payableToSeller)}`;
+  if (r.hasNoc && r.payableToDevBeforeNoc > 0) s += `\nPayable to Developer Before Transfer: ${brAed(r.payableToDevBeforeNoc)}`;
+  s += `\nEstimated Buying Costs: ${brAed(r.totalBuying)}\nImmediate Cash Requirement: ${brAed(r.immediateCash)}`;
   const hasFuture = (fut && fut.rows.length) || d.expectedHandover || brN(d.handoverAmount) > 0 || d.finalDate || brN(d.finalAmount) > 0;
   if (hasFuture) {
     s += "\n\nFuture Payment Plan:";
@@ -5579,6 +5579,7 @@ function waOffPlan(d, r, fut) {
     if (brN(d.finalAmount) > 0) s += `\nFinal Payment: ${brAed(d.finalAmount)}`;
     if (fut && fut.rows.length) s += `\nTotal Future Payments: ${brAed(fut.totalScheduled)}`;
   }
+  s += `\n\nRemaining Developer Balance / Future Payment Plan: ${brAed(r.remainingAfterNoc)}`;
   return s + (r.hasNoc ? "\n\nPlease note this is an estimate and final NOC/payment requirements must be confirmed by the developer." : "\n\nPlease note this is an estimate and final charges/payment dates may vary as per developer confirmation.");
 }
 function waReady(d, r) {
@@ -5641,7 +5642,6 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
       row("Additional Payment Needed for NOC", brAed(r.additionalForNoc), { bold: true, color: r.additionalForNoc > 0 ? RED : GREEN });
       row("Who Pays the NOC Shortfall", r.nocPayer + (r.nocPayer === "Custom split" ? " (Buyer " + brAed(r.buyerNocShortfall) + " / Seller " + brAed(r.sellerNocShortfall) + ")" : ""));
       if (r.payableToDevBeforeNoc > 0) row("Payable to Developer Before NOC / Transfer", brAed(r.payableToDevBeforeNoc));
-      row("Remaining Developer Balance After NOC", brAed(r.remainingAfterNoc));
       ensure(30); doc.setFont("helvetica", "italic"); doc.setFontSize(8.3); doc.setTextColor.apply(doc, r.nocMet ? GREEN : GREY);
       const nocNote = r.additionalForNoc > 0
         ? "The developer requires a minimum payment of " + brAed(r.nocRequiredAmount) + " before issuing NOC. Since " + brAed(r.amountPaid) + " has already been paid, an additional " + brAed(r.additionalForNoc) + " is required before NOC / transfer can proceed."
@@ -5659,14 +5659,16 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
     row("Total Buying Costs", brAed(r.totalBuying), { bold: true });
     y += 6; totalBar("Buyer Immediate Cash Requirement", brAed(r.immediateCash));
     sect("Overall");
-    row(r.hasNoc ? "Remaining Payable to Developer (after NOC)" : "Remaining Payable to Developer", brAed(r.remainingAfterNoc));
+    row("Remaining Developer Balance / Future Payment Plan Balance", brAed(r.remainingAfterNoc));
     row("Total Property Cost (excl. buying costs)", brAed(r.totalExcl));
     row("Total Property Cost (incl. buying costs)", brAed(r.totalIncl), { bold: true });
 
     const f2 = future;
-    const hasFuture = f2 && (f2.rows.length || d.expectedHandover || brN(d.handoverAmount) > 0 || d.finalDate || brN(d.finalAmount) > 0);
-    if (hasFuture) {
-      sect("Future Developer Payment Plan");
+    const hasFuture = f2 && (f2.rows.length || d.expectedHandover || brN(d.handoverAmount) > 0 || d.finalDate || brN(d.finalAmount) > 0 || d.postHandover === "Yes");
+    if (f2 && (r.hasNoc || hasFuture)) {
+      sect("Remaining Developer Payment Plan");
+      row("Total Paid to Developer Before Transfer", brAed(r.amountPaid + r.additionalForNoc));
+      row("Remaining Developer Balance / Future Payment Plan Balance", brAed(r.remainingAfterNoc), { bold: true });
       if (f2.rows.length) {
         const notesW = W - 2 * M - (132 + 66 + 34 + 92 + 70);
         const widths = [132, 66, 34, 92, 70, notesW];
@@ -5695,7 +5697,6 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
       if (d.postHandover === "Yes") { row("Post-Handover Plan", [d.postHandoverDuration, d.paymentFrequency].filter(Boolean).join(" \u00b7 ") || "Yes"); if (brN(d.postHandoverAmount) > 0) row("Post-Handover Amount", brAed(d.postHandoverAmount)); }
       if (f2.rows.length) {
         row("Total Scheduled Future Payments", brAed(f2.totalScheduled), { bold: true });
-        row("Remaining Developer Balance", brAed(f2.remainingToDev));
         if (Math.abs(f2.balanceNotScheduled) >= 1) row("Balance Not Scheduled", (f2.balanceNotScheduled < 0 ? "\u2212 " : "") + brAed(Math.abs(f2.balanceNotScheduled)), { color: RED });
         ensure(18); doc.setFont("helvetica", "italic"); doc.setFontSize(8.3); doc.setTextColor.apply(doc, f2.matched ? GREEN : RED);
         doc.text(f2.matched ? "Future payment plan matches the remaining developer balance." : "The future payment schedule does not match the remaining developer balance. Please review.", M, y); y += 15;
@@ -5858,7 +5859,8 @@ function OffPlanCalc({ user, narrow }) {
   const updatePayment = (id, patch) => setF((p) => ({ ...p, payments: p.payments.map((x) => x.id === id ? { ...x, ...patch } : x) }));
   const autoCalcPayments = () => setF((p) => { const base = planBaseOf(p); return { ...p, payments: p.payments.map((x) => (x.pct !== "" && x.pct != null && base > 0) ? { ...x, amount: String(Math.round(base * brN(x.pct) / 100)), lastEdit: "amount" } : x) }; });
   const futureRows = [
-    { label: "Remaining to developer", value: brAed(fut.remainingToDev), strong: true },
+    ...(r.hasNoc ? [{ label: "Total paid before transfer", value: brAed(r.amountPaid + r.additionalForNoc) }] : []),
+    { label: "Remaining developer balance / future plan", value: brAed(fut.remainingToDev), strong: true },
     { label: "Total scheduled future", value: brAed(fut.totalScheduled) },
     { label: "Balance not scheduled", value: (fut.balanceNotScheduled < 0 ? "\u2212 " : "") + brAed(Math.abs(fut.balanceNotScheduled)), accent: fut.rows.length ? (fut.matched ? T.ok : T.bad) : T.muted },
     ...(fut.rows.length ? [{ label: "Schedule status", value: fut.matched ? "Matches" : "Review plan", accent: fut.matched ? T.ok : T.bad, strong: true }] : []),
@@ -5892,7 +5894,7 @@ function OffPlanCalc({ user, narrow }) {
     ...(r.other > 0 ? [{ label: "Other charges", value: brAed(r.other) }] : []),
     { label: "Total buying costs", value: brAed(r.totalBuying), strong: true },
     { divider: true },
-    { label: r.hasNoc ? "Remaining to developer (after NOC)" : "Remaining to developer", value: brAed(r.remainingAfterNoc) },
+    { label: r.hasNoc ? "Remaining developer balance / future plan" : "Remaining to developer", value: brAed(r.remainingAfterNoc) },
     { label: "Total cost (excl. buying)", value: brAed(r.totalExcl) },
     { label: "Total cost (incl. buying)", value: brAed(r.totalIncl), strong: true },
   ];
