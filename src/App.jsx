@@ -619,6 +619,11 @@ export default function App() {
       if (!/type=recovery/.test(typeof window !== "undefined" ? (window.location.hash || "") : "")) {
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.user && mounted) {
+          // Hard 7-day session cap: force re-login one week after the last sign-in (independent of plan).
+          let loginAt = NaN; try { loginAt = parseInt(localStorage.getItem("amber_login_at") || "", 10); } catch (e) {}
+          if (Number.isFinite(loginAt)) {
+            if (Date.now() - loginAt > 7 * 24 * 3600 * 1000) { try { localStorage.removeItem("amber_login_at"); } catch (e) {} await supabase.auth.signOut(); if (mounted) setAuthChecked(true); return; }
+          } else { try { localStorage.setItem("amber_login_at", String(Date.now())); } catch (e) {} } // start the clock for pre-existing sessions
           const { data: prof } = await supabase.from("profiles").select("full_name, role, active, force_password_change, first_login, password_expires_at, avatar_url").eq("id", session.user.id).single();
           if (prof && prof.active !== false) {
             const role = resolveRole(session.user.email, prof.role);
@@ -694,7 +699,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {!recovery && authChecked && !user && <LoginFlow onLogin={(u) => { setUser(u); setScreen(u.home === "agent" ? "agent" : "admin"); }} dark={dark} setDark={setDark} />}
+      {!recovery && authChecked && !user && <LoginFlow onLogin={(u) => { try { localStorage.setItem("amber_login_at", String(Date.now())); } catch (e) {} setUser(u); setScreen(u.home === "agent" ? "agent" : "admin"); }} dark={dark} setDark={setDark} />}
       {!recovery && user && user.mustChangePw && <ForcedPasswordChange onDone={() => setUser({ ...user, mustChangePw: false })} signOut={signOut} />}
       {/* sidebar */}
       {user && (!narrow || navOpen) && (
