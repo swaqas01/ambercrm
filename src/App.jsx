@@ -556,6 +556,7 @@ const NAV = [
   ["open", "Open Leads", Unlock],
   ["performance", "Agent Performance", BarChart3],
   ["agents", "Team & Attendance", Users],
+  ["targets", "Targets", Target],
   ["security", "Suspicious Activity", ShieldAlert],
   ["devices", "Devices & Sessions", Smartphone],
   ["matching", "Property Matching", Building2],
@@ -682,7 +683,7 @@ export default function App() {
   }, [user, screen]);
   const SCREENS = {
     live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} openAgent={openAgent} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />, devices: <DevicesSecurity user={user} />, breakdown: <BreakdownCalculator user={user} narrow={narrow} />,
-    myprofile: <AgentProfile user={user} agentId={user && user.id} self go={go} openLead={openLead} openAgent={openAgent} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, agentprofile: <AgentProfile user={user} agentId={agentDetailId} go={go} openLead={openLead} openAgent={openAgent} />, agents: <AgentsRoster user={user} go={go} openAgent={openAgent} />,
+    myprofile: <AgentProfile user={user} agentId={user && user.id} self go={go} openLead={openLead} openAgent={openAgent} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, agentprofile: <AgentProfile user={user} agentId={agentDetailId} go={go} openLead={openLead} openAgent={openAgent} />, agents: <AgentsRoster user={user} go={go} openAgent={openAgent} />, targets: <TargetsAdmin user={user} go={go} openAgent={openAgent} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <Performance go={go} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -1297,6 +1298,273 @@ function ApAvatar({ url, name, size = 64 }) {
     : <div style={{ width: size, height: size, borderRadius: "50%", background: T.goldSoft, color: T.gold, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: DISPLAY, fontWeight: 800, fontSize: size * 0.4, flexShrink: 0 }}>{String(name || "?").trim().charAt(0).toUpperCase() || "?"}</div>;
 }
 
+// ===== Agent Targets — daily / weekly / monthly Call & WhatsApp goals (real logs only) =====
+const TARGET_DEFAULTS = { daily_call_target: 20, weekly_call_target: 100, monthly_call_target: 400, daily_whatsapp_target: 30, weekly_whatsapp_target: 150, monthly_whatsapp_target: 600 };
+function tgtDubaiDate(ts) { try { return new Date(ts).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return ""; } }
+function tgtTodayStr() { return tgtDubaiDate(Date.now()); }
+function tgtMondayStr() {
+  const wd = new Date().toLocaleDateString("en-US", { timeZone: "Asia/Dubai", weekday: "short" });
+  const back = ({ Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 })[wd] || 0;
+  const parts = tgtTodayStr().split("-").map(Number);
+  const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])); dt.setUTCDate(dt.getUTCDate() - back);
+  return dt.toISOString().slice(0, 10);
+}
+function tgtMonthStartIso() { return tgtTodayStr().slice(0, 7) + "-01T00:00:00+04:00"; }
+function tgtInPeriod(ts, period) { const ds = tgtDubaiDate(ts); if (!ds) return false; if (period === "today") return ds === tgtTodayStr(); if (period === "week") return ds >= tgtMondayStr(); return ds.slice(0, 7) === tgtTodayStr().slice(0, 7); }
+function tgtCount(acts, action, period) { return (acts || []).filter((a) => a.action === action && tgtInPeriod(a.created_at, period)).length; }
+function resolveTargets(df, ov) {
+  const D = df || TARGET_DEFAULTS; const paused = !!(ov && ov.is_active === false);
+  const pick = (col) => (ov && ov[col] != null ? ov[col] : D[col]);
+  const w = (col) => (paused ? null : pick(col));
+  return { paused, call: { today: w("daily_call_target"), week: w("weekly_call_target"), month: w("monthly_call_target") },
+    whatsapp: { today: w("daily_whatsapp_target"), week: w("weekly_whatsapp_target"), month: w("monthly_whatsapp_target") } };
+}
+function targetStatus(done, target) {
+  if (target == null || target <= 0) return { has: false, pct: 0, remaining: 0, ringColor: T.faint, label: "No Target", badgeBg: T.bone, badgeFg: T.muted, msg: "No target set." };
+  const pct = Math.round((done / target) * 100);
+  if (done > target) return { has: true, pct, remaining: 0, ringColor: T.gold, label: "Exceeded", badgeBg: T.goldSoft, badgeFg: T.gold, msg: "Exceeded by " + (done - target) + "." };
+  if (done === target) return { has: true, pct: 100, remaining: 0, ringColor: T.ok, label: "Achieved", badgeBg: T.okSoft, badgeFg: T.ok, msg: "Target achieved." };
+  const remaining = target - done; const behind = pct < 60;
+  return { has: true, pct, remaining, ringColor: behind ? T.warn : T.gold, label: behind ? "Behind" : "On Track", badgeBg: behind ? T.warnSoft : T.goldSoft, badgeFg: behind ? T.warn : T.gold, msg: remaining + " more to hit your goal." };
+}
+function TargetRing({ pct, color, size = 104 }) {
+  const stroke = Math.max(8, Math.round(size * 0.094)); const r = (size - stroke) / 2; const c = 2 * Math.PI * r;
+  const p = Math.max(0, Math.min(100, pct || 0)); const off = c * (1 - p / 100); const cx = size / 2;
+  return (
+    <div style={{ position: "relative", width: size, height: size }}>
+      <svg width={size} height={size} viewBox={"0 0 " + size + " " + size}>
+        <circle cx={cx} cy={cx} r={r} fill="none" stroke={T.hairSoft} strokeWidth={stroke} />
+        <circle cx={cx} cy={cx} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={c} strokeDashoffset={off} transform={"rotate(-90 " + cx + " " + cx + ")"} style={{ transition: "stroke-dashoffset .7s cubic-bezier(.4,0,.2,1)" }} />
+      </svg>
+      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span style={{ fontFamily: DISPLAY, fontSize: Math.round(size * 0.27), fontWeight: 800, color: T.ink, lineHeight: 1 }}>{Math.round(pct || 0)}%</span>
+      </div>
+    </div>
+  );
+}
+function TargetCard({ title, done, target, unit, onDetails }) {
+  const s = targetStatus(done, target);
+  return (
+    <div style={{ ...card, padding: 16, display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 9 }}>
+      <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>{title}</div>
+      <TargetRing pct={s.pct} color={s.ringColor} />
+      <div style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 800, color: T.ink }}>{done} / {s.has ? target : "\u2014"} <span style={{ fontSize: 11.5, fontWeight: 600, color: T.muted }}>{unit}</span></div>
+      <div style={{ fontSize: 11.5, color: s.badgeFg, fontWeight: 600, minHeight: 16 }}>{s.msg}</div>
+      {onDetails && <button onClick={onDetails} style={{ ...miniBtn(), fontSize: 11.5, padding: "5px 16px" }}>Details</button>}
+    </div>
+  );
+}
+function TargetDetailsModal({ agentId, agentName, action, period, title, target, openLead, onClose }) {
+  const [rows, setRows] = useState(null);
+  useEffect(() => { let alive = true; (async () => {
+    const { data } = await supabase.from("lead_activity").select("action,created_at,lead_id,detail").eq("actor_id", agentId).eq("action", action).gte("created_at", tgtMonthStartIso()).order("created_at", { ascending: false }).limit(1500);
+    if (alive) setRows((data || []).filter((r) => tgtInPeriod(r.created_at, period)));
+  })(); return () => { alive = false; }; }, []);
+  const done = rows ? rows.length : 0; const s = targetStatus(done, target);
+  return <Modal title={title} onClose={onClose}>
+    {agentName && <div style={{ fontSize: 12.5, color: T.muted, marginTop: -4, marginBottom: 10 }}>{agentName}</div>}
+    <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 14 }}>
+      <TargetRing pct={s.pct} color={s.ringColor} size={82} />
+      <div>
+        <div style={{ fontFamily: DISPLAY, fontSize: 22, fontWeight: 800, color: T.ink }}>{done} / {s.has ? target : "\u2014"}</div>
+        <div style={{ fontSize: 12.5, color: s.badgeFg, fontWeight: 600 }}>{s.msg}</div>
+      </div>
+    </div>
+    <div style={{ ...card, padding: 6, maxHeight: 360, overflowY: "auto" }}>
+      {rows === null ? <div style={{ padding: 16, color: T.muted, fontSize: 12.5 }}>Loading…</div>
+        : rows.length === 0 ? <div style={{ padding: 16, color: T.muted, fontSize: 12.5, textAlign: "center" }}>No {action === "call" ? "calls" : "WhatsApp actions"} recorded for this period.</div>
+        : rows.map((r, i) => (
+          <div key={i} onClick={() => r.lead_id && openLead && openLead(r.lead_id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderBottom: i < rows.length - 1 ? "1px solid " + T.hairSoft : "none", cursor: r.lead_id && openLead ? "pointer" : "default" }}>
+            <span style={{ color: action === "whatsapp" ? WA : T.muted }}>{action === "whatsapp" ? <MessageCircle size={14} /> : <PhoneCall size={14} />}</span>
+            <span style={{ fontSize: 12.5, color: T.ink, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(r.detail && (r.detail.client || r.detail.lead_code)) || "Lead"}</span>
+            <span style={{ fontSize: 11, color: T.faint }}>{new Date(r.created_at).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+          </div>
+        ))}
+    </div>
+  </Modal>;
+}
+function MyTargets({ userId, acts, openLead }) {
+  const [targets, setTargets] = useState(null);
+  const [details, setDetails] = useState(null);
+  useEffect(() => { let alive = true; if (!userId) { return; }
+    (async () => {
+      const [df, ov] = await Promise.all([
+        supabase.from("default_agent_targets").select("*").eq("id", 1).maybeSingle(),
+        supabase.from("agent_targets").select("*").eq("agent_id", userId).maybeSingle(),
+      ]);
+      if (alive) setTargets(resolveTargets(df.data, ov.data));
+    })();
+    return () => { alive = false; };
+  }, [userId]);
+  if (!targets) return null;
+  const cards = [["Daily Calls", "call", "today", "calls"], ["Daily WhatsApp", "whatsapp", "today", "msgs"], ["Weekly Calls", "call", "week", "calls"], ["Weekly WhatsApp", "whatsapp", "week", "msgs"], ["Monthly Calls", "call", "month", "calls"], ["Monthly WhatsApp", "whatsapp", "month", "msgs"]];
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ ...card, padding: "15px 18px 18px" }}>
+        <div style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 9 }}><Target size={19} color={T.gold} /> My Targets</div>
+        {targets.paused
+          ? <div style={{ fontSize: 12.5, color: T.muted, padding: "12px 0 2px" }}>Your targets are currently paused. Speak to your manager.</div>
+          : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(178px, 1fr))", gap: 12, marginTop: 12 }}>
+              {cards.map((cc) => <TargetCard key={cc[0]} title={cc[0]} done={tgtCount(acts, cc[1], cc[2])} target={targets[cc[1]][cc[2]]} unit={cc[3]} onDetails={() => setDetails({ action: cc[1], period: cc[2], title: cc[0], target: targets[cc[1]][cc[2]] })} />)}
+            </div>}
+      </div>
+      {details && <TargetDetailsModal agentId={userId} action={details.action} period={details.period} title={details.title} target={details.target} openLead={openLead} onClose={() => setDetails(null)} />}
+    </div>
+  );
+}
+
+function TargetsAdmin({ user, go, openAgent }) {
+  const isMaster = !!(user && user.role === "master_admin");
+  const canView = isMaster || !!(user && user.role === "admin");
+  const [defs, setDefs] = useState(null);
+  const [defEdit, setDefEdit] = useState(null);
+  const [overrides, setOverrides] = useState({});
+  const [profs, setProfs] = useState([]);
+  const [acts, setActs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [savingDef, setSavingDef] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [edit, setEdit] = useState(null);
+  const [period, setPeriod] = useState("today");
+  const [q, setQ] = useState("");
+  const lbl = brLbl(), inp = brInp();
+
+  useEffect(() => {
+    let alive = true;
+    if (!canView) { setLoading(false); return; }
+    (async () => {
+      setLoading(true);
+      const [df, ov, pp, aa] = await Promise.all([
+        supabase.from("default_agent_targets").select("*").eq("id", 1).maybeSingle(),
+        supabase.from("agent_targets").select("*"),
+        supabase.from("profiles").select("id,full_name,role,active,avatar_url").in("role", ["agent", "sales_manager"]).order("full_name", { ascending: true }),
+        supabase.from("lead_activity").select("actor_id,action,created_at").gte("created_at", tgtMonthStartIso()).limit(20000),
+      ]);
+      if (!alive) return;
+      const d = df.data || { id: 1, ...TARGET_DEFAULTS };
+      setDefs(d); setDefEdit(d);
+      const map = {}; (ov.data || []).forEach((r) => { map[r.agent_id] = r; });
+      setOverrides(map); setProfs((pp.data || []).filter((p) => p.active !== false)); setActs(aa.data || []);
+      setLoading(false);
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const saveDefaults = async () => {
+    setSavingDef(true); setMsg("");
+    const payload = { id: 1, updated_by: user.id };
+    ["daily_call_target", "weekly_call_target", "monthly_call_target", "daily_whatsapp_target", "weekly_whatsapp_target", "monthly_whatsapp_target"].forEach((k) => { payload[k] = Math.max(0, parseInt(defEdit[k], 10) || 0); });
+    const { error } = await supabase.from("default_agent_targets").upsert(payload, { onConflict: "id" });
+    setSavingDef(false); setMsg(error ? "Couldn't save defaults — please try again." : "Defaults saved.");
+    if (!error) { setDefs({ ...defs, ...payload }); setTimeout(() => setMsg(""), 2500); }
+  };
+  const saveAgent = async () => {
+    if (!edit) return;
+    const f = edit.form; const num = (v) => { const n = parseInt(v, 10); return isNaN(n) ? null : Math.max(0, n); };
+    const payload = { agent_id: edit.agent.id, is_active: f.is_active !== false, updated_by: user.id, created_by: user.id,
+      daily_call_target: num(f.daily_call_target), weekly_call_target: num(f.weekly_call_target), monthly_call_target: num(f.monthly_call_target),
+      daily_whatsapp_target: num(f.daily_whatsapp_target), weekly_whatsapp_target: num(f.weekly_whatsapp_target), monthly_whatsapp_target: num(f.monthly_whatsapp_target) };
+    const { error } = await supabase.from("agent_targets").upsert(payload, { onConflict: "agent_id" });
+    if (error) { alert("Couldn't save this agent's targets. Please try again."); return; }
+    setOverrides((m) => ({ ...m, [edit.agent.id]: payload })); setEdit(null);
+  };
+  const resetAgent = async (agentId) => {
+    const { error } = await supabase.from("agent_targets").delete().eq("agent_id", agentId);
+    if (!error) setOverrides((m) => { const c = { ...m }; delete c[agentId]; return c; });
+  };
+
+  if (!canView) return <div style={{ ...card, padding: 22, maxWidth: 520, margin: "8px auto" }}><div style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 800, color: T.ink }}>Access denied</div><div style={{ fontSize: 13, color: T.muted, marginTop: 6 }}>Targets are managed by the Master Admin.</div></div>;
+  if (loading || !defs) return <div style={{ padding: 24, color: T.muted }}>Loading targets…</div>;
+
+  const periodKeyCall = period === "today" ? "daily_call_target" : period === "week" ? "weekly_call_target" : "monthly_call_target";
+  const periodKeyWa = period === "today" ? "daily_whatsapp_target" : period === "week" ? "weekly_whatsapp_target" : "monthly_whatsapp_target";
+  const rows = profs.filter((p) => !q || String(p.full_name || "").toLowerCase().includes(q.toLowerCase())).map((p) => {
+    const eff = resolveTargets(defs, overrides[p.id]);
+    const mine = acts.filter((a) => a.actor_id === p.id);
+    const calls = tgtCount(mine, "call", period), wa = tgtCount(mine, "whatsapp", period);
+    return { p, eff, calls, wa, cT: eff.call[period], wT: eff.whatsapp[period], custom: !!overrides[p.id], paused: eff.paused };
+  });
+  const hitCalls = rows.filter((r) => r.cT != null && r.calls >= r.cT).length;
+  const hitWa = rows.filter((r) => r.wT != null && r.wa >= r.wT).length;
+  const defField = (label, k) => <div><label style={lbl}>{label}</label><input type="number" min="0" value={defEdit[k] == null ? "" : defEdit[k]} onChange={(e) => setDefEdit((d) => ({ ...d, [k]: e.target.value }))} style={inp} disabled={!isMaster} /></div>;
+
+  return (
+    <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+      <SectionTitle right={<span style={{ fontSize: 11, color: T.muted, fontWeight: 600 }}>{hitCalls}/{rows.length} hit calls · {hitWa}/{rows.length} hit WhatsApp ({period === "today" ? "today" : period === "week" ? "this week" : "this month"})</span>}>Targets</SectionTitle>
+
+      {/* Default targets */}
+      <div style={{ ...card, padding: 16, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+          <div style={{ fontWeight: 800, fontSize: 14, color: T.ink }}>Default targets {isMaster ? "" : "(read-only)"}</div>
+          {msg && <span style={{ fontSize: 12, fontWeight: 600, color: msg.startsWith("Defaults saved") ? T.ok : T.bad }}>{msg}</span>}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+          {defField("Daily calls", "daily_call_target")}
+          {defField("Weekly calls", "weekly_call_target")}
+          {defField("Monthly calls", "monthly_call_target")}
+          {defField("Daily WhatsApp", "daily_whatsapp_target")}
+          {defField("Weekly WhatsApp", "weekly_whatsapp_target")}
+          {defField("Monthly WhatsApp", "monthly_whatsapp_target")}
+        </div>
+        {isMaster && <div style={{ marginTop: 14 }}><button onClick={saveDefaults} disabled={savingDef} style={{ border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 13, padding: "10px 22px", borderRadius: 10, cursor: savingDef ? "default" : "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 7, opacity: savingDef ? 0.7 : 1 }}><Save size={15} /> {savingDef ? "Saving…" : "Save defaults"}</button></div>}
+      </div>
+
+      {/* Team overview */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+        <SectionTitle>Team targets</SectionTitle>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ position: "relative" }}><Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.faint }} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agent…" style={{ padding: "8px 12px 8px 31px", borderRadius: 9, border: "1px solid " + T.hair, background: T.paper, color: T.ink, fontSize: 12.5, fontFamily: UI }} /></div>
+          <div style={{ display: "flex", gap: 5 }}>{[["today", "Today"], ["week", "Week"], ["month", "Month"]].map((pp) => <button key={pp[0]} onClick={() => setPeriod(pp[0])} style={{ border: "1px solid " + (period === pp[0] ? T.gold : T.hair), background: period === pp[0] ? T.goldSoft : T.paper, color: period === pp[0] ? T.gold : T.muted, fontWeight: 600, fontSize: 12, padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontFamily: UI }}>{pp[1]}</button>)}</div>
+        </div>
+      </div>
+      <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1.3fr 1.3fr 0.9fr auto", gap: 8, padding: "10px 14px", borderBottom: "1px solid " + T.hairSoft, fontSize: 10, fontWeight: 800, letterSpacing: ".05em", textTransform: "uppercase", color: T.muted }}>
+          <span>Agent</span><span>Calls</span><span>WhatsApp</span><span>Status</span><span></span>
+        </div>
+        {rows.map((r) => {
+          const cs = targetStatus(r.calls, r.cT), ws = targetStatus(r.wa, r.wT);
+          const worst = !cs.has && !ws.has ? cs : (cs.label === "Behind" || ws.label === "Behind" ? (cs.label === "Behind" ? cs : ws) : (cs.has ? cs : ws));
+          return (
+            <div key={r.p.id} style={{ display: "grid", gridTemplateColumns: "1.6fr 1.3fr 1.3fr 0.9fr auto", gap: 8, padding: "11px 14px", borderBottom: "1px solid " + T.hairSoft, alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+                <ApAvatar url={r.p.avatar_url} name={r.p.full_name} size={32} />
+                <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.p.full_name || "—"}</div><div style={{ fontSize: 10.5, color: T.faint }}>{roleLabel(r.p.role)}{r.custom ? " · custom" : ""}{r.paused ? " · paused" : ""}</div></div>
+              </div>
+              <div style={{ fontSize: 12.5, color: T.ink }}><b style={{ fontFamily: DISPLAY, fontSize: 15 }}>{r.calls}</b> / {r.cT == null ? "—" : r.cT} <span style={{ fontSize: 11, color: cs.badgeFg, fontWeight: 700 }}>{cs.has ? cs.pct + "%" : ""}</span></div>
+              <div style={{ fontSize: 12.5, color: T.ink }}><b style={{ fontFamily: DISPLAY, fontSize: 15 }}>{r.wa}</b> / {r.wT == null ? "—" : r.wT} <span style={{ fontSize: 11, color: ws.badgeFg, fontWeight: 700 }}>{ws.has ? ws.pct + "%" : ""}</span></div>
+              <div><span style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: worst.badgeBg, color: worst.badgeFg }}>{worst.label}</span></div>
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                {openAgent && <button onClick={() => openAgent(r.p.id)} style={{ ...miniBtn(), padding: "5px 10px", fontSize: 11 }}>View</button>}
+                {isMaster && <button onClick={() => setEdit({ agent: r.p, form: { ...(overrides[r.p.id] || {}), is_active: overrides[r.p.id] ? overrides[r.p.id].is_active !== false : true } })} style={{ ...miniBtn(), padding: "5px 10px", fontSize: 11, borderColor: T.gold, color: T.gold }}>Edit</button>}
+                {isMaster && r.custom && <button onClick={() => resetAgent(r.p.id)} title="Reset to default" style={{ ...miniBtn(), padding: "5px 9px", fontSize: 11 }}><RotateCcw size={12} /></button>}
+              </div>
+            </div>
+          );
+        })}
+        {rows.length === 0 && <div style={{ padding: 20, color: T.muted, fontSize: 13, textAlign: "center" }}>No agents match.</div>}
+      </div>
+      <div style={{ fontSize: 10.5, color: T.faint, marginTop: 8 }}>Counts come from real call / WhatsApp action logs (Dubai time). Blank target = uses the company default. Only the Master Admin can change targets.</div>
+
+      {edit && <Modal title={"Targets · " + (edit.agent.full_name || "Agent")} onClose={() => setEdit(null)}>
+        <div style={{ fontSize: 12, color: T.muted, marginTop: -4, marginBottom: 12 }}>Leave a field blank to use the company default ({defs.daily_call_target}/{defs.weekly_call_target}/{defs.monthly_call_target} calls, {defs.daily_whatsapp_target}/{defs.weekly_whatsapp_target}/{defs.monthly_whatsapp_target} WhatsApp).</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          {[["Daily calls", "daily_call_target"], ["Weekly calls", "weekly_call_target"], ["Monthly calls", "monthly_call_target"], ["Daily WhatsApp", "daily_whatsapp_target"], ["Weekly WhatsApp", "weekly_whatsapp_target"], ["Monthly WhatsApp", "monthly_whatsapp_target"]].map((ff) => (
+            <div key={ff[1]}><label style={lbl}>{ff[0]}</label><input type="number" min="0" value={edit.form[ff[1]] == null ? "" : edit.form[ff[1]]} placeholder={"default"} onChange={(e) => setEdit((s) => ({ ...s, form: { ...s.form, [ff[1]]: e.target.value === "" ? null : e.target.value } }))} style={inp} /></div>
+          ))}
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 14, cursor: "pointer", fontSize: 13, color: T.ink }}>
+          <input type="checkbox" checked={edit.form.is_active !== false} onChange={(e) => setEdit((s) => ({ ...s, form: { ...s.form, is_active: e.target.checked } }))} style={{ width: 16, height: 16 }} /> Targets active for this agent
+        </label>
+        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <button onClick={saveAgent} style={{ border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 13, padding: "10px 22px", borderRadius: 10, cursor: "pointer", fontFamily: UI }}>Save</button>
+          <button onClick={() => setEdit(null)} style={{ ...miniBtn() }}>Cancel</button>
+        </div>
+      </Modal>}
+    </div>
+  );
+}
+
+
 function AgentProfile({ user, agentId, self, go, openLead, openAgent, onAvatar }) {
   const isOwn = !!(user && agentId && user.id === agentId);
   const canView = isOwn || (user && (user.role === "master_admin" || user.role === "admin"));
@@ -1310,6 +1578,8 @@ function AgentProfile({ user, agentId, self, go, openLead, openAgent, onAvatar }
   const [fups, setFups] = useState([]);
   const [leads, setLeads] = useState([]);
   const [devices, setDevices] = useState([]);
+  const [targets, setTargets] = useState(null);
+  const [tDetails, setTDetails] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [tab, setTab] = useState("overview");
@@ -1325,7 +1595,7 @@ function AgentProfile({ user, agentId, self, go, openLead, openAgent, onAvatar }
       setLoading(true); setTab("overview"); setSaveMsg("");
       const d = new Date();
       const monthIso = new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
-      const [p, a, ac, dl, fu, ld, dv] = await Promise.all([
+      const [p, a, ac, dl, fu, ld, dv, tdf, tov] = await Promise.all([
         supabase.from("profiles").select("id,full_name,email,role,active,last_login,avatar_url").eq("id", agentId).single(),
         supabase.from("agent_profiles").select("*").eq("user_id", agentId).maybeSingle(),
         supabase.from("lead_activity").select("action,created_at,lead_id,detail").eq("actor_id", agentId).gte("created_at", monthIso).order("created_at", { ascending: false }).limit(4000),
@@ -1333,6 +1603,8 @@ function AgentProfile({ user, agentId, self, go, openLead, openAgent, onAvatar }
         supabase.from("follow_ups").select("status,due_at,completed_at,created_at").eq("agent_id", agentId).limit(3000),
         supabase.from("leads").select("temperature,created_at,last_contacted").eq("assigned_agent", agentId).limit(4000),
         supabase.from("user_devices").select("last_seen,revoked").eq("user_id", agentId).limit(20),
+        supabase.from("default_agent_targets").select("*").eq("id", 1).maybeSingle(),
+        supabase.from("agent_targets").select("*").eq("agent_id", agentId).maybeSingle(),
       ]);
       if (!alive) return;
       setProf(p.data || null);
@@ -1343,6 +1615,7 @@ function AgentProfile({ user, agentId, self, go, openLead, openAgent, onAvatar }
       setFups(fu.data || []);
       setLeads(ld.data || []);
       setDevices(dv.data || []);
+      setTargets(resolveTargets(tdf.data, tov.data));
       setLoading(false);
     })();
     return () => { alive = false; };
@@ -1508,6 +1781,16 @@ function AgentProfile({ user, agentId, self, go, openLead, openAgent, onAvatar }
           {cEmail > 0 && <PStat label="Emails" value={cEmail} />}
         </div>
 
+        {/* Agent Targets (call / WhatsApp goals vs real logs) */}
+        {targets && !targets.paused && (targets.call[period] != null || targets.whatsapp[period] != null) && <>
+          <SectionTitle>Agent targets · {periodLabel}</SectionTitle>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 16 }}>
+            <TargetCard title={(period === "today" ? "Daily" : period === "week" ? "Weekly" : "Monthly") + " Calls"} done={tgtCount(A, "call", period)} target={targets.call[period]} unit="calls" onDetails={() => setTDetails({ action: "call", period, title: "Calls \u00b7 " + periodLabel, target: targets.call[period] })} />
+            <TargetCard title={(period === "today" ? "Daily" : period === "week" ? "Weekly" : "Monthly") + " WhatsApp"} done={tgtCount(A, "whatsapp", period)} target={targets.whatsapp[period]} unit="msgs" onDetails={() => setTDetails({ action: "whatsapp", period, title: "WhatsApp \u00b7 " + periodLabel, target: targets.whatsapp[period] })} />
+          </div>
+        </>}
+        {targets && targets.paused && <div style={{ fontSize: 11.5, color: T.faint, marginBottom: 14 }}>Targets are paused for this agent.</div>}
+
         {/* Deals (approved only, from Deals module) */}
         <SectionTitle right={<span style={{ fontSize: 10.5, color: T.muted, fontWeight: 600 }}>approved deals only · from Deals module</span>}>Deal performance · {periodLabel}</SectionTitle>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
@@ -1615,6 +1898,7 @@ function AgentProfile({ user, agentId, self, go, openLead, openAgent, onAvatar }
           {upErr && <span style={{ fontSize: 12, color: T.bad }}>{upErr}</span>}
         </div>}
       </>}
+      {tDetails && <TargetDetailsModal agentId={agentId} agentName={prof.full_name} action={tDetails.action} period={tDetails.period} title={tDetails.title} target={tDetails.target} openLead={openLead} onClose={() => setTDetails(null)} />}
     </div>
   );
 }
@@ -2031,6 +2315,8 @@ function AgentDash({ go, user, openLead, onAvatar }) {
         </div>
         <div style={{ fontSize: 10.5, color: T.faint, padding: "0 18px 14px" }}>All figures are your own real CRM activity. "Leads Assigned" counts leads created in the period; commission reflects approved deals only.</div>
       </div>
+
+      <MyTargets userId={user && user.id} acts={acts} openLead={openLead} />
 
       {/* streak + plan my day */}
       <div style={{ display: "flex", gap: 12, marginTop: 14, flexWrap: "wrap" }}>
