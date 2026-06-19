@@ -5511,7 +5511,7 @@ function calcFuture(f, r) {
   const base = planBaseOf(f);
   const rows = (f.payments || []).map((p) => ({ ...p, amt: paymentAmt(p, base) }));
   const totalScheduled = rows.reduce((s, p) => s + p.amt, 0);
-  const remainingToDev = r.remainingToDev;
+  const remainingToDev = (r.remainingAfterNoc != null) ? r.remainingAfterNoc : r.remainingToDev;
   const balanceNotScheduled = remainingToDev - totalScheduled;
   const matched = rows.length > 0 && Math.abs(balanceNotScheduled) < 1;
   const upcoming = rows.filter((p) => p.status !== "Paid" && p.dueDate).sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
@@ -5531,7 +5531,21 @@ function calcOffPlan(d) {
   const dld = resalePrice * brN(d.dldPct) / 100, agency = resalePrice * brN(d.agencyPct) / 100, vat = agency * brN(d.vatPct) / 100;
   const trustee = brN(d.trustee), noc = brN(d.noc), saleProg = brN(d.saleProg), other = brN(d.other);
   const totalBuying = dld + agency + vat + trustee + noc + saleProg + other;
-  return { originalPrice, resalePrice, amountPaid, pctPaid, remainingToDev, autoPremium, premium, isDiscount: premium < 0, payableToSeller, dld, agency, vat, agencyVat: agency + vat, trustee, noc, saleProg, other, totalBuying, immediateCash: payableToSeller + totalBuying, totalExcl: resalePrice, totalIncl: resalePrice + totalBuying };
+  // Developer NOC payment requirement (eligibility to transfer)
+  const nocReqPct = brN(d.nocRequiredPercent);
+  const hasNoc = nocReqPct > 0;
+  const nocRequiredAmount = originalPrice * nocReqPct / 100;
+  const additionalForNoc = Math.max(0, nocRequiredAmount - amountPaid);
+  const nocMet = !hasNoc || additionalForNoc < 0.5;
+  const nocPayer = d.nocPayer || "Buyer";
+  let buyerNocShortfall, sellerNocShortfall;
+  if (nocPayer === "Seller") { buyerNocShortfall = 0; sellerNocShortfall = additionalForNoc; }
+  else if (nocPayer === "Custom split") { buyerNocShortfall = brN(d.buyerNocShare); sellerNocShortfall = brN(d.sellerNocShare); }
+  else { buyerNocShortfall = additionalForNoc; sellerNocShortfall = 0; }
+  const payableToDevBeforeNoc = buyerNocShortfall;
+  const remainingAfterNoc = Math.max(0, originalPrice - amountPaid - additionalForNoc);
+  const immediateCash = payableToSeller + buyerNocShortfall + totalBuying;
+  return { originalPrice, resalePrice, amountPaid, pctPaid, remainingToDev, autoPremium, premium, isDiscount: premium < 0, payableToSeller, dld, agency, vat, agencyVat: agency + vat, trustee, noc, saleProg, other, totalBuying, immediateCash, totalExcl: resalePrice, totalIncl: resalePrice + totalBuying, hasNoc, nocReqPct, nocRequiredAmount, additionalForNoc, nocMet, nocPayer, buyerNocShortfall, sellerNocShortfall, payableToDevBeforeNoc, remainingAfterNoc };
 }
 function calcReady(d) {
   const sellingPrice = brN(d.sellingPrice);
@@ -5547,7 +5561,14 @@ function calcReady(d) {
 
 // ---- WhatsApp summaries ----
 function waOffPlan(d, r, fut) {
-  let s = `Hi ${d.clientName || "there"},\nPlease find the estimated off-plan resale breakdown below:\n\nProperty: ${[d.projectName, d.unitNumber].filter(Boolean).join(", ") || "—"}\nResale Price: ${brAed(r.resalePrice)}\nAmount Paid to Developer: ${brAed(r.amountPaid)}\n${r.isDiscount ? "Seller Discount" : "Seller Premium"}: ${brAed(Math.abs(r.premium))}\nPayable to Seller Now: ${brAed(r.payableToSeller)}\nEstimated Buying Costs: ${brAed(r.totalBuying)}\nImmediate Cash Requirement: ${brAed(r.immediateCash)}\nRemaining to Developer: ${brAed(r.remainingToDev)}`;
+  let s = `Hi ${d.clientName || "there"},\nPlease find the estimated off-plan resale breakdown below:\n\nProperty: ${[d.projectName, d.unitNumber].filter(Boolean).join(", ") || "—"}\nOriginal Price: ${brAed(r.originalPrice)}\nResale Price: ${brAed(r.resalePrice)}\nPaid to Developer: ${brAed(r.amountPaid)} (${r.pctPaid.toFixed(1)}%)`;
+  if (r.hasNoc) {
+    s += `\nRequired Payment for NOC: ${brAed(r.nocRequiredAmount)} (${r.nocReqPct}%)`;
+    s += `\nAdditional Needed for NOC: ${brAed(r.additionalForNoc)}`;
+  }
+  s += `\n${r.isDiscount ? "Seller Discount" : "Seller Premium"}: ${brAed(Math.abs(r.premium))}\nPayable to Seller Now: ${brAed(r.payableToSeller)}`;
+  if (r.hasNoc && r.payableToDevBeforeNoc > 0) s += `\nPayable to Developer Before NOC: ${brAed(r.payableToDevBeforeNoc)}`;
+  s += `\nEstimated Buying Costs: ${brAed(r.totalBuying)}\nImmediate Cash Requirement: ${brAed(r.immediateCash)}\n${r.hasNoc ? "Remaining to Developer After NOC" : "Remaining to Developer"}: ${brAed(r.remainingAfterNoc)}`;
   const hasFuture = (fut && fut.rows.length) || d.expectedHandover || brN(d.handoverAmount) > 0 || d.finalDate || brN(d.finalAmount) > 0;
   if (hasFuture) {
     s += "\n\nFuture Payment Plan:";
@@ -5558,7 +5579,7 @@ function waOffPlan(d, r, fut) {
     if (brN(d.finalAmount) > 0) s += `\nFinal Payment: ${brAed(d.finalAmount)}`;
     if (fut && fut.rows.length) s += `\nTotal Future Payments: ${brAed(fut.totalScheduled)}`;
   }
-  return s + "\n\nPlease note this is an estimate and final charges/payment dates may vary as per developer confirmation.";
+  return s + (r.hasNoc ? "\n\nPlease note this is an estimate and final NOC/payment requirements must be confirmed by the developer." : "\n\nPlease note this is an estimate and final charges/payment dates may vary as per developer confirmation.");
 }
 function waReady(d, r) {
   return `Hi ${d.clientName || "there"},\nPlease find the estimated ready property resale breakdown below:\n\nProperty: ${[d.propertyName, d.unitNumber].filter(Boolean).join(", ") || "—"}\nSelling Price: ${brAed(r.sellingPrice)}\nDLD Fee: ${brAed(r.dld)}\nAgency Commission + VAT: ${brAed(r.agencyVat)}\nTrustee / Admin / NOC Charges: ${brAed(r.trustee + r.titleAdmin + r.noc)}\nEstimated Buying Costs: ${brAed(r.totalBuying)}\nTotal Cash Requirement: ${brAed(r.totalCash)}\n\nPlease note this is an estimate and final charges may vary.`;
@@ -5613,6 +5634,20 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
     row("Amount Paid to Developer", brAed(r.amountPaid) + "  (" + r.pctPaid.toFixed(1) + "%)");
     row(r.isDiscount ? "Seller Discount" : "Seller Premium", (r.isDiscount ? "\u2212 " : "") + brAed(Math.abs(r.premium)));
     row("Total Payable to Seller Now", brAed(r.payableToSeller), { bold: true });
+    if (r.hasNoc) {
+      sect("Developer NOC Payment Requirement");
+      row("Minimum Required Payment for NOC (" + r.nocReqPct + "%)", brAed(r.nocRequiredAmount));
+      row("Amount Already Paid (" + r.pctPaid.toFixed(1) + "%)", brAed(r.amountPaid));
+      row("Additional Payment Needed for NOC", brAed(r.additionalForNoc), { bold: true, color: r.additionalForNoc > 0 ? RED : GREEN });
+      row("Who Pays the NOC Shortfall", r.nocPayer + (r.nocPayer === "Custom split" ? " (Buyer " + brAed(r.buyerNocShortfall) + " / Seller " + brAed(r.sellerNocShortfall) + ")" : ""));
+      if (r.payableToDevBeforeNoc > 0) row("Payable to Developer Before NOC / Transfer", brAed(r.payableToDevBeforeNoc));
+      row("Remaining Developer Balance After NOC", brAed(r.remainingAfterNoc));
+      ensure(30); doc.setFont("helvetica", "italic"); doc.setFontSize(8.3); doc.setTextColor.apply(doc, r.nocMet ? GREEN : GREY);
+      const nocNote = r.additionalForNoc > 0
+        ? "The developer requires a minimum payment of " + brAed(r.nocRequiredAmount) + " before issuing NOC. Since " + brAed(r.amountPaid) + " has already been paid, an additional " + brAed(r.additionalForNoc) + " is required before NOC / transfer can proceed."
+        : "The seller has already paid " + brAed(r.amountPaid) + ", meeting the developer minimum of " + brAed(r.nocRequiredAmount) + " required to issue NOC.";
+      const nocLines = doc.splitTextToSize(nocNote, W - 2 * M); doc.text(nocLines, M, y); y += nocLines.length * 11 + 6;
+    }
     sect("Transfer & Buying Costs");
     row("DLD Fee (" + brN(d.dldPct) + "%)", brAed(r.dld));
     row("Agency Commission (" + brN(d.agencyPct) + "%)", brAed(r.agency));
@@ -5624,7 +5659,7 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
     row("Total Buying Costs", brAed(r.totalBuying), { bold: true });
     y += 6; totalBar("Buyer Immediate Cash Requirement", brAed(r.immediateCash));
     sect("Overall");
-    row("Remaining Payable to Developer", brAed(r.remainingToDev));
+    row(r.hasNoc ? "Remaining Payable to Developer (after NOC)" : "Remaining Payable to Developer", brAed(r.remainingAfterNoc));
     row("Total Property Cost (excl. buying costs)", brAed(r.totalExcl));
     row("Total Property Cost (incl. buying costs)", brAed(r.totalIncl), { bold: true });
 
@@ -5770,7 +5805,7 @@ function BreakdownActions({ makeDoc, filename, waText, onReset }) {
 const BRK_PROP_TYPES = ["", "Apartment", "Villa", "Townhouse", "Penthouse", "Plot / Land", "Office", "Other"];
 const BRK_BEDS = ["", "Studio", "1", "2", "3", "4", "5", "6+"];
 const BRK_MORTGAGE = ["Cash Buyer", "Mortgage Buyer", "Seller Mortgage", "Buyer and Seller Both Mortgage"];
-const INITIAL_OFFPLAN = { clientName: "", projectName: "", developerName: "", unitNumber: "", propertyType: "", location: "", bedrooms: "", sizeSqft: "", originalPrice: "", resalePrice: "", amountPaid: "", pctPaid: "", lastPaidEdit: "amount", premiumVal: "", dldPct: "4", agencyPct: "2", vatPct: "5", trustee: "4200", noc: "5250", saleProg: "1000", other: "", planBase: "", payments: [], expectedHandover: "", handoverPct: "", handoverAmount: "", finalDate: "", finalAmount: "", postHandover: "No", postHandoverDuration: "", paymentFrequency: "", postHandoverAmount: "" };
+const INITIAL_OFFPLAN = { clientName: "", projectName: "", developerName: "", unitNumber: "", propertyType: "", location: "", bedrooms: "", sizeSqft: "", originalPrice: "", resalePrice: "", amountPaid: "", pctPaid: "", lastPaidEdit: "amount", premiumVal: "", nocRequiredPercent: "", nocPayer: "Buyer", buyerNocShare: "", sellerNocShare: "", nocNotes: "", dldPct: "4", agencyPct: "2", vatPct: "5", trustee: "4200", noc: "5250", saleProg: "1000", other: "", planBase: "", payments: [], expectedHandover: "", handoverPct: "", handoverAmount: "", finalDate: "", finalAmount: "", postHandover: "No", postHandoverDuration: "", paymentFrequency: "", postHandoverAmount: "" };
 const INITIAL_READY = { clientName: "", propertyName: "", unitNumber: "", propertyType: "", location: "", bedrooms: "", sizeSqft: "", mortgageStatus: "Cash Buyer", sellingPrice: "", dldPct: "4", agencyPct: "2", vatPct: "5", trustee: "4200", titleAdmin: "580", noc: "5000", mortgageRegPct: "0.25", mortgageAmount: "", mortgageRelease: "", other: "" };
 
 // Shared field helpers used by both forms (called as functions -> stable, no focus loss)
@@ -5836,11 +5871,18 @@ function OffPlanCalc({ user, narrow }) {
   if (brN(amtVal) > brN(f.originalPrice) && brN(f.originalPrice) > 0) warns.push("Amount paid is more than the original purchase price.");
   if (r.pctPaid > 100) warns.push("Percentage paid is over 100%.");
   if (brN(f.resalePrice) > 0 && brN(f.originalPrice) > 0 && r.isDiscount) warns.push("Resale price is below the original price — shown as a discount.");
+  if (r.hasNoc && r.nocReqPct > 100) warns.push("NOC required percentage is over 100% of the original price.");
+  if (r.hasNoc && r.nocPayer === "Custom split" && r.additionalForNoc > 0 && Math.abs((brN(f.buyerNocShare) + brN(f.sellerNocShare)) - r.additionalForNoc) >= 1) warns.push("Buyer + seller NOC contributions must add up to " + brAed(r.additionalForNoc) + ".");
   const rows = [
     { label: "Resale selling price", value: brAed(r.resalePrice) },
     { label: "Amount paid to developer", value: brAed(r.amountPaid) + " (" + r.pctPaid.toFixed(1) + "%)" },
+    ...(r.hasNoc ? [
+      { label: "Required for NOC (" + r.nocReqPct + "%)", value: brAed(r.nocRequiredAmount) },
+      { label: "Additional needed for NOC", value: brAed(r.additionalForNoc), accent: r.additionalForNoc > 0 ? T.bad : T.ok },
+    ] : []),
     { label: r.isDiscount ? "Seller discount" : "Seller premium", value: (r.isDiscount ? "\u2212 " : "") + brAed(Math.abs(r.premium)), accent: r.isDiscount ? T.bad : T.ok },
     { label: "Payable to seller now", value: brAed(r.payableToSeller), strong: true },
+    ...(r.hasNoc && r.payableToDevBeforeNoc > 0 ? [{ label: "Payable to developer (NOC)", value: brAed(r.payableToDevBeforeNoc) }] : []),
     { divider: true },
     { label: "DLD fee", value: brAed(r.dld) },
     { label: "Agency commission + VAT", value: brAed(r.agencyVat) },
@@ -5850,7 +5892,7 @@ function OffPlanCalc({ user, narrow }) {
     ...(r.other > 0 ? [{ label: "Other charges", value: brAed(r.other) }] : []),
     { label: "Total buying costs", value: brAed(r.totalBuying), strong: true },
     { divider: true },
-    { label: "Remaining to developer", value: brAed(r.remainingToDev) },
+    { label: r.hasNoc ? "Remaining to developer (after NOC)" : "Remaining to developer", value: brAed(r.remainingAfterNoc) },
     { label: "Total cost (excl. buying)", value: brAed(r.totalExcl) },
     { label: "Total cost (incl. buying)", value: brAed(r.totalIncl), strong: true },
   ];
@@ -5872,6 +5914,18 @@ function OffPlanCalc({ user, narrow }) {
           num("Override premium (optional)", { k: "premiumVal", prefix: "AED", ph: r.resalePrice || r.originalPrice ? String(Math.round(r.autoPremium)) : "" }),
           ro("Total payable to seller now", brAed(r.payableToSeller), T.gold),
         ])}
+        {brSection("Developer NOC requirement", [
+          num("Minimum payment for NOC", { k: "nocRequiredPercent", dec: true, suffix: "%", hint: r.hasNoc ? "= " + brAed(r.nocRequiredAmount) : "developer's minimum to issue NOC, e.g. 30 / 40 / 50" }),
+          ro("Required NOC amount", brAed(r.nocRequiredAmount)),
+          ro("Additional needed for NOC", brAed(r.additionalForNoc), r.additionalForNoc > 0 ? T.bad : T.ok),
+          sel("Who pays the NOC shortfall", "nocPayer", ["Buyer", "Seller", "Custom split"]),
+          ...(f.nocPayer === "Custom split" ? [
+            num("Buyer NOC contribution", { k: "buyerNocShare", prefix: "AED" }),
+            num("Seller NOC contribution", { k: "sellerNocShare", prefix: "AED" }),
+          ] : []),
+          txt("NOC shortfall notes", "nocNotes", "optional"),
+        ])}
+        {r.hasNoc ? <div style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "10px 13px", borderRadius: 10, marginTop: -4, marginBottom: 14, background: r.nocMet ? T.okSoft : T.warnSoft, border: `1px solid ${(r.nocMet ? T.ok : T.warn)}33` }}><span style={{ fontSize: 12.5, fontWeight: 600, color: r.nocMet ? T.ok : T.warn, lineHeight: 1.4 }}>{r.nocMet ? "Seller has already paid enough to apply for developer NOC." : "Additional payment of " + brAed(r.additionalForNoc) + " is required before developer NOC can be issued."}</span></div> : null}
         {brSection("Transfer & buying costs", [
           num("DLD fee", { k: "dldPct", dec: true, suffix: "%", hint: "= " + brAed(r.dld) }),
           num("Agency commission", { k: "agencyPct", dec: true, suffix: "%", hint: "= " + brAed(r.agency) }),
