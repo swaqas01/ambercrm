@@ -5573,10 +5573,12 @@ function waOffPlan(d, r, fut) {
   if (hasFuture) {
     s += "\n\nFuture Payment Plan:";
     if (fut && fut.next) s += `\nNext Payment: ${brAed(fut.next.amt)}${fut.next.dueDate ? " on " + brDate(fut.next.dueDate) : ""}`;
-    if (d.expectedHandover) s += `\nHandover Date: ${brDate(d.expectedHandover)}`;
-    if (brN(d.handoverAmount) > 0) s += `\nHandover Payment: ${brAed(d.handoverAmount)}`;
-    if (d.finalDate) s += `\nFinal Payment Date: ${brDate(d.finalDate)}`;
-    if (brN(d.finalAmount) > 0) s += `\nFinal Payment: ${brAed(d.finalAmount)}`;
+    if (!(fut && fut.rows.length)) {
+      if (d.expectedHandover) s += `\nHandover Date: ${brDate(d.expectedHandover)}`;
+      if (brN(d.handoverAmount) > 0) s += `\nHandover Payment: ${brAed(d.handoverAmount)}`;
+      if (d.finalDate) s += `\nFinal Payment Date: ${brDate(d.finalDate)}`;
+      if (brN(d.finalAmount) > 0) s += `\nFinal Payment: ${brAed(d.finalAmount)}`;
+    }
     if (fut && fut.rows.length) s += `\nTotal Future Payments: ${brAed(fut.totalScheduled)}`;
   }
   s += `\n\nRemaining Developer Balance / Future Payment Plan: ${brAed(r.remainingAfterNoc)}`;
@@ -5610,21 +5612,21 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
   let y = TOP;
   function newPage() { doc.addPage(); bg(); y = TOP; }
   function ensure(h) { if (y + h > BOTTOM) newPage(); }
-  doc.setFont("helvetica", "bold"); doc.setTextColor.apply(doc, NAVY); doc.setFontSize(16);
+  doc.setFont("helvetica", "bold"); doc.setTextColor.apply(doc, NAVY); doc.setFontSize(19);
   doc.text(isOff ? "Off-Plan Resale Cost Breakdown" : "Ready Property Resale Cost Breakdown", M, y);
-  doc.setDrawColor.apply(doc, NAVY); doc.setLineWidth(2); doc.line(M, y + 7, M + 168, y + 7);
-  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor.apply(doc, GREY);
-  doc.text(new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }), W - M, y - 3, { align: "right" });
+  doc.setDrawColor.apply(doc, NAVY); doc.setLineWidth(2.2); doc.line(M, y + 8, M + 196, y + 8);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor.apply(doc, GREY);
+  doc.text(new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }), W - M, y - 4, { align: "right" });
   if (user && user.name) doc.text("Agent: " + user.name, W - M, y + 9, { align: "right" });
-  y += 26;
-  doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.setTextColor.apply(doc, NAVY);
-  doc.text("Prepared for: " + (d.clientName || "\u2014"), M, y); y += 20;
+  y += 30;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(13); doc.setTextColor.apply(doc, NAVY);
+  doc.text("Prepared for: " + (d.clientName || "\u2014"), M, y); y += 24;
 
-  const rowH = 18;
-  function sect(t) { ensure(28); y += 4; doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor.apply(doc, NAVY); doc.text(t.toUpperCase(), M, y); doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.7); doc.line(M, y + 5, W - M, y + 5); y += 15; }
-  function row(label, value, opt) { opt = opt || {}; ensure(rowH); doc.setFont("helvetica", opt.bold ? "bold" : "normal"); doc.setFontSize(opt.bold ? 10.5 : 10); doc.setTextColor.apply(doc, opt.color || NAVY); doc.text(label, M + (opt.indent ? 12 : 0), y); doc.text(value, W - M, y, { align: "right" }); doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.4); doc.line(M, y + 6, W - M, y + 6); y += rowH; }
-  function totalBar(label, value) { ensure(30); doc.setFillColor.apply(doc, NAVY); doc.roundedRect(M, y - 13, W - 2 * M, 26, 4, 4, "F"); doc.setFont("helvetica", "bold"); doc.setFontSize(11.5); doc.setTextColor.apply(doc, WHITE); doc.text(label, M + 12, y + 4); doc.text(value, W - M - 12, y + 4, { align: "right" }); y += 34; }
-  function grid(pairs) { const colW = (W - 2 * M) / 2; for (let i = 0; i < pairs.length; i += 2) { ensure(30); [0, 1].forEach((c) => { const p = pairs[i + c]; if (!p) return; const x = M + c * colW; doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor.apply(doc, GREY); doc.text(String(p[0]).toUpperCase(), x, y); doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor.apply(doc, NAVY); doc.text(String(p[1] || "\u2014"), x, y + 12); }); y += 30; } }
+  const rowH = 21;
+  function sect(t) { ensure(32); y += 5; doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor.apply(doc, NAVY); doc.text(t.toUpperCase(), M, y); doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.8); doc.line(M, y + 6, W - M, y + 6); y += 18; }
+  function row(label, value, opt) { opt = opt || {}; ensure(rowH); doc.setFont("helvetica", opt.bold ? "bold" : "normal"); doc.setFontSize(opt.bold ? 12.5 : 11.5); doc.setTextColor.apply(doc, opt.color || NAVY); doc.text(label, M + (opt.indent ? 12 : 0), y); doc.text(value, W - M, y, { align: "right" }); doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.4); doc.line(M, y + 7, W - M, y + 7); y += rowH; }
+  function totalBar(label, value) { ensure(36); doc.setFillColor.apply(doc, NAVY); doc.roundedRect(M, y - 15, W - 2 * M, 31, 5, 5, "F"); doc.setFont("helvetica", "bold"); doc.setFontSize(13.5); doc.setTextColor.apply(doc, WHITE); doc.text(label, M + 14, y + 5); doc.text(value, W - M - 14, y + 5, { align: "right" }); y += 40; }
+  function grid(pairs) { const colW = (W - 2 * M) / 2; for (let i = 0; i < pairs.length; i += 2) { ensure(35); [0, 1].forEach((c) => { const p = pairs[i + c]; if (!p) return; const x = M + c * colW; doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor.apply(doc, GREY); doc.text(String(p[0]).toUpperCase(), x, y); doc.setFont("helvetica", "bold"); doc.setFontSize(11.5); doc.setTextColor.apply(doc, NAVY); doc.text(String(p[1] || "\u2014"), x, y + 14); }); y += 35; } }
   const clip = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "\u2026" : s; };
 
   if (isOff) {
@@ -5642,11 +5644,11 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
       row("Additional Payment Needed for NOC", brAed(r.additionalForNoc), { bold: true, color: r.additionalForNoc > 0 ? RED : GREEN });
       row("Who Pays the NOC Shortfall", r.nocPayer + (r.nocPayer === "Custom split" ? " (Buyer " + brAed(r.buyerNocShortfall) + " / Seller " + brAed(r.sellerNocShortfall) + ")" : ""));
       if (r.payableToDevBeforeNoc > 0) row("Payable to Developer Before NOC / Transfer", brAed(r.payableToDevBeforeNoc));
-      ensure(30); doc.setFont("helvetica", "italic"); doc.setFontSize(8.3); doc.setTextColor.apply(doc, r.nocMet ? GREEN : GREY);
+      ensure(32); doc.setFont("helvetica", "italic"); doc.setFontSize(9.5); doc.setTextColor.apply(doc, r.nocMet ? GREEN : GREY);
       const nocNote = r.additionalForNoc > 0
         ? "The developer requires a minimum payment of " + brAed(r.nocRequiredAmount) + " before issuing NOC. Since " + brAed(r.amountPaid) + " has already been paid, an additional " + brAed(r.additionalForNoc) + " is required before NOC / transfer can proceed."
         : "The seller has already paid " + brAed(r.amountPaid) + ", meeting the developer minimum of " + brAed(r.nocRequiredAmount) + " required to issue NOC.";
-      const nocLines = doc.splitTextToSize(nocNote, W - 2 * M); doc.text(nocLines, M, y); y += nocLines.length * 11 + 6;
+      const nocLines = doc.splitTextToSize(nocNote, W - 2 * M); doc.text(nocLines, M, y); y += nocLines.length * 13 + 6;
     }
     sect("Transfer & Buying Costs");
     row("DLD Fee (" + brN(d.dldPct) + "%)", brAed(r.dld));
@@ -5670,36 +5672,38 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
       row("Total Paid to Developer Before Transfer", brAed(r.amountPaid + r.additionalForNoc));
       row("Remaining Developer Balance / Future Payment Plan Balance", brAed(r.remainingAfterNoc), { bold: true });
       if (f2.rows.length) {
-        const notesW = W - 2 * M - (132 + 66 + 34 + 92 + 70);
-        const widths = [132, 66, 34, 92, 70, notesW];
-        ensure(16);
-        let x = M; doc.setFont("helvetica", "bold"); doc.setFontSize(7.2); doc.setTextColor.apply(doc, SLATE);
+        const notesW = W - 2 * M - (138 + 64 + 32 + 96 + 68);
+        const widths = [138, 64, 32, 96, 68, notesW];
+        ensure(18);
+        let x = M; doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor.apply(doc, SLATE);
         ["Label", "Due", "%", "Amount", "Status", "Notes"].forEach((t, i) => { const rt = (t === "%" || t === "Amount"); doc.text(t.toUpperCase(), rt ? x + widths[i] - 4 : x, y, rt ? { align: "right" } : undefined); x += widths[i]; });
-        doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.6); doc.line(M, y + 4, W - M, y + 4); y += 13;
+        doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.7); doc.line(M, y + 5, W - M, y + 5); y += 16;
         f2.rows.forEach((p) => {
-          ensure(15); const isNext = f2.next && f2.next.id === p.id;
-          if (isNext) { doc.setFillColor(238, 242, 247); doc.rect(M - 2, y - 9, W - 2 * M + 4, 15, "F"); }
-          x = M; doc.setFont("helvetica", isNext ? "bold" : "normal"); doc.setFontSize(8); doc.setTextColor.apply(doc, NAVY);
-          doc.text(clip(p.label || "\u2014", 24), x, y); x += widths[0];
+          ensure(18); const isNext = f2.next && f2.next.id === p.id;
+          if (isNext) { doc.setFillColor(236, 241, 247); doc.rect(M - 2, y - 11, W - 2 * M + 4, 18, "F"); }
+          x = M; doc.setFont("helvetica", isNext ? "bold" : "normal"); doc.setFontSize(9.5); doc.setTextColor.apply(doc, NAVY);
+          doc.text(clip(p.label || "\u2014", 23), x, y); x += widths[0];
           doc.text(p.dueDate ? brDate(p.dueDate) : "\u2014", x, y); x += widths[1];
           doc.text(p.pct !== "" && p.pct != null ? brN(p.pct) + "%" : "\u2014", x + widths[2] - 4, y, { align: "right" }); x += widths[2];
           doc.text(brAed(p.amt), x + widths[3] - 4, y, { align: "right" }); x += widths[3];
-          doc.text(clip(p.status || "\u2014", 12), x, y); x += widths[4];
-          doc.setTextColor.apply(doc, GREY); doc.setFontSize(7); doc.text(clip(p.notes || "", 22), x, y);
-          doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.3); doc.line(M, y + 5, W - M, y + 5); y += 15;
+          doc.text(clip(p.status || "\u2014", 14), x, y); x += widths[4];
+          doc.setTextColor.apply(doc, GREY); doc.setFontSize(8); doc.text(clip(p.notes || "", 20), x, y);
+          doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.3); doc.line(M, y + 6, W - M, y + 6); y += 18;
         });
-        y += 4;
+        y += 5;
       }
-      if (d.expectedHandover) row("Expected Handover Date", brDate(d.expectedHandover));
-      if (brN(d.handoverAmount) > 0) row("Handover Payment", brAed(d.handoverAmount));
-      if (d.finalDate) row("Final Payment Date", brDate(d.finalDate));
-      if (brN(d.finalAmount) > 0) row("Final Payment", brAed(d.finalAmount));
-      if (d.postHandover === "Yes") { row("Post-Handover Plan", [d.postHandoverDuration, d.paymentFrequency].filter(Boolean).join(" \u00b7 ") || "Yes"); if (brN(d.postHandoverAmount) > 0) row("Post-Handover Amount", brAed(d.postHandoverAmount)); }
+      if (!f2.rows.length) {
+        if (d.expectedHandover) row("Expected Handover Date", brDate(d.expectedHandover));
+        if (brN(d.handoverAmount) > 0) row("Handover Payment", brAed(d.handoverAmount));
+        if (d.finalDate) row("Final Payment Date", brDate(d.finalDate));
+        if (brN(d.finalAmount) > 0) row("Final Payment", brAed(d.finalAmount));
+        if (d.postHandover === "Yes") { row("Post-Handover Plan", [d.postHandoverDuration, d.paymentFrequency].filter(Boolean).join(" \u00b7 ") || "Yes"); if (brN(d.postHandoverAmount) > 0) row("Post-Handover Amount", brAed(d.postHandoverAmount)); }
+      }
       if (f2.rows.length) {
         row("Total Scheduled Future Payments", brAed(f2.totalScheduled), { bold: true });
         if (Math.abs(f2.balanceNotScheduled) >= 1) row("Balance Not Scheduled", (f2.balanceNotScheduled < 0 ? "\u2212 " : "") + brAed(Math.abs(f2.balanceNotScheduled)), { color: RED });
-        ensure(18); doc.setFont("helvetica", "italic"); doc.setFontSize(8.3); doc.setTextColor.apply(doc, f2.matched ? GREEN : RED);
-        doc.text(f2.matched ? "Future payment plan matches the remaining developer balance." : "The future payment schedule does not match the remaining developer balance. Please review.", M, y); y += 15;
+        ensure(20); doc.setFont("helvetica", "italic"); doc.setFontSize(9.5); doc.setTextColor.apply(doc, f2.matched ? GREEN : RED);
+        doc.text(f2.matched ? "Future payment plan matches the remaining developer balance." : "The future payment schedule does not match the remaining developer balance. Please review.", M, y); y += 17;
       }
     }
   } else {
@@ -5720,10 +5724,10 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
     y += 6; totalBar("Total Buyer Cash Requirement", brAed(r.totalCash));
   }
 
-  ensure(48);
-  doc.setFillColor.apply(doc, SOFT); doc.roundedRect(M, y - 2, W - 2 * M, 44, 4, 4, "F");
-  doc.setFont("helvetica", "italic"); doc.setFontSize(6.8); doc.setTextColor.apply(doc, GREY);
-  doc.text(doc.splitTextToSize(BRK_DISCLAIMER, W - 2 * M - 20), M + 10, y + 9);
+  ensure(60);
+  doc.setFillColor.apply(doc, SOFT); doc.roundedRect(M, y - 2, W - 2 * M, 56, 4, 4, "F");
+  doc.setFont("helvetica", "italic"); doc.setFontSize(7.8); doc.setTextColor.apply(doc, GREY);
+  doc.text(doc.splitTextToSize(BRK_DISCLAIMER, W - 2 * M - 20), M + 10, y + 10);
   return doc;
 }
 
@@ -5865,8 +5869,8 @@ function OffPlanCalc({ user, narrow }) {
     { label: "Balance not scheduled", value: (fut.balanceNotScheduled < 0 ? "\u2212 " : "") + brAed(Math.abs(fut.balanceNotScheduled)), accent: fut.rows.length ? (fut.matched ? T.ok : T.bad) : T.muted },
     ...(fut.rows.length ? [{ label: "Schedule status", value: fut.matched ? "Matches" : "Review plan", accent: fut.matched ? T.ok : T.bad, strong: true }] : []),
     ...(fut.next ? [{ divider: true }, { label: "Next payment", value: brAed(fut.next.amt) + (fut.next.dueDate ? " \u00b7 " + brDate(fut.next.dueDate) : "") }] : []),
-    ...((f.expectedHandover || brN(f.handoverAmount) > 0) ? [{ label: "Handover", value: [brN(f.handoverAmount) > 0 ? brAed(f.handoverAmount) : "", f.expectedHandover ? brDate(f.expectedHandover) : ""].filter(Boolean).join(" \u00b7 ") || "\u2014" }] : []),
-    ...((f.finalDate || brN(f.finalAmount) > 0) ? [{ label: "Final payment", value: [brN(f.finalAmount) > 0 ? brAed(f.finalAmount) : "", f.finalDate ? brDate(f.finalDate) : ""].filter(Boolean).join(" \u00b7 ") || "\u2014" }] : []),
+    ...((f.payments.length === 0 && (f.expectedHandover || brN(f.handoverAmount) > 0)) ? [{ label: "Handover", value: [brN(f.handoverAmount) > 0 ? brAed(f.handoverAmount) : "", f.expectedHandover ? brDate(f.expectedHandover) : ""].filter(Boolean).join(" \u00b7 ") || "\u2014" }] : []),
+    ...((f.payments.length === 0 && (f.finalDate || brN(f.finalAmount) > 0)) ? [{ label: "Final payment", value: [brN(f.finalAmount) > 0 ? brAed(f.finalAmount) : "", f.finalDate ? brDate(f.finalDate) : ""].filter(Boolean).join(" \u00b7 ") || "\u2014" }] : []),
   ];
   const futureWarn = (fut.rows.length && !fut.matched) ? ["The future payment schedule does not match the remaining developer balance. Please review the payment plan."] : [];
   const warns = [];
@@ -5952,7 +5956,7 @@ function OffPlanCalc({ user, narrow }) {
             ? <div style={{ fontSize: 12, color: T.muted, textAlign: "center", padding: "12px 0 4px", border: `1px dashed ${T.hair}`, borderRadius: 10 }}>No future payments yet — tap “Add payment” to build the developer schedule.</div>
             : <div style={{ display: "grid", gap: 12 }}>{f.payments.map((p) => <PaymentRowEditor key={p.id} row={p} base={planBaseNum} isNext={!!(fut.next && fut.next.id === p.id)} onChange={(patch) => updatePayment(p.id, patch)} onRemove={() => removePayment(p.id)} />)}</div>}
         </div>
-        {brSection("Handover & final payment", [
+        {f.payments.length === 0 ? brSection("Handover & final payment", [
           dateF("Expected handover date", "expectedHandover"),
           num("Handover payment %", { k: "handoverPct", dec: true, suffix: "%" }),
           num("Handover payment amount", { k: "handoverAmount", prefix: "AED" }),
@@ -5964,7 +5968,7 @@ function OffPlanCalc({ user, narrow }) {
             sel("Payment frequency", "paymentFrequency", ["", "Monthly", "Quarterly", "Semi-Annually", "Yearly", "Custom"]),
             num("Post-handover amount", { k: "postHandoverAmount", prefix: "AED" }),
           ] : []),
-        ])}
+        ]) : <div style={{ fontSize: 11.5, color: T.faint, marginTop: -2, marginBottom: 14, paddingLeft: 2 }}>Handover and final payments are part of the payment plan above — set a row’s status to <b style={{ color: T.muted }}>On Handover</b> or <b style={{ color: T.muted }}>Final Payment</b>.</div>}
       </div>
       <div style={{ position: narrow ? "static" : "sticky", top: 16 }}>
         <SummaryCard title="Off-plan resale summary" rows={rows} headline={{ label: "Buyer immediate cash", value: brAed(r.immediateCash) }} warnings={warns} />
