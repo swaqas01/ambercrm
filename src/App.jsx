@@ -5481,8 +5481,9 @@ function DevicesSecurity({ user }) {
 /* ============================ BREAKDOWN CALCULATOR ============================ */
 // Default Dubai resale fees — change here to update everywhere.
 const BRK_FEES = { dldPct: 4, agencyPct: 2, vatPct: 5, trustee: 4200, offplanNoc: 5250, saleProgression: 1000, readyTitleAdmin: 580, readyNoc: 5000, mortgageRegPct: 0.25 };
-// Brand block for the PDF footer. Add email / phone / ORN once confirmed; blank fields are omitted.
-const BRAND_INFO = { name: "Amber Homes Real Estate", office: "Burj Al Salam Tower, Sheikh Zayed Road, Dubai, UAE", website: "amberhomes.ai", email: "", phone: "", orn: "" };
+// Brand details (from the official letterhead). The PDF renders on the letterhead image, which already
+// carries the logo + contact footer; these are kept for reference and any non-letterhead fallback.
+const BRAND_INFO = { name: "Amber Homes Real Estate", office: "2102 Burj Al Salam, Sheikh Zayed Road, Dubai, UAE", website: "amberhomes.ae", email: "info@amberhomes.ae", phone: "+971 4 368 4497", orn: "18690", tl: "778204" };
 const BRK_DISCLAIMER = "Disclaimer: This breakdown is for estimation and presentation purposes only. Final charges, DLD fees, trustee fees, NOC fees, mortgage-related charges and developer/admin fees may vary depending on the transaction, developer, bank, Dubai Land Department requirements and trustee office. The buyer and seller should verify all final amounts before signing any agreement.";
 
 function brN(v) { if (typeof v === "number") return Number.isFinite(v) ? v : 0; const n = parseFloat(String(v == null ? "" : v).replace(/,/g, "")); return Number.isFinite(n) ? n : 0; }
@@ -5500,6 +5501,23 @@ function brFmtInput(raw, allowDecimal) {
   return dp != null ? out + "." + dp : out;
 }
 function brSafeName(s) { return String(s || "").trim().replace(/[^\w\s-]/g, "").replace(/\s+/g, "-") || "Client"; }
+function brDate(s) { if (!s) return "—"; try { return new Date(s + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); } catch (e) { return s; } }
+
+// ---- Future developer payment plan (off-plan) ----
+const BRK_PAY_STATUS = ["Upcoming", "On Handover", "Post-Handover", "Final Payment", "Paid"];
+function planBaseOf(f) { return (f.planBase !== "" && f.planBase != null) ? brN(f.planBase) : brN(f.originalPrice); }
+function paymentAmt(row, base) { return (row.lastEdit === "pct" && base > 0 && row.pct !== "" && row.pct != null) ? base * brN(row.pct) / 100 : brN(row.amount); }
+function calcFuture(f, r) {
+  const base = planBaseOf(f);
+  const rows = (f.payments || []).map((p) => ({ ...p, amt: paymentAmt(p, base) }));
+  const totalScheduled = rows.reduce((s, p) => s + p.amt, 0);
+  const remainingToDev = r.remainingToDev;
+  const balanceNotScheduled = remainingToDev - totalScheduled;
+  const matched = rows.length > 0 && Math.abs(balanceNotScheduled) < 1;
+  const upcoming = rows.filter((p) => p.status !== "Paid" && p.dueDate).sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+  const next = upcoming[0] || rows.find((p) => p.status !== "Paid") || null;
+  return { base, rows, totalScheduled, remainingToDev, balanceNotScheduled, matched, next };
+}
 
 // ---- Centralized calculations (single source of truth) ----
 function calcOffPlan(d) {
@@ -5528,46 +5546,64 @@ function calcReady(d) {
 }
 
 // ---- WhatsApp summaries ----
-function waOffPlan(d, r) {
-  return `Hi ${d.clientName || "there"},\nPlease find the estimated off-plan resale breakdown below:\n\nProperty: ${[d.projectName, d.unitNumber].filter(Boolean).join(", ") || "—"}\nResale Price: ${brAed(r.resalePrice)}\nAmount Paid to Developer: ${brAed(r.amountPaid)}\n${r.isDiscount ? "Seller Discount" : "Seller Premium"}: ${brAed(Math.abs(r.premium))}\nPayable to Seller Now: ${brAed(r.payableToSeller)}\nEstimated Buying Costs: ${brAed(r.totalBuying)}\nImmediate Cash Requirement: ${brAed(r.immediateCash)}\nRemaining to Developer: ${brAed(r.remainingToDev)}\n\nPlease note this is an estimate and final charges may vary.`;
+function waOffPlan(d, r, fut) {
+  let s = `Hi ${d.clientName || "there"},\nPlease find the estimated off-plan resale breakdown below:\n\nProperty: ${[d.projectName, d.unitNumber].filter(Boolean).join(", ") || "—"}\nResale Price: ${brAed(r.resalePrice)}\nAmount Paid to Developer: ${brAed(r.amountPaid)}\n${r.isDiscount ? "Seller Discount" : "Seller Premium"}: ${brAed(Math.abs(r.premium))}\nPayable to Seller Now: ${brAed(r.payableToSeller)}\nEstimated Buying Costs: ${brAed(r.totalBuying)}\nImmediate Cash Requirement: ${brAed(r.immediateCash)}\nRemaining to Developer: ${brAed(r.remainingToDev)}`;
+  const hasFuture = (fut && fut.rows.length) || d.expectedHandover || brN(d.handoverAmount) > 0 || d.finalDate || brN(d.finalAmount) > 0;
+  if (hasFuture) {
+    s += "\n\nFuture Payment Plan:";
+    if (fut && fut.next) s += `\nNext Payment: ${brAed(fut.next.amt)}${fut.next.dueDate ? " on " + brDate(fut.next.dueDate) : ""}`;
+    if (d.expectedHandover) s += `\nHandover Date: ${brDate(d.expectedHandover)}`;
+    if (brN(d.handoverAmount) > 0) s += `\nHandover Payment: ${brAed(d.handoverAmount)}`;
+    if (d.finalDate) s += `\nFinal Payment Date: ${brDate(d.finalDate)}`;
+    if (brN(d.finalAmount) > 0) s += `\nFinal Payment: ${brAed(d.finalAmount)}`;
+    if (fut && fut.rows.length) s += `\nTotal Future Payments: ${brAed(fut.totalScheduled)}`;
+  }
+  return s + "\n\nPlease note this is an estimate and final charges/payment dates may vary as per developer confirmation.";
 }
 function waReady(d, r) {
   return `Hi ${d.clientName || "there"},\nPlease find the estimated ready property resale breakdown below:\n\nProperty: ${[d.propertyName, d.unitNumber].filter(Boolean).join(", ") || "—"}\nSelling Price: ${brAed(r.sellingPrice)}\nDLD Fee: ${brAed(r.dld)}\nAgency Commission + VAT: ${brAed(r.agencyVat)}\nTrustee / Admin / NOC Charges: ${brAed(r.trustee + r.titleAdmin + r.noc)}\nEstimated Buying Costs: ${brAed(r.totalBuying)}\nTotal Cash Requirement: ${brAed(r.totalCash)}\n\nPlease note this is an estimate and final charges may vary.`;
 }
 
-// ---- jsPDF loaded on demand (own chunk, kept out of the main bundle) ----
+// ---- jsPDF + letterhead loaded on demand (own chunks, kept out of the main bundle) ----
 let _jspdf = null, _jspdfPromise = null;
 function loadJsPdf() {
   if (_jspdf) return Promise.resolve(_jspdf);
   if (!_jspdfPromise) _jspdfPromise = import("jspdf").then((m) => { _jspdf = m.jsPDF || (m.default && m.default.jsPDF) || m.default; return _jspdf; });
   return _jspdfPromise;
 }
-function buildBreakdownDoc(JsPDF, mode, d, r, user) {
+let _lh = null, _lhPromise = null;
+function loadLetterhead() {
+  if (_lh) return Promise.resolve(_lh);
+  if (!_lhPromise) _lhPromise = import("./letterhead.js").then((m) => { _lh = m.LETTERHEAD_PNG; return _lh; }).catch(() => null);
+  return _lhPromise;
+}
+function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
   const doc = new JsPDF({ unit: "pt", format: "a4" });
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
-  const M = 44, NAVY = [18, 26, 46], GOLD = [176, 137, 59], GREY = [110, 110, 116], LINE = [222, 220, 214], SOFT = [247, 245, 240];
+  const M = 52, TOP = 168, BOTTOM = 744;
+  const NAVY = [17, 50, 77], SLATE = [92, 104, 120], GREY = [120, 124, 130], LINE = [214, 219, 226], SOFT = [244, 246, 249], RED = [176, 58, 58], GREEN = [40, 120, 80], WHITE = [255, 255, 255];
   const isOff = mode === "offplan";
-  let y = 0;
-  doc.setFillColor.apply(doc, GOLD); doc.rect(0, 0, W, 5, "F");
-  y = 54;
-  doc.setFont("helvetica", "bold"); doc.setTextColor.apply(doc, NAVY); doc.setFontSize(22); doc.text("AMBER HOMES", M, y);
-  doc.setFont("helvetica", "normal"); doc.setTextColor.apply(doc, GOLD); doc.setFontSize(8.5); doc.text("R E A L  E S T A T E   \u00b7   D U B A I", M, y + 14);
-  doc.setTextColor.apply(doc, GREY); doc.setFontSize(9);
-  doc.text("Generated: " + new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }), W - M, y - 6, { align: "right" });
-  if (user && user.name) doc.text("Agent: " + user.name, W - M, y + 8, { align: "right" });
-  y += 28; doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(1); doc.line(M, y, W - M, y); y += 24;
-  doc.setFont("helvetica", "bold"); doc.setTextColor.apply(doc, NAVY); doc.setFontSize(15);
+  function bg() { if (lh) { try { doc.addImage(lh, "PNG", 0, 0, W, H, "amberlh", "FAST"); } catch (e) {} } }
+  bg();
+  let y = TOP;
+  function newPage() { doc.addPage(); bg(); y = TOP; }
+  function ensure(h) { if (y + h > BOTTOM) newPage(); }
+  doc.setFont("helvetica", "bold"); doc.setTextColor.apply(doc, NAVY); doc.setFontSize(16);
   doc.text(isOff ? "Off-Plan Resale Cost Breakdown" : "Ready Property Resale Cost Breakdown", M, y);
-  doc.setDrawColor.apply(doc, GOLD); doc.setLineWidth(2); doc.line(M, y + 7, M + 148, y + 7); y += 22;
-  doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor.apply(doc, NAVY);
-  doc.text("Prepared for: " + (d.clientName || "—"), M, y); y += 20;
+  doc.setDrawColor.apply(doc, NAVY); doc.setLineWidth(2); doc.line(M, y + 7, M + 168, y + 7);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor.apply(doc, GREY);
+  doc.text(new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }), W - M, y - 3, { align: "right" });
+  if (user && user.name) doc.text("Agent: " + user.name, W - M, y + 9, { align: "right" });
+  y += 26;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.setTextColor.apply(doc, NAVY);
+  doc.text("Prepared for: " + (d.clientName || "\u2014"), M, y); y += 20;
 
   const rowH = 18;
-  function ensure(h) { if (y + h > H - 96) { doc.addPage(); y = 56; } }
-  function sect(t) { ensure(28); y += 4; doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor.apply(doc, GOLD); doc.text(t.toUpperCase(), M, y); doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.7); doc.line(M, y + 5, W - M, y + 5); y += 15; }
-  function row(label, value, opt) { opt = opt || {}; ensure(rowH); doc.setFont("helvetica", opt.bold ? "bold" : "normal"); doc.setFontSize(opt.bold ? 10.5 : 10); doc.setTextColor.apply(doc, opt.color || NAVY); doc.text(label, M, y); doc.text(value, W - M, y, { align: "right" }); doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.4); doc.line(M, y + 6, W - M, y + 6); y += rowH; }
-  function totalBar(label, value) { ensure(30); doc.setFillColor.apply(doc, GOLD); doc.roundedRect(M, y - 13, W - 2 * M, 26, 4, 4, "F"); doc.setFont("helvetica", "bold"); doc.setFontSize(11.5); doc.setTextColor.apply(doc, NAVY); doc.text(label, M + 12, y + 4); doc.text(value, W - M - 12, y + 4, { align: "right" }); y += 34; }
-  function grid(pairs) { const colW = (W - 2 * M) / 2; for (let i = 0; i < pairs.length; i += 2) { ensure(30); [0, 1].forEach((c) => { const p = pairs[i + c]; if (!p) return; const x = M + c * colW; doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor.apply(doc, GREY); doc.text(String(p[0]).toUpperCase(), x, y); doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor.apply(doc, NAVY); doc.text(String(p[1] || "—"), x, y + 12); }); y += 30; } }
+  function sect(t) { ensure(28); y += 4; doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor.apply(doc, NAVY); doc.text(t.toUpperCase(), M, y); doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.7); doc.line(M, y + 5, W - M, y + 5); y += 15; }
+  function row(label, value, opt) { opt = opt || {}; ensure(rowH); doc.setFont("helvetica", opt.bold ? "bold" : "normal"); doc.setFontSize(opt.bold ? 10.5 : 10); doc.setTextColor.apply(doc, opt.color || NAVY); doc.text(label, M + (opt.indent ? 12 : 0), y); doc.text(value, W - M, y, { align: "right" }); doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.4); doc.line(M, y + 6, W - M, y + 6); y += rowH; }
+  function totalBar(label, value) { ensure(30); doc.setFillColor.apply(doc, NAVY); doc.roundedRect(M, y - 13, W - 2 * M, 26, 4, 4, "F"); doc.setFont("helvetica", "bold"); doc.setFontSize(11.5); doc.setTextColor.apply(doc, WHITE); doc.text(label, M + 12, y + 4); doc.text(value, W - M - 12, y + 4, { align: "right" }); y += 34; }
+  function grid(pairs) { const colW = (W - 2 * M) / 2; for (let i = 0; i < pairs.length; i += 2) { ensure(30); [0, 1].forEach((c) => { const p = pairs[i + c]; if (!p) return; const x = M + c * colW; doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor.apply(doc, GREY); doc.text(String(p[0]).toUpperCase(), x, y); doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor.apply(doc, NAVY); doc.text(String(p[1] || "\u2014"), x, y + 12); }); y += 30; } }
+  const clip = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "\u2026" : s; };
 
   if (isOff) {
     sect("Property Details");
@@ -5591,6 +5627,45 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user) {
     row("Remaining Payable to Developer", brAed(r.remainingToDev));
     row("Total Property Cost (excl. buying costs)", brAed(r.totalExcl));
     row("Total Property Cost (incl. buying costs)", brAed(r.totalIncl), { bold: true });
+
+    const f2 = future;
+    const hasFuture = f2 && (f2.rows.length || d.expectedHandover || brN(d.handoverAmount) > 0 || d.finalDate || brN(d.finalAmount) > 0);
+    if (hasFuture) {
+      sect("Future Developer Payment Plan");
+      if (f2.rows.length) {
+        const notesW = W - 2 * M - (132 + 66 + 34 + 92 + 70);
+        const widths = [132, 66, 34, 92, 70, notesW];
+        ensure(16);
+        let x = M; doc.setFont("helvetica", "bold"); doc.setFontSize(7.2); doc.setTextColor.apply(doc, SLATE);
+        ["Label", "Due", "%", "Amount", "Status", "Notes"].forEach((t, i) => { const rt = (t === "%" || t === "Amount"); doc.text(t.toUpperCase(), rt ? x + widths[i] - 4 : x, y, rt ? { align: "right" } : undefined); x += widths[i]; });
+        doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.6); doc.line(M, y + 4, W - M, y + 4); y += 13;
+        f2.rows.forEach((p) => {
+          ensure(15); const isNext = f2.next && f2.next.id === p.id;
+          if (isNext) { doc.setFillColor(238, 242, 247); doc.rect(M - 2, y - 9, W - 2 * M + 4, 15, "F"); }
+          x = M; doc.setFont("helvetica", isNext ? "bold" : "normal"); doc.setFontSize(8); doc.setTextColor.apply(doc, NAVY);
+          doc.text(clip(p.label || "\u2014", 24), x, y); x += widths[0];
+          doc.text(p.dueDate ? brDate(p.dueDate) : "\u2014", x, y); x += widths[1];
+          doc.text(p.pct !== "" && p.pct != null ? brN(p.pct) + "%" : "\u2014", x + widths[2] - 4, y, { align: "right" }); x += widths[2];
+          doc.text(brAed(p.amt), x + widths[3] - 4, y, { align: "right" }); x += widths[3];
+          doc.text(clip(p.status || "\u2014", 12), x, y); x += widths[4];
+          doc.setTextColor.apply(doc, GREY); doc.setFontSize(7); doc.text(clip(p.notes || "", 22), x, y);
+          doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.3); doc.line(M, y + 5, W - M, y + 5); y += 15;
+        });
+        y += 4;
+      }
+      if (d.expectedHandover) row("Expected Handover Date", brDate(d.expectedHandover));
+      if (brN(d.handoverAmount) > 0) row("Handover Payment", brAed(d.handoverAmount));
+      if (d.finalDate) row("Final Payment Date", brDate(d.finalDate));
+      if (brN(d.finalAmount) > 0) row("Final Payment", brAed(d.finalAmount));
+      if (d.postHandover === "Yes") { row("Post-Handover Plan", [d.postHandoverDuration, d.paymentFrequency].filter(Boolean).join(" \u00b7 ") || "Yes"); if (brN(d.postHandoverAmount) > 0) row("Post-Handover Amount", brAed(d.postHandoverAmount)); }
+      if (f2.rows.length) {
+        row("Total Scheduled Future Payments", brAed(f2.totalScheduled), { bold: true });
+        row("Remaining Developer Balance", brAed(f2.remainingToDev));
+        if (Math.abs(f2.balanceNotScheduled) >= 1) row("Balance Not Scheduled", (f2.balanceNotScheduled < 0 ? "\u2212 " : "") + brAed(Math.abs(f2.balanceNotScheduled)), { color: RED });
+        ensure(18); doc.setFont("helvetica", "italic"); doc.setFontSize(8.3); doc.setTextColor.apply(doc, f2.matched ? GREEN : RED);
+        doc.text(f2.matched ? "Future payment plan matches the remaining developer balance." : "The future payment schedule does not match the remaining developer balance. Please review.", M, y); y += 15;
+      }
+    }
   } else {
     sect("Property Details");
     grid([["Property / Building", d.propertyName], ["Unit", d.unitNumber], ["Property Type", d.propertyType], ["Location", d.location], ["Bedrooms", d.bedrooms], ["Size (sq ft)", d.sizeSqft ? brNum(d.sizeSqft) : ""], ["Mortgage Status", d.mortgageStatus]]);
@@ -5609,18 +5684,10 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user) {
     y += 6; totalBar("Total Buyer Cash Requirement", brAed(r.totalCash));
   }
 
-  const pages = doc.internal.getNumberOfPages();
-  for (let p = 1; p <= pages; p++) {
-    doc.setPage(p);
-    const fy = H - 80;
-    doc.setFillColor.apply(doc, SOFT); doc.roundedRect(M, fy - 4, W - 2 * M, 46, 4, 4, "F");
-    doc.setFont("helvetica", "italic"); doc.setFontSize(6.8); doc.setTextColor.apply(doc, GREY);
-    doc.text(doc.splitTextToSize(BRK_DISCLAIMER, W - 2 * M - 20), M + 10, fy + 6);
-    doc.setFillColor.apply(doc, GOLD); doc.rect(0, H - 4, W, 4, "F");
-    doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor.apply(doc, NAVY);
-    doc.text([BRAND_INFO.name, BRAND_INFO.office, BRAND_INFO.website, BRAND_INFO.email, BRAND_INFO.phone].filter(Boolean).join("   \u00b7   "), W / 2, H - 14, { align: "center" });
-    doc.setTextColor.apply(doc, GREY); doc.setFontSize(7); doc.text(p + " / " + pages, W - M, H - 14, { align: "right" });
-  }
+  ensure(48);
+  doc.setFillColor.apply(doc, SOFT); doc.roundedRect(M, y - 2, W - 2 * M, 44, 4, 4, "F");
+  doc.setFont("helvetica", "italic"); doc.setFontSize(6.8); doc.setTextColor.apply(doc, GREY);
+  doc.text(doc.splitTextToSize(BRK_DISCLAIMER, W - 2 * M - 20), M + 10, y + 9);
   return doc;
 }
 
@@ -5673,8 +5740,8 @@ function BreakdownActions({ makeDoc, filename, waText, onReset }) {
     try { await navigator.clipboard.writeText(waText); flash("WhatsApp summary copied"); }
     catch (e) { try { const ta = document.createElement("textarea"); ta.value = waText; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); flash("WhatsApp summary copied"); } catch (e2) { flash("Couldn't copy automatically"); } }
   };
-  const download = async () => { setBusy(true); try { const J = await loadJsPdf(); makeDoc(J).save(filename); flash("PDF downloaded"); } catch (e) { flash("PDF failed — try again"); } setBusy(false); };
-  const openPreview = async () => { setBusy(true); try { const J = await loadJsPdf(); setPreview(makeDoc(J).output("bloburl")); } catch (e) { flash("Preview failed"); } setBusy(false); };
+  const download = async () => { setBusy(true); try { const [J, lh] = await Promise.all([loadJsPdf(), loadLetterhead()]); makeDoc(J, lh).save(filename); flash("PDF downloaded"); } catch (e) { flash("PDF failed — try again"); } setBusy(false); };
+  const openPreview = async () => { setBusy(true); try { const [J, lh] = await Promise.all([loadJsPdf(), loadLetterhead()]); setPreview(makeDoc(J, lh).output("bloburl")); } catch (e) { flash("Preview failed"); } setBusy(false); };
   return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
@@ -5703,7 +5770,7 @@ function BreakdownActions({ makeDoc, filename, waText, onReset }) {
 const BRK_PROP_TYPES = ["", "Apartment", "Villa", "Townhouse", "Penthouse", "Plot / Land", "Office", "Other"];
 const BRK_BEDS = ["", "Studio", "1", "2", "3", "4", "5", "6+"];
 const BRK_MORTGAGE = ["Cash Buyer", "Mortgage Buyer", "Seller Mortgage", "Buyer and Seller Both Mortgage"];
-const INITIAL_OFFPLAN = { clientName: "", projectName: "", developerName: "", unitNumber: "", propertyType: "", location: "", bedrooms: "", sizeSqft: "", originalPrice: "", resalePrice: "", amountPaid: "", pctPaid: "", lastPaidEdit: "amount", premiumVal: "", dldPct: "4", agencyPct: "2", vatPct: "5", trustee: "4200", noc: "5250", saleProg: "1000", other: "" };
+const INITIAL_OFFPLAN = { clientName: "", projectName: "", developerName: "", unitNumber: "", propertyType: "", location: "", bedrooms: "", sizeSqft: "", originalPrice: "", resalePrice: "", amountPaid: "", pctPaid: "", lastPaidEdit: "amount", premiumVal: "", dldPct: "4", agencyPct: "2", vatPct: "5", trustee: "4200", noc: "5250", saleProg: "1000", other: "", planBase: "", payments: [], expectedHandover: "", handoverPct: "", handoverAmount: "", finalDate: "", finalAmount: "", postHandover: "No", postHandoverDuration: "", paymentFrequency: "", postHandoverAmount: "" };
 const INITIAL_READY = { clientName: "", propertyName: "", unitNumber: "", propertyType: "", location: "", bedrooms: "", sizeSqft: "", mortgageStatus: "Cash Buyer", sellingPrice: "", dldPct: "4", agencyPct: "2", vatPct: "5", trustee: "4200", titleAdmin: "580", noc: "5000", mortgageRegPct: "0.25", mortgageAmount: "", mortgageRelease: "", other: "" };
 
 // Shared field helpers used by both forms (called as functions -> stable, no focus loss)
@@ -5714,6 +5781,27 @@ function brSection(title, children) {
     <div style={{ fontFamily: DISPLAY, fontSize: 13.5, fontWeight: 800, color: T.ink, marginBottom: 12 }}>{title}</div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(155px, 1fr))", gap: 12 }}>{children}</div>
   </div>;
+}
+
+// One editable developer-payment row (module-level -> stable identity, no focus loss).
+function PaymentRowEditor({ row, base, isNext, onChange, onRemove }) {
+  const lbl = brLbl(), inp = brInp();
+  const amtVal = (row.lastEdit === "pct" && base > 0 && row.pct !== "" && row.pct != null) ? String(Math.round(base * brN(row.pct) / 100)) : row.amount;
+  const pctVal = (row.lastEdit === "amount" && base > 0 && row.amount !== "" && row.amount != null) ? (brN(row.amount) / base * 100).toFixed(2).replace(/\.?0+$/, "") : row.pct;
+  return (
+    <div style={{ border: `1px solid ${isNext ? T.gold : T.hairSoft}`, background: isNext ? T.goldSoft : T.bone, borderRadius: 12, padding: 12, position: "relative" }}>
+      {isNext && <div style={{ position: "absolute", top: -9, left: 12, background: T.gold, color: "#fff", fontSize: 9, fontWeight: 800, padding: "2px 8px", borderRadius: 6, letterSpacing: ".04em" }}>NEXT</div>}
+      <button onClick={onRemove} title="Remove payment" style={{ position: "absolute", top: 8, right: 8, border: "none", background: "transparent", color: T.faint, cursor: "pointer", padding: 4 }}><Trash2 size={14} /></button>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 10 }}>
+        <div style={{ gridColumn: "1 / -1", maxWidth: 380 }}><label style={lbl}>Payment label</label><input value={row.label} placeholder="e.g. Handover Payment" onChange={(e) => onChange({ label: e.target.value })} style={inp} /></div>
+        <div><label style={lbl}>Due date</label><input type="date" value={row.dueDate} onChange={(e) => onChange({ dueDate: e.target.value })} style={{ ...inp, cursor: "pointer" }} /></div>
+        <div><label style={lbl}>Percentage</label><BrNum value={pctVal} onChange={(v) => onChange({ pct: v, lastEdit: "pct" })} allowDecimal suffix="%" /></div>
+        <div><label style={lbl}>Amount</label><BrNum value={amtVal} onChange={(v) => onChange({ amount: v, lastEdit: "amount" })} prefix="AED" /></div>
+        <div><label style={lbl}>Status</label><select value={row.status} onChange={(e) => onChange({ status: e.target.value })} style={{ ...inp, cursor: "pointer" }}>{BRK_PAY_STATUS.map((o) => <option key={o} value={o}>{o}</option>)}</select></div>
+        <div style={{ gridColumn: "1 / -1" }}><label style={lbl}>Notes</label><input value={row.notes} placeholder="optional" onChange={(e) => onChange({ notes: e.target.value })} style={inp} /></div>
+      </div>
+    </div>
+  );
 }
 
 function OffPlanCalc({ user, narrow }) {
@@ -5727,6 +5815,23 @@ function OffPlanCalc({ user, narrow }) {
   const sel = (label, k, opts) => <div key={k}><label style={lbl}>{label}</label><select value={f[k]} onChange={(e) => set(k, e.target.value)} style={{ ...inp, cursor: "pointer" }}>{opts.map((o) => <option key={o} value={o}>{o === "" ? "Select…" : o}</option>)}</select></div>;
   const num = (label, o) => <div key={o.k || label}><label style={lbl}>{label}{o.req ? <span style={{ color: T.bad }}> *</span> : null}</label><BrNum value={o.value !== undefined ? o.value : f[o.k]} onChange={o.onChange || ((v) => set(o.k, v))} allowDecimal={o.dec} prefix={o.prefix} suffix={o.suffix} placeholder={o.ph} invalid={o.invalid} />{o.hint ? <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3 }}>{o.hint}</div> : null}</div>;
   const ro = (label, value, accent) => <div key={label}><label style={lbl}>{label}</label><div style={{ ...inp, background: T.bone, fontWeight: 700, color: accent || T.ink, display: "flex", alignItems: "center", minHeight: 41 }}>{value}</div></div>;
+  const dateF = (label, k) => <div key={k}><label style={lbl}>{label}</label><input type="date" value={f[k]} onChange={(e) => set(k, e.target.value)} style={{ ...inp, cursor: "pointer" }} /></div>;
+  const planBaseNum = planBaseOf(f);
+  const fut = calcFuture(f, r);
+  const addPayment = () => setF((p) => ({ ...p, payments: [...p.payments, { id: "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), label: "", dueDate: "", pct: "", amount: "", lastEdit: "amount", status: "Upcoming", notes: "" }] }));
+  const removePayment = (id) => setF((p) => ({ ...p, payments: p.payments.filter((x) => x.id !== id) }));
+  const updatePayment = (id, patch) => setF((p) => ({ ...p, payments: p.payments.map((x) => x.id === id ? { ...x, ...patch } : x) }));
+  const autoCalcPayments = () => setF((p) => { const base = planBaseOf(p); return { ...p, payments: p.payments.map((x) => (x.pct !== "" && x.pct != null && base > 0) ? { ...x, amount: String(Math.round(base * brN(x.pct) / 100)), lastEdit: "amount" } : x) }; });
+  const futureRows = [
+    { label: "Remaining to developer", value: brAed(fut.remainingToDev), strong: true },
+    { label: "Total scheduled future", value: brAed(fut.totalScheduled) },
+    { label: "Balance not scheduled", value: (fut.balanceNotScheduled < 0 ? "\u2212 " : "") + brAed(Math.abs(fut.balanceNotScheduled)), accent: fut.rows.length ? (fut.matched ? T.ok : T.bad) : T.muted },
+    ...(fut.rows.length ? [{ label: "Schedule status", value: fut.matched ? "Matches" : "Review plan", accent: fut.matched ? T.ok : T.bad, strong: true }] : []),
+    ...(fut.next ? [{ divider: true }, { label: "Next payment", value: brAed(fut.next.amt) + (fut.next.dueDate ? " \u00b7 " + brDate(fut.next.dueDate) : "") }] : []),
+    ...((f.expectedHandover || brN(f.handoverAmount) > 0) ? [{ label: "Handover", value: [brN(f.handoverAmount) > 0 ? brAed(f.handoverAmount) : "", f.expectedHandover ? brDate(f.expectedHandover) : ""].filter(Boolean).join(" \u00b7 ") || "\u2014" }] : []),
+    ...((f.finalDate || brN(f.finalAmount) > 0) ? [{ label: "Final payment", value: [brN(f.finalAmount) > 0 ? brAed(f.finalAmount) : "", f.finalDate ? brDate(f.finalDate) : ""].filter(Boolean).join(" \u00b7 ") || "\u2014" }] : []),
+  ];
+  const futureWarn = (fut.rows.length && !fut.matched) ? ["The future payment schedule does not match the remaining developer balance. Please review the payment plan."] : [];
   const warns = [];
   if (brN(amtVal) > brN(f.originalPrice) && brN(f.originalPrice) > 0) warns.push("Amount paid is more than the original purchase price.");
   if (r.pctPaid > 100) warns.push("Percentage paid is over 100%.");
@@ -5776,10 +5881,40 @@ function OffPlanCalc({ user, narrow }) {
           num("Sale progression fee", { k: "saleProg", prefix: "AED" }),
           num("Other admin charges", { k: "other", prefix: "AED" }),
         ])}
+        <div style={{ ...card, padding: 16, marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+            <div><div style={{ fontFamily: DISPLAY, fontSize: 14, fontWeight: 800, color: T.ink }}>Future payment plan</div><div style={{ fontSize: 11, color: T.faint, marginTop: 2 }}>Upcoming developer payments after transfer</div></div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={autoCalcPayments} style={{ border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontWeight: 600, fontSize: 12, padding: "8px 12px", borderRadius: 9, cursor: "pointer", fontFamily: UI }}>Auto-calculate amounts</button>
+              <button onClick={addPayment} style={{ border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 12, padding: "8px 14px", borderRadius: 9, cursor: "pointer", fontFamily: UI, display: "flex", alignItems: "center", gap: 6 }}><Plus size={14} /> Add payment</button>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: f.payments.length ? 14 : 6 }}>
+            {num("Payment plan base", { k: "planBase", prefix: "AED", ph: brN(f.originalPrice) > 0 ? brNum(f.originalPrice) : "Original purchase price", hint: "Defaults to the original purchase price" })}
+          </div>
+          {f.payments.length === 0
+            ? <div style={{ fontSize: 12, color: T.muted, textAlign: "center", padding: "12px 0 4px", border: `1px dashed ${T.hair}`, borderRadius: 10 }}>No future payments yet — tap “Add payment” to build the developer schedule.</div>
+            : <div style={{ display: "grid", gap: 12 }}>{f.payments.map((p) => <PaymentRowEditor key={p.id} row={p} base={planBaseNum} isNext={!!(fut.next && fut.next.id === p.id)} onChange={(patch) => updatePayment(p.id, patch)} onRemove={() => removePayment(p.id)} />)}</div>}
+        </div>
+        {brSection("Handover & final payment", [
+          dateF("Expected handover date", "expectedHandover"),
+          num("Handover payment %", { k: "handoverPct", dec: true, suffix: "%" }),
+          num("Handover payment amount", { k: "handoverAmount", prefix: "AED" }),
+          dateF("Final payment date", "finalDate"),
+          num("Final payment amount", { k: "finalAmount", prefix: "AED" }),
+          sel("Post-handover plan", "postHandover", ["No", "Yes"]),
+          ...(f.postHandover === "Yes" ? [
+            sel("Post-handover duration", "postHandoverDuration", ["", "12 months", "24 months", "36 months", "Custom"]),
+            sel("Payment frequency", "paymentFrequency", ["", "Monthly", "Quarterly", "Semi-Annually", "Yearly", "Custom"]),
+            num("Post-handover amount", { k: "postHandoverAmount", prefix: "AED" }),
+          ] : []),
+        ])}
       </div>
       <div style={{ position: narrow ? "static" : "sticky", top: 16 }}>
         <SummaryCard title="Off-plan resale summary" rows={rows} headline={{ label: "Buyer immediate cash", value: brAed(r.immediateCash) }} warnings={warns} />
-        <BreakdownActions makeDoc={(J) => buildBreakdownDoc(J, "offplan", f, r, user)} filename={"Amber-Homes-Off-Plan-Resale-Breakdown-" + brSafeName(f.clientName) + ".pdf"} waText={waOffPlan(f, r)} onReset={() => setF(INITIAL_OFFPLAN)} />
+        <div style={{ height: 12 }} />
+        <SummaryCard title="Future developer payments" rows={futureRows} warnings={futureWarn} />
+        <BreakdownActions makeDoc={(J, lh) => buildBreakdownDoc(J, "offplan", f, r, user, lh, fut)} filename={"Amber-Homes-Off-Plan-Resale-Breakdown-" + brSafeName(f.clientName) + ".pdf"} waText={waOffPlan(f, r, fut)} onReset={() => setF(INITIAL_OFFPLAN)} />
       </div>
     </div>
   );
@@ -5830,7 +5965,7 @@ function ReadyCalc({ user, narrow }) {
       </div>
       <div style={{ position: narrow ? "static" : "sticky", top: 16 }}>
         <SummaryCard title="Ready resale summary" rows={rows} headline={{ label: "Total buyer cash requirement", value: brAed(r.totalCash) }} warnings={[]} />
-        <BreakdownActions makeDoc={(J) => buildBreakdownDoc(J, "ready", f, r, user)} filename={"Amber-Homes-Ready-Resale-Breakdown-" + brSafeName(f.clientName) + ".pdf"} waText={waReady(f, r)} onReset={() => setF(INITIAL_READY)} />
+        <BreakdownActions makeDoc={(J, lh) => buildBreakdownDoc(J, "ready", f, r, user, lh, null)} filename={"Amber-Homes-Ready-Resale-Breakdown-" + brSafeName(f.clientName) + ".pdf"} waText={waReady(f, r)} onReset={() => setF(INITIAL_READY)} />
       </div>
     </div>
   );
@@ -5838,7 +5973,7 @@ function ReadyCalc({ user, narrow }) {
 
 function BreakdownCalculator({ user, narrow }) {
   const [mode, setMode] = useState("offplan");
-  useEffect(() => { loadJsPdf(); }, []);
+  useEffect(() => { loadJsPdf(); loadLetterhead(); }, []);
   const cards = [
     { id: "offplan", title: "Off-Plan Resale", desc: "Calculate paid amount, premium, remaining developer payment plan, transfer costs and buyer cash requirement.", Icon: Building2 },
     { id: "ready", title: "Ready Property Resale", desc: "Calculate full ready-property resale costs including DLD, commission, trustee, NOC and admin charges.", Icon: Home },
