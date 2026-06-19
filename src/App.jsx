@@ -764,6 +764,7 @@ export default function App() {
           </ScreenBoundary>
         </div>
         <AskAmber narrow={narrow} user={user} openLead={openLead} />
+        <PushSetup user={user} />
       </main>}
     </div>
   );
@@ -1967,6 +1968,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
     await supabase.from("lead_activity").insert({ lead_id: lead.id, actor_id: me.id, action: makeOpen ? "make_open" : "reassign", detail: { from: agentDisplay, to: newName, reason: reReason || null } });
     await supabase.from("admin_audit").insert({ action: "lead_reassigned", performed_by: me.id, affected_user: newId, old_value: { agent: agentDisplay }, new_value: { agent: newName }, detail: lead.client_name });
     if (newId) await supabase.from("notifications").insert({ user_id: newId, kind: "lead_assigned", title: "New lead assigned to you", body: lead.client_name + " — " + (lead.project || lead.area || "new lead"), link_screen: "live" });
+    if (newId) pushNotify({ leadId: lead.id });   // phone push to the new assignee (best-effort)
     if (lead.assigned_agent && lead.assigned_agent !== newId) await supabase.from("notifications").insert({ user_id: lead.assigned_agent, kind: "system", title: "A lead was reassigned", body: lead.client_name + " is no longer assigned to you", link_screen: "live" });
     setReOpen(false); setReReason(""); setReTo(""); loadAll();
   };
@@ -5303,6 +5305,91 @@ function RichText({ text }) {
     return <p key={i} style={{ margin: i ? "5px 0 0" : 0 }}>{richInline(bl.text, i)}</p>;
   })}</div>;
 }
+// ===== Web Push (phone notifications, e.g. a lead assigned to an agent) =====
+// Public VAPID key — safe to ship in the client. The matching private key lives in Vercel env.
+const VAPID_PUBLIC_KEY = "BGtO2OLPolZaayF5Gt9ANUQ5bMzC9ywTGWK48QSN7_WRcSGBWyXCO5Pr_bADYmYw82MIMhnWffG151BQx1Ron2I";
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+// Fire a phone push via the server (templated server-side; auth-gated). Best-effort — never blocks the UI.
+async function pushNotify(payload) {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session && session.access_token;
+    if (!token) return;
+    await fetch("/api/notify", { method: "POST", headers: { "content-type": "application/json", Authorization: "Bearer " + token }, body: JSON.stringify(payload) });
+  } catch (e) { /* notifications are best-effort */ }
+}
+const isIosDevice = () => /iphone|ipad|ipod/i.test(navigator.userAgent || "") || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isStandalonePwa = () => (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true;
+
+async function ensurePushSubscribed() {
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) });
+  const j = sub.toJSON();
+  const { data: { user: au } } = await supabase.auth.getUser();
+  if (!au || !j || !j.keys) return;
+  await supabase.from("push_subscriptions").upsert(
+    { user_id: au.id, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, user_agent: navigator.userAgent, last_seen: new Date().toISOString() },
+    { onConflict: "endpoint" });
+}
+
+// Subtle opt-in prompt for phone notifications. iPhone (not yet installed) gets Add-to-Home-Screen steps.
+function PushSetup({ user }) {
+  const [show, setShow] = useState(false);
+  const [mode, setMode] = useState("enable"); // 'enable' | 'ios-install'
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!user) return;
+    try { if (sessionStorage.getItem("amber_push_dismissed") === "1") return; } catch (e) {}
+    const supported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+    if (!supported) { if (isIosDevice() && !isStandalonePwa()) { setMode("ios-install"); setShow(true); } return; }
+    if (Notification.permission === "granted") { ensurePushSubscribed().catch(() => {}); return; }
+    if (Notification.permission === "denied") return;
+    if (isIosDevice() && !isStandalonePwa()) { setMode("ios-install"); setShow(true); return; }
+    setMode("enable"); setShow(true);
+  }, [user]);
+
+  const enable = async () => {
+    setBusy(true);
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { setBusy(false); if (perm === "denied") setShow(false); return; }
+      await ensurePushSubscribed();
+      setShow(false);
+    } catch (e) { /* ignore */ }
+    setBusy(false);
+  };
+  const dismiss = () => { try { sessionStorage.setItem("amber_push_dismissed", "1"); } catch (e) {} setShow(false); };
+
+  if (!show) return null;
+  return (
+    <div style={{ position: "fixed", left: 12, right: 12, bottom: 84, zIndex: 60, maxWidth: 440, margin: "0 auto",
+      background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 14, padding: "12px 14px", boxShadow: T.shadow, fontFamily: UI }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ width: 34, height: 34, borderRadius: 9, background: T.goldSoft, color: T.gold, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Bell size={17} /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: T.ink }}>Get lead alerts on this phone</div>
+          {mode === "enable"
+            ? <div style={{ fontSize: 11.5, color: T.muted, marginTop: 1 }}>Be notified the moment a lead is assigned to you.</div>
+            : <div style={{ fontSize: 11.5, color: T.muted, marginTop: 1, lineHeight: 1.45 }}>On iPhone: tap the Share icon, choose <b>Add to Home Screen</b>, then open Amber from that icon and turn alerts on.</div>}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10, justifyContent: "flex-end" }}>
+        <button onClick={dismiss} style={{ background: "none", border: `1px solid ${T.hair}`, color: T.muted, borderRadius: 9, padding: "7px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>Not now</button>
+        {mode === "enable" && <button onClick={enable} disabled={busy} style={{ background: T.btnBg, color: T.btnFg, border: "none", borderRadius: 9, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: busy ? "default" : "pointer", fontFamily: UI, opacity: busy ? 0.7 : 1 }}>{busy ? "Enabling…" : "Turn on alerts"}</button>}
+      </div>
+    </div>
+  );
+}
+
 function AskAmber({ narrow, user, openLead }) {
   const [open, setOpen] = useState(false);
   const [mentor, setMentor] = useState(null);     // chosen mentor object
@@ -6031,6 +6118,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
         for (const part of chunks(hist)) { await supabase.from("lead_ownership_history").insert(part); }
       } catch (e) {}
       if (mode === "assign" && agentId) { try { await supabase.from("notifications").insert({ user_id: agentId, kind: "lead_assigned", title: ids.length + (ids.length === 1 ? " lead assigned to you" : " leads assigned to you"), body: "You have " + ids.length + " newly assigned " + (ids.length === 1 ? "lead" : "leads") + (reason ? " — " + reason : ""), link_screen: "live" }); } catch (e) {} }
+      if (mode === "assign" && agentId) pushNotify({ summary: true, agentId, count: ids.length });   // one digest push to the agent's phone
       // 4) audit — summary always; per-row only for smaller batches (avoid thousands of audit rows on a big redistribution)
       try {
         await supabase.from("admin_audit").insert({ action: mode === "assign" ? "leads_bulk_assigned" : mode === "open" ? "leads_bulk_opened" : "leads_bulk_unassigned", performed_by: me?.id || null, new_value: { count: ids.length, to: toName, mode, reason: reason || null }, detail: ids.length + (mode === "assign" ? " → " + (toName || "agent") : mode === "open" ? " → Open Leads" : " → Unassigned") });

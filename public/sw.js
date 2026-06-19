@@ -2,7 +2,7 @@
 // SECURITY: caches ONLY the public static shell (HTML, hashed JS/CSS, icons, fonts).
 // It NEVER caches API responses, Supabase data, auth tokens, lead data, or any private
 // information — those are same-origin /api/* (bypassed) or cross-origin (bypassed).
-const CACHE = "amber-crm-v8";
+const CACHE = "amber-crm-v9";
 const STATIC = ["/", "/manifest.webmanifest", "/icon-192-v4.png", "/icon-512-v4.png", "/apple-touch-icon-v4.png", "/favicon-32-v4.png"];
 
 self.addEventListener("install", (e) => {
@@ -31,4 +31,39 @@ self.addEventListener("fetch", (e) => {
     return;
   }
   // everything else: straight to network (no caching)
+});
+
+// --- Web Push: show a notification when the server pushes (e.g. a lead assigned to this agent) ---
+self.addEventListener("push", (e) => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch (err) { data = { title: "Amber CRM", body: e.data ? e.data.text() : "" }; }
+  const title = data.title || "Amber CRM";
+  const opts = {
+    body: data.body || "",
+    icon: data.icon || "/icon-192-v4.png",
+    badge: "/favicon-32-v4.png",
+    tag: data.tag || undefined,        // same tag collapses duplicates
+    renotify: !!data.tag,
+    data: { url: data.url || "/" },
+    requireInteraction: false,
+  };
+  e.waitUntil(self.registration.showNotification(title, opts));
+});
+
+// --- Tap the notification: focus an open CRM tab (or open one) and route to the lead if provided ---
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const target = (e.notification.data && e.notification.data.url) || "/";
+  e.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((cl) => {
+      for (const c of cl) {
+        if ("focus" in c) {
+          try { if (c.navigate && target !== "/") c.navigate(target); } catch (err) {}
+          try { c.postMessage({ type: "amber-notif-click", url: target }); } catch (err) {}
+          return c.focus();
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(target);
+    })
+  );
 });
