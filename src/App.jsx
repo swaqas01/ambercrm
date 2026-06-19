@@ -550,10 +550,12 @@ const NAV = [
   ["admin", "Admin Dashboard", LayoutDashboard],
   ["users", "Users & Agents", Users],
   ["agent", "Agent Dashboard", UserCircle],
+  ["myprofile", "My Profile", UserCircle],
   ["assign", "Lead Assignment", UserPlus],
   ["pipeline", "Pipeline Board", Kanban],
   ["open", "Open Leads", Unlock],
   ["performance", "Agent Performance", BarChart3],
+  ["agents", "Team & Attendance", Users],
   ["security", "Suspicious Activity", ShieldAlert],
   ["devices", "Devices & Sessions", Smartphone],
   ["matching", "Property Matching", Building2],
@@ -665,6 +667,8 @@ export default function App() {
   const openLead = (id, siblings) => { setLeadFrom((prev) => (screen === "lead" ? prev : screen)); setDetailId(id); setLeadSiblings(Array.isArray(siblings) ? siblings : []); setScreen("lead"); setFilter(null); setNavOpen(false); };
   const [dealDetailId, setDealDetailId] = useState(null);
   const openDeal = (id) => { setDealDetailId(id); setScreen("dealdetail"); setNavOpen(false); };
+  const [agentDetailId, setAgentDetailId] = useState(null);
+  const openAgent = (id) => { setAgentDetailId(id); setScreen("agentprofile"); setFilter(null); setNavOpen(false); };
   // role guard — agents may only open their own surfaces
   useEffect(() => {
     if (user && !canOpen(user.role, screen)) {
@@ -674,10 +678,11 @@ export default function App() {
   }, [user, screen]);
   // Remember the current top-level screen so a refresh returns here (detail screens need an id, so skip them).
   useEffect(() => {
-    if (user && screen !== "lead" && screen !== "dealdetail") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
+    if (user && screen !== "lead" && screen !== "dealdetail" && screen !== "agentprofile") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />, devices: <DevicesSecurity user={user} />, breakdown: <BreakdownCalculator user={user} narrow={narrow} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} openAgent={openAgent} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />, devices: <DevicesSecurity user={user} />, breakdown: <BreakdownCalculator user={user} narrow={narrow} />,
+    myprofile: <AgentProfile user={user} agentId={user && user.id} self go={go} openLead={openLead} openAgent={openAgent} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, agentprofile: <AgentProfile user={user} agentId={agentDetailId} go={go} openLead={openLead} openAgent={openAgent} />, agents: <AgentsRoster user={user} go={go} openAgent={openAgent} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <Performance go={go} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -1281,6 +1286,429 @@ function AdminDash({ go, user }) {
 }
 
 /* ============================ 2 AGENT DASHBOARD ========================== */
+// ===== Agent Profiles & Performance — real logs only (lead_activity / deals / follow_ups) =====
+const apMoney = (n) => "AED " + Math.round(Number(n) || 0).toLocaleString("en-US");
+const AP_STAFF_ROLES = ["agent", "sales_manager", "admin", "master_admin"];
+const apFmtTime = (t) => t ? new Date(t).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
+const apFmtAgo = (t) => { if (!t) return "—"; const m = (Date.now() - new Date(t)) / 6e4; if (m < 1) return "just now"; if (m < 60) return Math.round(m) + "m ago"; if (m < 1440) return Math.round(m / 60) + "h ago"; return new Date(t).toLocaleDateString("en-GB"); };
+function ApAvatar({ url, name, size = 64 }) {
+  return url
+    ? <img src={url} alt="" style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", border: `1px solid ${T.hairSoft}`, flexShrink: 0 }} />
+    : <div style={{ width: size, height: size, borderRadius: "50%", background: T.goldSoft, color: T.gold, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: DISPLAY, fontWeight: 800, fontSize: size * 0.4, flexShrink: 0 }}>{String(name || "?").trim().charAt(0).toUpperCase() || "?"}</div>;
+}
+
+function AgentProfile({ user, agentId, self, go, openLead, openAgent, onAvatar }) {
+  const isOwn = !!(user && agentId && user.id === agentId);
+  const canView = isOwn || (user && (user.role === "master_admin" || user.role === "admin"));
+  const editable = isOwn || (user && user.role === "master_admin");
+  const [prof, setProf] = useState(null);
+  const [ap, setAp] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [period, setPeriod] = useState("today");
+  const [acts, setActs] = useState([]);
+  const [deals, setDeals] = useState([]);
+  const [fups, setFups] = useState([]);
+  const [leads, setLeads] = useState([]);
+  const [devices, setDevices] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+  const [tab, setTab] = useState("overview");
+  const [avatarUrl, setAvatarUrl] = useState(null);
+  const [upBusy, setUpBusy] = useState(false);
+  const [upErr, setUpErr] = useState("");
+  const lbl = brLbl(), inp = brInp();
+
+  useEffect(() => {
+    let alive = true;
+    if (!agentId || !canView) { setLoading(false); return; }
+    (async () => {
+      setLoading(true); setTab("overview"); setSaveMsg("");
+      const d = new Date();
+      const monthIso = new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+      const [p, a, ac, dl, fu, ld, dv] = await Promise.all([
+        supabase.from("profiles").select("id,full_name,email,role,active,last_login,avatar_url").eq("id", agentId).single(),
+        supabase.from("agent_profiles").select("*").eq("user_id", agentId).maybeSingle(),
+        supabase.from("lead_activity").select("action,created_at,lead_id,detail").eq("actor_id", agentId).gte("created_at", monthIso).order("created_at", { ascending: false }).limit(4000),
+        supabase.from("deals").select("status,project,client_name,property_type,property_value,gross_commission,net_commission,company_share,final_net,submitted_at,decided_at,created_at,deleted").eq("agent_id", agentId).neq("status", "cancelled").limit(2000),
+        supabase.from("follow_ups").select("status,due_at,completed_at,created_at").eq("agent_id", agentId).limit(3000),
+        supabase.from("leads").select("temperature,created_at,last_contacted").eq("assigned_agent", agentId).limit(4000),
+        supabase.from("user_devices").select("last_seen,revoked").eq("user_id", agentId).limit(20),
+      ]);
+      if (!alive) return;
+      setProf(p.data || null);
+      setAp(a.data || { user_id: agentId });
+      setAvatarUrl((p.data && p.data.avatar_url) || null);
+      setActs(ac.data || []);
+      setDeals((dl.data || []).filter((x) => !x.deleted));
+      setFups(fu.data || []);
+      setLeads(ld.data || []);
+      setDevices(dv.data || []);
+      setLoading(false);
+    })();
+    return () => { alive = false; };
+  }, [agentId]);
+
+  const onPhoto = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (e.target) e.target.value = "";
+    if (!file) return;
+    if (!/^image\/(jpeg|jpg|png|webp)$/.test(file.type)) { setUpErr("Please use a JPG, PNG or WebP image."); return; }
+    if (file.size > 5 * 1024 * 1024) { setUpErr("Image must be under 5MB."); return; }
+    setUpBusy(true); setUpErr("");
+    try {
+      const { data: { user: au } } = await supabase.auth.getUser();
+      const uid = au?.id; if (!uid) throw new Error("no session");
+      const ext = (file.type.split("/")[1] || "jpg").replace("jpeg", "jpg");
+      const path = uid + "/avatar." + ext;
+      const { error: e1 } = await supabase.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type, cacheControl: "3600" });
+      if (e1) throw e1;
+      const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
+      const url = pub.publicUrl + "?v=" + Date.now();
+      const { error: er } = await supabase.rpc("set_my_avatar", { p_url: url });
+      if (er) { const { error: e2 } = await supabase.from("profiles").update({ avatar_url: url }).eq("id", uid); if (e2) throw e2; }
+      setAvatarUrl(url); if (onAvatar) onAvatar(url);
+    } catch (err) { setUpErr("Upload failed. Please try again."); }
+    finally { setUpBusy(false); }
+  };
+
+  const setField = (k, v) => setAp((p) => ({ ...p, [k]: v }));
+  const save = async () => {
+    setSaving(true); setSaveMsg("");
+    const keys = ["brn", "phone", "whatsapp", "job_title", "languages", "specialization", "bio", "nationality", "social_instagram", "social_linkedin", "social_tiktok", "social_youtube", "website", "signature_name", "signature_title", "signature_phone", "signature_whatsapp", "signature_email", "signature_brn", "signature_disclaimer"];
+    const payload = { user_id: agentId };
+    keys.forEach((k) => { payload[k] = ap[k] != null && ap[k] !== "" ? ap[k] : null; });
+    const { error } = await supabase.from("agent_profiles").upsert(payload, { onConflict: "user_id" });
+    setSaveMsg(error ? "Couldn't save — please try again." : "Saved.");
+    setSaving(false);
+    if (!error) setTimeout(() => setSaveMsg(""), 2500);
+  };
+
+  if (!canView) return <div style={{ ...card, padding: 22, maxWidth: 520, margin: "8px auto" }}><div style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 800, color: T.ink }}>Access denied</div><div style={{ fontSize: 13, color: T.muted, marginTop: 6 }}>You can only view your own profile.</div><button onClick={() => go(self ? "myprofile" : "agent")} style={{ ...miniBtn(), marginTop: 14 }}>Back</button></div>;
+  if (loading) return <div style={{ padding: 24, color: T.muted }}>Loading profile…</div>;
+  if (!prof) return <div style={{ ...card, padding: 22 }}><div style={{ color: T.muted }}>Agent not found.</div></div>;
+
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startMonthD = new Date(now.getFullYear(), now.getMonth(), 1);
+  const dow = (now.getDay() + 6) % 7;
+  const startWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
+  const startOf = period === "today" ? startToday : period === "week" ? startWeek : startMonthD;
+  const inP = (iso) => iso && new Date(iso) >= startOf;
+  const inTodayD = (iso) => iso && new Date(iso) >= startToday;
+  const isReveal = (a) => a === "view_number" || a === "reveal_phone";
+  const A = acts || [], F = fups || [], D = deals || [], L = leads || [];
+
+  const cCalls = A.filter((x) => x.action === "call" && inP(x.created_at)).length;
+  const cWa = A.filter((x) => x.action === "whatsapp" && inP(x.created_at)).length;
+  const cReveal = A.filter((x) => isReveal(x.action) && inP(x.created_at)).length;
+  const cViews = A.filter((x) => x.action === "view" && inP(x.created_at)).length;
+  const cEmail = A.filter((x) => x.action === "email" && inP(x.created_at)).length;
+  const fCompleted = F.filter((x) => x.status === "completed" && inP(x.completed_at)).length;
+  const fOverdue = F.filter((x) => x.status === "scheduled" && x.due_at && new Date(x.due_at) < now).length;
+  const fDueToday = F.filter((x) => x.status === "scheduled" && x.due_at && new Date(x.due_at) >= startToday && new Date(x.due_at) < new Date(startToday.getTime() + 864e5)).length;
+  const subDate = (d) => d.submitted_at || d.created_at, apprDate = (d) => d.decided_at || d.created_at;
+  const dealsSub = D.filter((d) => d.status !== "draft" && inP(subDate(d))).length;
+  const apprDeals = D.filter((d) => d.status === "approved" && inP(apprDate(d)));
+  const dealValue = apprDeals.reduce((s, d) => s + (Number(d.property_value) || 0), 0);
+  const grossComm = apprDeals.reduce((s, d) => s + (Number(d.gross_commission) || 0), 0);
+  const netAmber = apprDeals.reduce((s, d) => s + (Number(d.company_share != null ? d.company_share : (d.final_net != null ? d.final_net : d.net_commission)) || 0), 0);
+  const tempCount = (re) => L.filter((x) => re.test(String(x.temperature || ""))).length;
+  const newLeadsMonth = L.filter((x) => x.created_at && new Date(x.created_at) >= startMonthD).length;
+  const notContacted = L.filter((x) => !x.last_contacted).length;
+
+  const todayActs = A.filter((x) => inTodayD(x.created_at));
+  const firstSeen = todayActs.length ? todayActs.map((x) => x.created_at).sort()[0] : null;
+  const lastTimes = [prof.last_login].concat(A.map((x) => x.created_at)).concat((devices || []).map((d) => d.last_seen)).filter(Boolean);
+  const lastActive = lastTimes.length ? lastTimes.reduce((m, t) => (new Date(t) > new Date(m) ? t : m)) : null;
+  const activeSession = (devices || []).some((d) => !d.revoked && d.last_seen && (now - new Date(d.last_seen)) < 30 * 60 * 1000);
+  const attStatus = activeSession ? "Active" : (firstSeen ? "Seen today" : "Offline");
+
+  const periodLabel = period === "today" ? "today" : period === "week" ? "this week" : "this month";
+  const sig = {
+    name: ap.signature_name || prof.full_name || "Agent Name",
+    title: ap.signature_title || ap.job_title || "Property Consultant",
+    brn: ap.signature_brn || ap.brn || "",
+    phone: ap.signature_phone || ap.phone || "",
+    wa: ap.signature_whatsapp || ap.whatsapp || "",
+    email: ap.signature_email || prof.email || "",
+    disc: ap.signature_disclaimer || "",
+  };
+
+  const PStat = ({ label, value, tone }) => (
+    <div style={{ ...card, padding: "12px 13px", minWidth: 0 }}>
+      <div style={{ fontSize: 10.5, color: T.muted, fontWeight: 600, marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
+      <div style={{ fontFamily: DISPLAY, fontSize: 21, fontWeight: 800, color: tone === "ok" ? T.ok : tone === "wa" ? WA : tone === "bad" ? T.bad : tone === "gold" ? T.gold : T.ink }}>{value}</div>
+    </div>
+  );
+  const field = (label, k, ph) => <div key={k}><label style={lbl}>{label}</label>{editable ? <input value={ap[k] || ""} placeholder={ph || ""} onChange={(e) => setField(k, e.target.value)} style={inp} /> : <div style={{ ...inp, background: T.bone, display: "flex", alignItems: "center", minHeight: 41, color: ap[k] ? T.ink : T.faint }}>{ap[k] || "—"}</div>}</div>;
+  const areaField = (label, k, ph) => <div key={k} style={{ gridColumn: "1 / -1" }}><label style={lbl}>{label}</label>{editable ? <textarea value={ap[k] || ""} placeholder={ph || ""} onChange={(e) => setField(k, e.target.value)} rows={3} style={{ ...inp, resize: "vertical", minHeight: 64 }} /> : <div style={{ ...inp, background: T.bone, minHeight: 50, color: ap[k] ? T.ink : T.faint, whiteSpace: "pre-wrap" }}>{ap[k] || "—"}</div>}</div>;
+
+  return (
+    <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+      {!self && <button onClick={() => go("agents")} style={{ ...miniBtn(), marginBottom: 12 }}>‹ Back to team</button>}
+
+      {/* Header */}
+      <div style={{ ...card, padding: 18, marginBottom: 14, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ position: "relative" }}>
+          <ApAvatar url={avatarUrl} name={prof.full_name} size={76} />
+          {isOwn && <label title="Change photo" style={{ position: "absolute", bottom: -2, right: -2, width: 26, height: 26, borderRadius: "50%", background: T.gold, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: upBusy ? "default" : "pointer", border: `2px solid ${T.paper}` }}><Camera size={13} /><input type="file" accept="image/png,image/jpeg,image/webp" onChange={onPhoto} disabled={upBusy} style={{ display: "none" }} /></label>}
+        </div>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontFamily: DISPLAY, fontSize: 22, fontWeight: 800, color: T.ink }}>{prof.full_name || "—"}</div>
+          <div style={{ fontSize: 12.5, color: T.gold, fontWeight: 700, marginTop: 2 }}>{ap.job_title || roleLabel(prof.role)}</div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8, fontSize: 12, color: T.muted }}>
+            {prof.email && <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Mail size={12} /> {prof.email}</span>}
+            {(ap.phone) && <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Phone size={12} /> {ap.phone}</span>}
+            {(ap.whatsapp) && <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: WA }}><MessageCircle size={12} /> {ap.whatsapp}</span>}
+            {ap.brn && <span>BRN {ap.brn}</span>}
+          </div>
+        </div>
+        <div style={{ textAlign: "right", fontSize: 11.5, color: T.muted, minWidth: 150 }}>
+          <div><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: prof.active === false ? T.bad : (activeSession ? T.ok : T.faint), marginRight: 6 }} />{roleLabel(prof.role)}{prof.active === false ? " · inactive" : ""}</div>
+          <div style={{ marginTop: 5 }}>Last login: {apFmtAgo(prof.last_login)}</div>
+          <div style={{ marginTop: 3 }}>Last active: {apFmtAgo(lastActive)}</div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+        {[["overview", "Performance"], ["profile", "Profile & signature"]].map(([k, t]) => (
+          <button key={k} onClick={() => setTab(k)} style={{ border: `1px solid ${tab === k ? T.gold : T.hair}`, background: tab === k ? T.goldSoft : T.paper, color: tab === k ? T.gold : T.ink, fontWeight: 700, fontSize: 12.5, padding: "8px 16px", borderRadius: 9, cursor: "pointer", fontFamily: UI }}>{t}</button>
+        ))}
+      </div>
+
+      {tab === "overview" && <>
+        {/* Attendance */}
+        <SectionTitle>Attendance today</SectionTitle>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
+          <PStat label="Status" value={attStatus} tone={activeSession ? "ok" : undefined} />
+          <PStat label="First seen today" value={firstSeen ? apFmtTime(firstSeen) : "—"} />
+          <PStat label="Last active" value={apFmtAgo(lastActive)} />
+          <PStat label="Active session" value={activeSession ? "Yes" : "No"} tone={activeSession ? "ok" : undefined} />
+          <PStat label="Activity today" value={todayActs.length} />
+        </div>
+
+        {/* Period tabs */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+          <SectionTitle>Performance · {periodLabel}</SectionTitle>
+          <div style={{ display: "flex", gap: 5 }}>
+            {[["today", "Today"], ["week", "This week"], ["month", "This month"]].map(([k, t]) => (
+              <button key={k} onClick={() => setPeriod(k)} style={{ border: `1px solid ${period === k ? T.gold : T.hair}`, background: period === k ? T.goldSoft : T.paper, color: period === k ? T.gold : T.muted, fontWeight: 600, fontSize: 12, padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontFamily: UI }}>{t}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+          <PStat label="Calls" value={cCalls} />
+          <PStat label="WhatsApp" value={cWa} tone="wa" />
+          <PStat label="Contact reveals" value={cReveal} />
+          <PStat label="Lead views" value={cViews} />
+          <PStat label="Follow-ups done" value={fCompleted} tone="ok" />
+          <PStat label="Overdue follow-ups" value={fOverdue} tone={fOverdue ? "bad" : undefined} />
+          <PStat label="Due today" value={fDueToday} />
+          {cEmail > 0 && <PStat label="Emails" value={cEmail} />}
+        </div>
+
+        {/* Deals (approved only, from Deals module) */}
+        <SectionTitle right={<span style={{ fontSize: 10.5, color: T.muted, fontWeight: 600 }}>approved deals only · from Deals module</span>}>Deal performance · {periodLabel}</SectionTitle>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
+          <PStat label="Deals submitted" value={dealsSub} />
+          <PStat label="Deals approved" value={apprDeals.length} tone="ok" />
+          <PStat label="Deal value" value={apMoney(dealValue)} tone="gold" />
+          <PStat label="Gross commission" value={apMoney(grossComm)} />
+          <PStat label="Net to Amber Homes" value={apMoney(netAmber)} />
+        </div>
+
+        {/* Leads */}
+        <SectionTitle>Lead book</SectionTitle>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+          <PStat label="Assigned leads" value={L.length} />
+          <PStat label="New this month" value={newLeadsMonth} />
+          <PStat label="Hot" value={tempCount(/hot/i)} tone="bad" />
+          <PStat label="Warm" value={tempCount(/warm/i)} />
+          <PStat label="Cold" value={tempCount(/cold/i)} />
+          <PStat label="Not contacted" value={notContacted} />
+        </div>
+
+        {/* Recent activity */}
+        <SectionTitle>Recent activity</SectionTitle>
+        <div style={{ ...card, padding: 6, marginBottom: 8 }}>
+          {A.slice(0, 12).map((x, i) => {
+            const ic = x.action === "call" ? <Phone size={13} /> : x.action === "whatsapp" ? <MessageCircle size={13} /> : isReveal(x.action) ? <Eye size={13} /> : <CircleDot size={13} />;
+            const lab = x.action === "call" ? "Called" : x.action === "whatsapp" ? "WhatsApp" : x.action === "view_number" || x.action === "reveal_phone" ? "Revealed contact" : x.action === "view" ? "Viewed lead" : x.action;
+            return <div key={i} onClick={() => x.lead_id && openLead && openLead(x.lead_id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderBottom: i < Math.min(A.length, 12) - 1 ? `1px solid ${T.hairSoft}` : "none", cursor: x.lead_id ? "pointer" : "default" }}>
+              <span style={{ color: x.action === "whatsapp" ? WA : T.muted }}>{ic}</span>
+              <span style={{ fontSize: 12.5, color: T.ink, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{lab}{x.detail && x.detail.client ? " · " + x.detail.client : ""}</span>
+              <span style={{ fontSize: 11, color: T.faint }}>{apFmtAgo(x.created_at)}</span>
+            </div>;
+          })}
+          {A.length === 0 && <div style={{ padding: 14, fontSize: 12.5, color: T.muted, textAlign: "center" }}>No recorded activity yet this month.</div>}
+        </div>
+        <div style={{ fontSize: 10.5, color: T.faint, marginBottom: 8 }}>Counts come from real CRM logs (call / WhatsApp / reveal clicks, follow-ups, and approved deals). Hot-resale listings are not counted as closed deals.</div>
+      </>}
+
+      {tab === "profile" && <>
+        {saveMsg && <div style={{ ...card, padding: "9px 13px", marginBottom: 12, fontSize: 12.5, fontWeight: 600, color: saveMsg.startsWith("Saved") ? T.ok : T.bad, background: saveMsg.startsWith("Saved") ? T.okSoft : T.badSoft, borderColor: (saveMsg.startsWith("Saved") ? T.ok : T.bad) + "44" }}>{saveMsg}</div>}
+        {!editable && <div style={{ fontSize: 11.5, color: T.faint, marginBottom: 10 }}>Read-only — only the agent (or a Master Admin) can edit these fields.</div>}
+
+        <SectionTitle>Professional details</SectionTitle>
+        <div style={{ ...card, padding: 16, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+            {field("Job title / designation", "job_title", "e.g. Senior Property Consultant")}
+            {field("BRN number", "brn", "e.g. 45678")}
+            {field("Phone", "phone", "+971 5X XXX XXXX")}
+            {field("WhatsApp", "whatsapp", "+971 5X XXX XXXX")}
+            {field("Languages", "languages", "e.g. English, Arabic, Russian")}
+            {field("Specialization", "specialization", "e.g. Off-plan, Palm Jebel Ali, Emaar")}
+            {field("Nationality (optional)", "nationality", "")}
+            {areaField("Short bio (optional)", "bio", "A few lines about your experience…")}
+          </div>
+        </div>
+
+        <SectionTitle>Social links (optional)</SectionTitle>
+        <div style={{ ...card, padding: 16, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+            {field("Instagram", "social_instagram", "@handle or URL")}
+            {field("LinkedIn", "social_linkedin", "profile URL")}
+            {field("TikTok", "social_tiktok", "@handle or URL")}
+            {field("YouTube", "social_youtube", "channel URL")}
+            {field("Website", "website", "https://")}
+          </div>
+        </div>
+
+        <SectionTitle right={<span style={{ fontSize: 10.5, color: T.muted, fontWeight: 600 }}>used in WhatsApp / email / PDF footers</span>}>Signature</SectionTitle>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 14, marginBottom: 8 }} className="ap-sig-grid">
+          <div style={{ ...card, padding: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+              {field("Display name", "signature_name", prof.full_name || "")}
+              {field("Title", "signature_title", "Property Consultant")}
+              {field("Signature phone", "signature_phone", ap.phone || "")}
+              {field("Signature WhatsApp", "signature_whatsapp", ap.whatsapp || "")}
+              {field("Signature email", "signature_email", prof.email || "")}
+              {field("Signature BRN", "signature_brn", ap.brn || "")}
+              {areaField("Disclaimer (optional)", "signature_disclaimer", "e.g. This message is intended only for the named recipient…")}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: T.muted, fontWeight: 600, marginBottom: 7 }}>Signature preview</div>
+            <div style={{ background: T.paper, border: `1px solid ${T.hairSoft}`, borderRadius: 12, padding: 18, boxShadow: T.shadow }}>
+              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                <ApAvatar url={avatarUrl} name={sig.name} size={52} />
+                <div style={{ borderLeft: `3px solid ${T.gold}`, paddingLeft: 12 }}>
+                  <div style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 800, color: T.ink }}>{sig.name}</div>
+                  <div style={{ fontSize: 11.5, color: T.gold, fontWeight: 700 }}>{sig.title}</div>
+                  <div style={{ fontSize: 11.5, color: T.muted, fontWeight: 600 }}>Amber Homes Real Estate</div>
+                </div>
+              </div>
+              <div style={{ marginTop: 12, fontSize: 11.5, color: T.muted, lineHeight: 1.7 }}>
+                {sig.brn && <div>BRN: {sig.brn}</div>}
+                {sig.phone && <div>M: {sig.phone}</div>}
+                {sig.wa && <div>W: {sig.wa}</div>}
+                {sig.email && <div>E: {sig.email}</div>}
+              </div>
+              {sig.disc && <div style={{ marginTop: 10, fontSize: 9.5, color: T.faint, fontStyle: "italic", lineHeight: 1.5 }}>{sig.disc}</div>}
+            </div>
+          </div>
+        </div>
+
+        {editable && <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6 }}>
+          <button onClick={save} disabled={saving} style={{ border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 13, padding: "10px 22px", borderRadius: 10, cursor: saving ? "default" : "pointer", fontFamily: UI, display: "flex", alignItems: "center", gap: 7, opacity: saving ? 0.7 : 1 }}><Save size={15} /> {saving ? "Saving…" : "Save profile"}</button>
+          {upErr && <span style={{ fontSize: 12, color: T.bad }}>{upErr}</span>}
+        </div>}
+      </>}
+    </div>
+  );
+}
+
+function AgentsRoster({ user, go, openAgent }) {
+  const canView = user && (user.role === "master_admin" || user.role === "admin");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState("");
+  const [roleF, setRoleF] = useState("all");
+
+  useEffect(() => {
+    let alive = true;
+    if (!canView) { setLoading(false); return; }
+    (async () => {
+      setLoading(true);
+      const d = new Date();
+      const startToday = new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString();
+      const [pp, aa, dv] = await Promise.all([
+        supabase.from("profiles").select("id,full_name,role,active,last_login,avatar_url").limit(2000),
+        supabase.from("lead_activity").select("actor_id,action,created_at").gte("created_at", startToday).limit(8000),
+        supabase.from("user_devices").select("user_id,last_seen,revoked").limit(2000),
+      ]);
+      if (!alive) return;
+      const acts = aa.data || [], devs = dv.data || [];
+      const byActor = {};
+      acts.forEach((x) => { (byActor[x.actor_id] = byActor[x.actor_id] || []).push(x); });
+      const devByUser = {};
+      devs.forEach((x) => { (devByUser[x.user_id] = devByUser[x.user_id] || []).push(x); });
+      const now = Date.now();
+      const out = (pp.data || []).filter((p) => AP_STAFF_ROLES.includes(p.role)).map((p) => {
+        const ta = byActor[p.id] || [];
+        const isRev = (a) => a === "view_number" || a === "reveal_phone";
+        const firstSeen = ta.length ? ta.map((x) => x.created_at).sort()[0] : null;
+        const myDevs = devByUser[p.id] || [];
+        const active = myDevs.some((dd) => !dd.revoked && dd.last_seen && (now - new Date(dd.last_seen)) < 30 * 60 * 1000);
+        const lastTimes = [p.last_login].concat(ta.map((x) => x.created_at)).concat(myDevs.map((dd) => dd.last_seen)).filter(Boolean);
+        const lastActive = lastTimes.length ? lastTimes.reduce((m, t) => (new Date(t) > new Date(m) ? t : m)) : null;
+        return { ...p, firstSeen, lastActive, active, calls: ta.filter((x) => x.action === "call").length, wa: ta.filter((x) => x.action === "whatsapp").length, reveals: ta.filter((x) => isRev(x.action)).length };
+      }).sort((a, b) => (b.active - a.active) || (new Date(b.lastActive || 0) - new Date(a.lastActive || 0)));
+      setRows(out); setLoading(false);
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  if (!canView) return <div style={{ ...card, padding: 22, maxWidth: 520, margin: "8px auto" }}><div style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 800, color: T.ink }}>Access denied</div><div style={{ fontSize: 13, color: T.muted, marginTop: 6 }}>The team & attendance view is available to Master Admin and Admin.</div></div>;
+
+  const filtered = rows.filter((r) => (roleF === "all" || r.role === roleF) && (!q || String(r.full_name || "").toLowerCase().includes(q.toLowerCase())));
+  const presentToday = rows.filter((r) => r.firstSeen).length;
+  const activeNow = rows.filter((r) => r.active).length;
+
+  return (
+    <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+      <SectionTitle right={<span style={{ fontSize: 11, color: T.muted, fontWeight: 600 }}>{activeNow} active now · {presentToday}/{rows.length} seen today</span>}>Team & Attendance</SectionTitle>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+          <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: T.faint }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agent…" style={{ width: "100%", padding: "9px 12px 9px 33px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontSize: 13, fontFamily: UI, boxSizing: "border-box" }} />
+        </div>
+        <select value={roleF} onChange={(e) => setRoleF(e.target.value)} style={{ padding: "9px 12px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontSize: 13, fontFamily: UI, cursor: "pointer" }}>
+          <option value="all">All roles</option><option value="agent">Agent</option><option value="sales_manager">Sales Manager</option><option value="admin">Admin</option><option value="master_admin">Master Admin</option>
+        </select>
+      </div>
+
+      {loading ? <div style={{ padding: 24, color: T.muted }}>Loading team…</div> : (
+        <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+          {filtered.map((r, i) => (
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: i < filtered.length - 1 ? `1px solid ${T.hairSoft}` : "none", flexWrap: "wrap" }}>
+              <ApAvatar url={r.avatar_url} name={r.full_name} size={42} />
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <div style={{ fontWeight: 700, fontSize: 13.5, color: T.ink }}>{r.full_name || "—"}</div>
+                <div style={{ fontSize: 11, color: T.muted }}>{roleLabel(r.role)}{r.active === false ? " · inactive" : ""}</div>
+              </div>
+              <div style={{ minWidth: 110, fontSize: 11, color: T.muted }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: r.active ? T.ok : (r.firstSeen ? T.gold : T.faint), display: "inline-block" }} />{r.active ? "Active now" : (r.firstSeen ? "Seen today" : "Offline")}</div>
+                <div style={{ marginTop: 3 }}>{apFmtAgo(r.lastActive)}</div>
+              </div>
+              <div style={{ display: "flex", gap: 14, fontSize: 12, color: T.muted, minWidth: 160 }}>
+                <span title="Calls today" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Phone size={12} /> {r.calls}</span>
+                <span title="WhatsApp today" style={{ display: "inline-flex", alignItems: "center", gap: 4, color: WA }}><MessageCircle size={12} /> {r.wa}</span>
+                <span title="Reveals today" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Eye size={12} /> {r.reveals}</span>
+              </div>
+              <button onClick={() => openAgent(r.id)} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold, display: "flex", alignItems: "center", gap: 5 }}>View profile <ChevronRight size={13} /></button>
+            </div>
+          ))}
+          {filtered.length === 0 && <div style={{ padding: 20, color: T.muted, fontSize: 13, textAlign: "center" }}>No agents match.</div>}
+        </div>
+      )}
+      <div style={{ fontSize: 10.5, color: T.faint, marginTop: 8 }}>Attendance is derived from CRM activity, last login and active sessions (Dubai time). Today's calls / WhatsApp / reveals come from real action logs.</div>
+    </div>
+  );
+}
+
+
 function AgentDash({ go, user, openLead, onAvatar }) {
   const [rows, setRows] = useState(null);
   const [acts, setActs] = useState([]);
@@ -1466,8 +1894,10 @@ function AgentDash({ go, user, openLead, onAvatar }) {
       if (e1) throw e1;
       const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
       const url = pub.publicUrl + "?v=" + Date.now(); // cache-bust so the new image shows immediately
-      const { error: e2 } = await supabase.from("profiles").update({ avatar_url: url }).eq("id", uid);
-      if (e2) throw e2;
+      // Persist via SECURITY DEFINER fn — agents have no profiles self-update policy (prevents role escalation);
+      // fall back to a direct update (admins) if the function isn't deployed yet.
+      const { error: er } = await supabase.rpc("set_my_avatar", { p_url: url });
+      if (er) { const { error: e2 } = await supabase.from("profiles").update({ avatar_url: url }).eq("id", uid); if (e2) throw e2; }
       setAvatarUrl(url);
       if (onAvatar) onAvatar(url);
     } catch (err) { setUpErr("Upload failed. Please try again."); }

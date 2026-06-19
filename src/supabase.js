@@ -32,11 +32,11 @@ export function resolveRole(email, dbRole) {
 // Which sidebar screens each role may open. 'users' is Master-Admin only.
 const SCREEN_ACCESS = {
   master_admin: "ALL",
-  admin:        ["projects","hotdeals","admin","lead","assign","performance","deals","dealdetail","devices","breakdown"],
-  sales_manager:["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","matching","score","deals","dealdetail","breakdown"],
-  agent:        ["projects","hotdeals","agent","live","open","lead","deals","dealdetail","breakdown"],
-  marketing:    ["projects","admin","live","open","lead","settings"],
-  accounts:     ["projects","admin","commission","lead","settings"],
+  admin:        ["projects","hotdeals","admin","lead","assign","performance","deals","dealdetail","devices","breakdown","myprofile","agents","agentprofile"],
+  sales_manager:["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","matching","score","deals","dealdetail","breakdown","myprofile"],
+  agent:        ["projects","hotdeals","agent","live","open","lead","deals","dealdetail","breakdown","myprofile"],
+  marketing:    ["projects","admin","live","open","lead","settings","myprofile"],
+  accounts:     ["projects","admin","commission","lead","settings","myprofile"],
 };
 export function allowedFor(role) { return SCREEN_ACCESS[role] || SCREEN_ACCESS.agent; }
 export function canOpen(role, screen) { const a = allowedFor(role); return a === "ALL" || a.includes(screen); }
