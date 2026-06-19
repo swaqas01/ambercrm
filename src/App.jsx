@@ -9,7 +9,7 @@ import {
   Flame, Clock, MapPin, Eye, EyeOff, Lock, AlertTriangle, CheckCircle2,
   TrendingUp, Users, Wallet, Star, Calendar, Filter, Plus, ArrowUpRight,
   ArrowDownRight, CircleDot, Ban, Download, Globe, Smartphone, Sun, Moon, Unlock, Send, Bot, Fingerprint, KeyRound, LogOut,
-  Database, RefreshCw, Upload, Sparkle, Zap, ShieldCheck, Camera, Target, PhoneCall, BedDouble, Home, Share2, ThumbsUp, ThumbsDown
+  Database, RefreshCw, Upload, Sparkle, Zap, ShieldCheck, Camera, Target, PhoneCall, BedDouble, Home, Share2, ThumbsUp, ThumbsDown, Calculator, RotateCcw
 } from "lucide-react";
 
 /* ================================ TOKENS ================================= */
@@ -558,6 +558,7 @@ const NAV = [
   ["devices", "Devices & Sessions", Smartphone],
   ["matching", "Property Matching", Building2],
   ["score", "Investment Score", Gauge],
+  ["breakdown", "Breakdown Calculator", Calculator],
   ["careers", "Careers / Hiring", Briefcase],
   ["commission", "Commissions", Coins],
   ["deals", "Deals", Coins],
@@ -689,7 +690,7 @@ export default function App() {
     if (user && screen !== "lead" && screen !== "dealdetail") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />, devices: <DevicesSecurity user={user} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />, devices: <DevicesSecurity user={user} />, breakdown: <BreakdownCalculator user={user} narrow={narrow} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <Performance go={go} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -5611,6 +5612,390 @@ function LockSetup({ user, onDone, onSkip }) {
           <button onClick={onSkip} style={{ marginTop: 14, background: "none", border: "none", color: T.faint, fontSize: 12, cursor: "pointer", fontFamily: UI }}>Cancel</button>
         </>}
       </div>
+    </div>
+  );
+}
+
+/* ============================ BREAKDOWN CALCULATOR ============================ */
+// Default Dubai resale fees — change here to update everywhere.
+const BRK_FEES = { dldPct: 4, agencyPct: 2, vatPct: 5, trustee: 4200, offplanNoc: 5250, saleProgression: 1000, readyTitleAdmin: 580, readyNoc: 5000, mortgageRegPct: 0.25 };
+// Brand block for the PDF footer. Add email / phone / ORN once confirmed; blank fields are omitted.
+const BRAND_INFO = { name: "Amber Homes Real Estate", office: "Burj Al Salam Tower, Sheikh Zayed Road, Dubai, UAE", website: "amberhomes.ai", email: "", phone: "", orn: "" };
+const BRK_DISCLAIMER = "Disclaimer: This breakdown is for estimation and presentation purposes only. Final charges, DLD fees, trustee fees, NOC fees, mortgage-related charges and developer/admin fees may vary depending on the transaction, developer, bank, Dubai Land Department requirements and trustee office. The buyer and seller should verify all final amounts before signing any agreement.";
+
+function brN(v) { if (typeof v === "number") return Number.isFinite(v) ? v : 0; const n = parseFloat(String(v == null ? "" : v).replace(/,/g, "")); return Number.isFinite(n) ? n : 0; }
+const brAed = (n) => "AED " + Math.round(brN(n)).toLocaleString("en-US");
+const brNum = (n) => brN(n).toLocaleString("en-US");
+function brFmtInput(raw, allowDecimal) {
+  if (raw === "" || raw == null) return "";
+  let s = String(raw).replace(/,/g, "");
+  if (allowDecimal) { s = s.replace(/[^\d.]/g, ""); const i = s.indexOf("."); if (i !== -1) s = s.slice(0, i + 1) + s.slice(i + 1).replace(/\./g, ""); }
+  else s = s.replace(/[^\d]/g, "");
+  if (s === "" || s === ".") return s;
+  let [ip, dp] = s.split(".");
+  ip = ip.replace(/^0+(?=\d)/, "");
+  const out = ip.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return dp != null ? out + "." + dp : out;
+}
+function brSafeName(s) { return String(s || "").trim().replace(/[^\w\s-]/g, "").replace(/\s+/g, "-") || "Client"; }
+
+// ---- Centralized calculations (single source of truth) ----
+function calcOffPlan(d) {
+  const originalPrice = brN(d.originalPrice), resalePrice = brN(d.resalePrice);
+  const amountPaid = d.lastPaidEdit === "pct" ? originalPrice * brN(d.pctPaid) / 100 : brN(d.amountPaid);
+  const pctPaid = originalPrice > 0 ? amountPaid / originalPrice * 100 : 0;
+  const remainingToDev = originalPrice - amountPaid;
+  const autoPremium = resalePrice - originalPrice;
+  const premium = (d.premiumVal !== "" && d.premiumVal != null) ? brN(d.premiumVal) : autoPremium;
+  const payableToSeller = amountPaid + premium;
+  const dld = resalePrice * brN(d.dldPct) / 100, agency = resalePrice * brN(d.agencyPct) / 100, vat = agency * brN(d.vatPct) / 100;
+  const trustee = brN(d.trustee), noc = brN(d.noc), saleProg = brN(d.saleProg), other = brN(d.other);
+  const totalBuying = dld + agency + vat + trustee + noc + saleProg + other;
+  return { originalPrice, resalePrice, amountPaid, pctPaid, remainingToDev, autoPremium, premium, isDiscount: premium < 0, payableToSeller, dld, agency, vat, agencyVat: agency + vat, trustee, noc, saleProg, other, totalBuying, immediateCash: payableToSeller + totalBuying, totalExcl: resalePrice, totalIncl: resalePrice + totalBuying };
+}
+function calcReady(d) {
+  const sellingPrice = brN(d.sellingPrice);
+  const buyerMortgage = d.mortgageStatus === "Mortgage Buyer" || d.mortgageStatus === "Buyer and Seller Both Mortgage";
+  const sellerMortgage = d.mortgageStatus === "Seller Mortgage" || d.mortgageStatus === "Buyer and Seller Both Mortgage";
+  const dld = sellingPrice * brN(d.dldPct) / 100, agency = sellingPrice * brN(d.agencyPct) / 100, vat = agency * brN(d.vatPct) / 100;
+  const trustee = brN(d.trustee), titleAdmin = brN(d.titleAdmin), noc = brN(d.noc), other = brN(d.other);
+  const mortgageReg = buyerMortgage ? brN(d.mortgageAmount) * brN(d.mortgageRegPct) / 100 : 0;
+  const mortgageRelease = sellerMortgage ? brN(d.mortgageRelease) : 0;
+  const totalBuying = dld + agency + vat + trustee + titleAdmin + noc + mortgageReg + mortgageRelease + other;
+  return { sellingPrice, dld, agency, vat, agencyVat: agency + vat, trustee, titleAdmin, noc, mortgageReg, mortgageRelease, other, buyerMortgage, sellerMortgage, totalBuying, totalCash: sellingPrice + totalBuying };
+}
+
+// ---- WhatsApp summaries ----
+function waOffPlan(d, r) {
+  return `Hi ${d.clientName || "there"},\nPlease find the estimated off-plan resale breakdown below:\n\nProperty: ${[d.projectName, d.unitNumber].filter(Boolean).join(", ") || "—"}\nResale Price: ${brAed(r.resalePrice)}\nAmount Paid to Developer: ${brAed(r.amountPaid)}\n${r.isDiscount ? "Seller Discount" : "Seller Premium"}: ${brAed(Math.abs(r.premium))}\nPayable to Seller Now: ${brAed(r.payableToSeller)}\nEstimated Buying Costs: ${brAed(r.totalBuying)}\nImmediate Cash Requirement: ${brAed(r.immediateCash)}\nRemaining to Developer: ${brAed(r.remainingToDev)}\n\nPlease note this is an estimate and final charges may vary.`;
+}
+function waReady(d, r) {
+  return `Hi ${d.clientName || "there"},\nPlease find the estimated ready property resale breakdown below:\n\nProperty: ${[d.propertyName, d.unitNumber].filter(Boolean).join(", ") || "—"}\nSelling Price: ${brAed(r.sellingPrice)}\nDLD Fee: ${brAed(r.dld)}\nAgency Commission + VAT: ${brAed(r.agencyVat)}\nTrustee / Admin / NOC Charges: ${brAed(r.trustee + r.titleAdmin + r.noc)}\nEstimated Buying Costs: ${brAed(r.totalBuying)}\nTotal Cash Requirement: ${brAed(r.totalCash)}\n\nPlease note this is an estimate and final charges may vary.`;
+}
+
+// ---- jsPDF loaded on demand (own chunk, kept out of the main bundle) ----
+let _jspdf = null, _jspdfPromise = null;
+function loadJsPdf() {
+  if (_jspdf) return Promise.resolve(_jspdf);
+  if (!_jspdfPromise) _jspdfPromise = import("jspdf").then((m) => { _jspdf = m.jsPDF || (m.default && m.default.jsPDF) || m.default; return _jspdf; });
+  return _jspdfPromise;
+}
+function buildBreakdownDoc(JsPDF, mode, d, r, user) {
+  const doc = new JsPDF({ unit: "pt", format: "a4" });
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  const M = 44, NAVY = [18, 26, 46], GOLD = [176, 137, 59], GREY = [110, 110, 116], LINE = [222, 220, 214], SOFT = [247, 245, 240];
+  const isOff = mode === "offplan";
+  let y = 0;
+  doc.setFillColor.apply(doc, GOLD); doc.rect(0, 0, W, 5, "F");
+  y = 54;
+  doc.setFont("helvetica", "bold"); doc.setTextColor.apply(doc, NAVY); doc.setFontSize(22); doc.text("AMBER HOMES", M, y);
+  doc.setFont("helvetica", "normal"); doc.setTextColor.apply(doc, GOLD); doc.setFontSize(8.5); doc.text("R E A L  E S T A T E   \u00b7   D U B A I", M, y + 14);
+  doc.setTextColor.apply(doc, GREY); doc.setFontSize(9);
+  doc.text("Generated: " + new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }), W - M, y - 6, { align: "right" });
+  if (user && user.name) doc.text("Agent: " + user.name, W - M, y + 8, { align: "right" });
+  y += 28; doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(1); doc.line(M, y, W - M, y); y += 24;
+  doc.setFont("helvetica", "bold"); doc.setTextColor.apply(doc, NAVY); doc.setFontSize(15);
+  doc.text(isOff ? "Off-Plan Resale Cost Breakdown" : "Ready Property Resale Cost Breakdown", M, y);
+  doc.setDrawColor.apply(doc, GOLD); doc.setLineWidth(2); doc.line(M, y + 7, M + 148, y + 7); y += 22;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor.apply(doc, NAVY);
+  doc.text("Prepared for: " + (d.clientName || "—"), M, y); y += 20;
+
+  const rowH = 18;
+  function ensure(h) { if (y + h > H - 96) { doc.addPage(); y = 56; } }
+  function sect(t) { ensure(28); y += 4; doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor.apply(doc, GOLD); doc.text(t.toUpperCase(), M, y); doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.7); doc.line(M, y + 5, W - M, y + 5); y += 15; }
+  function row(label, value, opt) { opt = opt || {}; ensure(rowH); doc.setFont("helvetica", opt.bold ? "bold" : "normal"); doc.setFontSize(opt.bold ? 10.5 : 10); doc.setTextColor.apply(doc, opt.color || NAVY); doc.text(label, M, y); doc.text(value, W - M, y, { align: "right" }); doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.4); doc.line(M, y + 6, W - M, y + 6); y += rowH; }
+  function totalBar(label, value) { ensure(30); doc.setFillColor.apply(doc, GOLD); doc.roundedRect(M, y - 13, W - 2 * M, 26, 4, 4, "F"); doc.setFont("helvetica", "bold"); doc.setFontSize(11.5); doc.setTextColor.apply(doc, NAVY); doc.text(label, M + 12, y + 4); doc.text(value, W - M - 12, y + 4, { align: "right" }); y += 34; }
+  function grid(pairs) { const colW = (W - 2 * M) / 2; for (let i = 0; i < pairs.length; i += 2) { ensure(30); [0, 1].forEach((c) => { const p = pairs[i + c]; if (!p) return; const x = M + c * colW; doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor.apply(doc, GREY); doc.text(String(p[0]).toUpperCase(), x, y); doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor.apply(doc, NAVY); doc.text(String(p[1] || "—"), x, y + 12); }); y += 30; } }
+
+  if (isOff) {
+    sect("Property Details");
+    grid([["Project", d.projectName], ["Developer", d.developerName], ["Unit", d.unitNumber], ["Property Type", d.propertyType], ["Location", d.location], ["Bedrooms", d.bedrooms], ["Size (sq ft)", d.sizeSqft ? brNum(d.sizeSqft) : ""], ["Original Price", brAed(r.originalPrice)]]);
+    sect("Seller Position");
+    row("Resale Selling Price", brAed(r.resalePrice));
+    row("Amount Paid to Developer", brAed(r.amountPaid) + "  (" + r.pctPaid.toFixed(1) + "%)");
+    row(r.isDiscount ? "Seller Discount" : "Seller Premium", (r.isDiscount ? "\u2212 " : "") + brAed(Math.abs(r.premium)));
+    row("Total Payable to Seller Now", brAed(r.payableToSeller), { bold: true });
+    sect("Transfer & Buying Costs");
+    row("DLD Fee (" + brN(d.dldPct) + "%)", brAed(r.dld));
+    row("Agency Commission (" + brN(d.agencyPct) + "%)", brAed(r.agency));
+    row("VAT on Commission (" + brN(d.vatPct) + "%)", brAed(r.vat));
+    row("Trustee Fee", brAed(r.trustee));
+    row("Developer NOC / Admin Fee", brAed(r.noc));
+    row("Sale Progression Fee", brAed(r.saleProg));
+    if (r.other > 0) row("Other Admin Charges", brAed(r.other));
+    row("Total Buying Costs", brAed(r.totalBuying), { bold: true });
+    y += 6; totalBar("Buyer Immediate Cash Requirement", brAed(r.immediateCash));
+    sect("Overall");
+    row("Remaining Payable to Developer", brAed(r.remainingToDev));
+    row("Total Property Cost (excl. buying costs)", brAed(r.totalExcl));
+    row("Total Property Cost (incl. buying costs)", brAed(r.totalIncl), { bold: true });
+  } else {
+    sect("Property Details");
+    grid([["Property / Building", d.propertyName], ["Unit", d.unitNumber], ["Property Type", d.propertyType], ["Location", d.location], ["Bedrooms", d.bedrooms], ["Size (sq ft)", d.sizeSqft ? brNum(d.sizeSqft) : ""], ["Mortgage Status", d.mortgageStatus]]);
+    sect("Cost Breakdown");
+    row("Property Selling Price", brAed(r.sellingPrice), { bold: true });
+    row("DLD Fee (" + brN(d.dldPct) + "%)", brAed(r.dld));
+    row("Agency Commission (" + brN(d.agencyPct) + "%)", brAed(r.agency));
+    row("VAT on Commission (" + brN(d.vatPct) + "%)", brAed(r.vat));
+    row("Trustee Fee", brAed(r.trustee));
+    row("Title Deed / Map / Admin Fee", brAed(r.titleAdmin));
+    row("Developer NOC Fee", brAed(r.noc));
+    if (r.buyerMortgage) row("Mortgage Registration (" + brN(d.mortgageRegPct) + "%)", brAed(r.mortgageReg));
+    if (r.sellerMortgage && r.mortgageRelease > 0) row("Mortgage Release / Blocking", brAed(r.mortgageRelease));
+    if (r.other > 0) row("Other Charges", brAed(r.other));
+    row("Total Buying Costs", brAed(r.totalBuying), { bold: true });
+    y += 6; totalBar("Total Buyer Cash Requirement", brAed(r.totalCash));
+  }
+
+  const pages = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p);
+    const fy = H - 80;
+    doc.setFillColor.apply(doc, SOFT); doc.roundedRect(M, fy - 4, W - 2 * M, 46, 4, 4, "F");
+    doc.setFont("helvetica", "italic"); doc.setFontSize(6.8); doc.setTextColor.apply(doc, GREY);
+    doc.text(doc.splitTextToSize(BRK_DISCLAIMER, W - 2 * M - 20), M + 10, fy + 6);
+    doc.setFillColor.apply(doc, GOLD); doc.rect(0, H - 4, W, 4, "F");
+    doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor.apply(doc, NAVY);
+    doc.text([BRAND_INFO.name, BRAND_INFO.office, BRAND_INFO.website, BRAND_INFO.email, BRAND_INFO.phone].filter(Boolean).join("   \u00b7   "), W / 2, H - 14, { align: "center" });
+    doc.setTextColor.apply(doc, GREY); doc.setFontSize(7); doc.text(p + " / " + pages, W - M, H - 14, { align: "right" });
+  }
+  return doc;
+}
+
+// ---- Formatted AED / number input (keeps cursor sane, syncs when not focused) ----
+function BrNum({ value, onChange, allowDecimal, prefix, suffix, placeholder, invalid }) {
+  const [txt, setTxt] = useState(() => brFmtInput(value, allowDecimal));
+  const [foc, setFoc] = useState(false);
+  useEffect(() => { if (!foc) setTxt(value === "" || value == null ? "" : brFmtInput(value, allowDecimal)); }, [value, foc, allowDecimal]);
+  const inp = { width: "100%", border: `1px solid ${invalid ? T.bad : T.hair}`, borderRadius: 10, padding: "10px 12px", paddingLeft: prefix ? 44 : 12, paddingRight: suffix ? 30 : 12, fontSize: 13, fontFamily: UI, outline: "none", color: T.ink, background: T.paper, boxSizing: "border-box" };
+  return (
+    <div style={{ position: "relative" }}>
+      {prefix && <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: T.faint, fontWeight: 700, pointerEvents: "none" }}>{prefix}</span>}
+      <input inputMode={allowDecimal ? "decimal" : "numeric"} value={txt} placeholder={placeholder || ""} style={inp}
+        onFocus={() => setFoc(true)} onBlur={() => setFoc(false)}
+        onChange={(e) => { let raw = e.target.value.replace(/,/g, ""); raw = allowDecimal ? raw.replace(/[^\d.]/g, "").replace(/(\..*)\./g, "$1") : raw.replace(/[^\d]/g, ""); setTxt(brFmtInput(raw, allowDecimal)); onChange(raw); }} />
+      {suffix && <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: T.faint, fontWeight: 600, pointerEvents: "none" }}>{suffix}</span>}
+    </div>
+  );
+}
+
+// ---- Result summary (sticky on desktop) ----
+function SummaryCard({ title, rows, headline, warnings }) {
+  return (
+    <div style={{ ...card, padding: 18 }}>
+      <div style={{ fontFamily: DISPLAY, fontSize: 14, fontWeight: 800, color: T.ink }}>{title}</div>
+      <div style={{ height: 1, background: T.hair, margin: "10px 0 8px" }} />
+      {rows.map((r, i) => r.divider ? <div key={i} style={{ height: 1, background: T.hairSoft, margin: "8px 0" }} /> : (
+        <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "5px 0", alignItems: "baseline" }}>
+          <span style={{ fontSize: r.strong ? 12.5 : 12, color: r.strong ? T.ink : T.muted, fontWeight: r.strong ? 700 : 500 }}>{r.label}</span>
+          <span style={{ fontSize: r.strong ? 13 : 12.5, color: r.accent || T.ink, fontWeight: r.strong ? 800 : 600, whiteSpace: "nowrap" }}>{r.value}</span>
+        </div>))}
+      {headline && <div style={{ marginTop: 12, background: T.goldSoft, border: `1px solid ${T.gold}`, borderRadius: 12, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{headline.label}</span>
+        <span style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 800, color: T.gold, whiteSpace: "nowrap" }}>{headline.value}</span></div>}
+      {warnings && warnings.length > 0 && <div style={{ marginTop: 10 }}>{warnings.map((w, i) => (
+        <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 11, color: T.warn, background: T.warnSoft, borderRadius: 8, padding: "7px 9px", marginTop: 6 }}><AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} /> <span>{w}</span></div>))}</div>}
+    </div>
+  );
+}
+
+// ---- Shared action bar: PDF download, preview modal, WhatsApp copy, reset ----
+function BreakdownActions({ makeDoc, filename, waText, onReset }) {
+  const [toast, setToast] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState("");
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2600); };
+  const primaryBtn = { display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 13, padding: "12px 14px", borderRadius: 10, cursor: "pointer", fontFamily: UI };
+  const ghostBtn = { display: "flex", alignItems: "center", justifyContent: "center", gap: 7, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontWeight: 600, fontSize: 12.5, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontFamily: UI };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(waText); flash("WhatsApp summary copied"); }
+    catch (e) { try { const ta = document.createElement("textarea"); ta.value = waText; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); flash("WhatsApp summary copied"); } catch (e2) { flash("Couldn't copy automatically"); } }
+  };
+  const download = async () => { setBusy(true); try { const J = await loadJsPdf(); makeDoc(J).save(filename); flash("PDF downloaded"); } catch (e) { flash("PDF failed — try again"); } setBusy(false); };
+  const openPreview = async () => { setBusy(true); try { const J = await loadJsPdf(); setPreview(makeDoc(J).output("bloburl")); } catch (e) { flash("Preview failed"); } setBusy(false); };
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+        <button onClick={download} disabled={busy} style={{ ...primaryBtn, gridColumn: "1 / -1" }}><Download size={15} /> {busy ? "Working…" : "Download Client PDF"}</button>
+        <button onClick={openPreview} disabled={busy} style={ghostBtn}><FileText size={14} /> Preview</button>
+        <button onClick={copy} style={ghostBtn}><MessageCircle size={14} /> WhatsApp</button>
+        <button onClick={onReset} style={{ ...ghostBtn, gridColumn: "1 / -1" }}><RotateCcw size={14} /> Reset calculator</button>
+      </div>
+      {toast && <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.ink, color: "#fff", padding: "11px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600, zIndex: 200, boxShadow: T.shadowLg }}>{toast}</div>}
+      {preview && <div onClick={() => setPreview("")} style={{ position: "fixed", inset: 0, background: "rgba(8,4,18,.7)", zIndex: 300, display: "grid", placeItems: "center", padding: 16 }}>
+        <div onClick={(e) => e.stopPropagation()} style={{ background: T.paper, borderRadius: 14, width: "min(900px,96vw)", height: "90vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 30px 80px rgba(0,0,0,.5)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderBottom: `1px solid ${T.hair}` }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5, color: T.ink }}>PDF preview</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={download} style={{ ...miniBtn(), fontWeight: 700, color: T.gold, borderColor: T.gold }}>Download</button>
+              <button onClick={() => setPreview("")} style={miniBtn()}>Close</button>
+            </div>
+          </div>
+          <iframe title="PDF preview" src={preview} style={{ flex: 1, border: "none", width: "100%" }} />
+        </div>
+      </div>}
+    </>
+  );
+}
+
+const BRK_PROP_TYPES = ["", "Apartment", "Villa", "Townhouse", "Penthouse", "Plot / Land", "Office", "Other"];
+const BRK_BEDS = ["", "Studio", "1", "2", "3", "4", "5", "6+"];
+const BRK_MORTGAGE = ["Cash Buyer", "Mortgage Buyer", "Seller Mortgage", "Buyer and Seller Both Mortgage"];
+const INITIAL_OFFPLAN = { clientName: "", projectName: "", developerName: "", unitNumber: "", propertyType: "", location: "", bedrooms: "", sizeSqft: "", originalPrice: "", resalePrice: "", amountPaid: "", pctPaid: "", lastPaidEdit: "amount", premiumVal: "", dldPct: "4", agencyPct: "2", vatPct: "5", trustee: "4200", noc: "5250", saleProg: "1000", other: "" };
+const INITIAL_READY = { clientName: "", propertyName: "", unitNumber: "", propertyType: "", location: "", bedrooms: "", sizeSqft: "", mortgageStatus: "Cash Buyer", sellingPrice: "", dldPct: "4", agencyPct: "2", vatPct: "5", trustee: "4200", titleAdmin: "580", noc: "5000", mortgageRegPct: "0.25", mortgageAmount: "", mortgageRelease: "", other: "" };
+
+// Shared field helpers used by both forms (called as functions -> stable, no focus loss)
+function brLbl() { return { fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", color: T.muted, display: "block", marginBottom: 5 }; }
+function brInp() { return { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: UI, outline: "none", color: T.ink, background: T.paper, boxSizing: "border-box" }; }
+function brSection(title, children) {
+  return <div style={{ ...card, padding: 16, marginBottom: 14 }}>
+    <div style={{ fontFamily: DISPLAY, fontSize: 13.5, fontWeight: 800, color: T.ink, marginBottom: 12 }}>{title}</div>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(155px, 1fr))", gap: 12 }}>{children}</div>
+  </div>;
+}
+
+function OffPlanCalc({ user, narrow }) {
+  const [f, setF] = useState(INITIAL_OFFPLAN);
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const r = calcOffPlan(f);
+  const lbl = brLbl(), inp = brInp();
+  const amtVal = f.lastPaidEdit === "pct" ? (brN(f.originalPrice) > 0 ? String(Math.round(brN(f.originalPrice) * brN(f.pctPaid) / 100)) : "") : f.amountPaid;
+  const pctVal = f.lastPaidEdit === "amount" ? (brN(f.originalPrice) > 0 ? (brN(f.amountPaid) / brN(f.originalPrice) * 100).toFixed(2).replace(/\.?0+$/, "") : "") : f.pctPaid;
+  const txt = (label, k, ph, req) => <div key={k}><label style={lbl}>{label}{req ? <span style={{ color: T.bad }}> *</span> : null}</label><input value={f[k]} placeholder={ph || ""} onChange={(e) => set(k, e.target.value)} style={inp} /></div>;
+  const sel = (label, k, opts) => <div key={k}><label style={lbl}>{label}</label><select value={f[k]} onChange={(e) => set(k, e.target.value)} style={{ ...inp, cursor: "pointer" }}>{opts.map((o) => <option key={o} value={o}>{o === "" ? "Select…" : o}</option>)}</select></div>;
+  const num = (label, o) => <div key={o.k || label}><label style={lbl}>{label}{o.req ? <span style={{ color: T.bad }}> *</span> : null}</label><BrNum value={o.value !== undefined ? o.value : f[o.k]} onChange={o.onChange || ((v) => set(o.k, v))} allowDecimal={o.dec} prefix={o.prefix} suffix={o.suffix} placeholder={o.ph} invalid={o.invalid} />{o.hint ? <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3 }}>{o.hint}</div> : null}</div>;
+  const ro = (label, value, accent) => <div key={label}><label style={lbl}>{label}</label><div style={{ ...inp, background: T.bone, fontWeight: 700, color: accent || T.ink, display: "flex", alignItems: "center", minHeight: 41 }}>{value}</div></div>;
+  const warns = [];
+  if (brN(amtVal) > brN(f.originalPrice) && brN(f.originalPrice) > 0) warns.push("Amount paid is more than the original purchase price.");
+  if (r.pctPaid > 100) warns.push("Percentage paid is over 100%.");
+  if (brN(f.resalePrice) > 0 && brN(f.originalPrice) > 0 && r.isDiscount) warns.push("Resale price is below the original price — shown as a discount.");
+  const rows = [
+    { label: "Resale selling price", value: brAed(r.resalePrice) },
+    { label: "Amount paid to developer", value: brAed(r.amountPaid) + " (" + r.pctPaid.toFixed(1) + "%)" },
+    { label: r.isDiscount ? "Seller discount" : "Seller premium", value: (r.isDiscount ? "\u2212 " : "") + brAed(Math.abs(r.premium)), accent: r.isDiscount ? T.bad : T.ok },
+    { label: "Payable to seller now", value: brAed(r.payableToSeller), strong: true },
+    { divider: true },
+    { label: "DLD fee", value: brAed(r.dld) },
+    { label: "Agency commission + VAT", value: brAed(r.agencyVat) },
+    { label: "Trustee fee", value: brAed(r.trustee) },
+    { label: "NOC / admin fee", value: brAed(r.noc) },
+    { label: "Sale progression", value: brAed(r.saleProg) },
+    ...(r.other > 0 ? [{ label: "Other charges", value: brAed(r.other) }] : []),
+    { label: "Total buying costs", value: brAed(r.totalBuying), strong: true },
+    { divider: true },
+    { label: "Remaining to developer", value: brAed(r.remainingToDev) },
+    { label: "Total cost (excl. buying)", value: brAed(r.totalExcl) },
+    { label: "Total cost (incl. buying)", value: brAed(r.totalIncl), strong: true },
+  ];
+  return (
+    <div style={{ display: narrow ? "block" : "grid", gridTemplateColumns: narrow ? undefined : "minmax(0,1fr) 360px", gap: 18, alignItems: "start" }}>
+      <div>
+        {brSection("Property details", [
+          txt("Client name", "clientName", "e.g. Mr. Ahmed", true), txt("Project name", "projectName"), txt("Developer name", "developerName"),
+          txt("Unit number", "unitNumber"), sel("Property type", "propertyType", BRK_PROP_TYPES), txt("Location / community", "location"),
+          sel("Bedrooms", "bedrooms", BRK_BEDS), num("Size (sq ft)", { k: "sizeSqft", dec: true, suffix: "ft²" }),
+        ])}
+        {brSection("Financial inputs", [
+          num("Original purchase price", { k: "originalPrice", prefix: "AED", req: true }),
+          num("Resale selling price", { k: "resalePrice", prefix: "AED", req: true }),
+          num("Amount paid to developer", { k: "amountPaid", prefix: "AED", value: amtVal, onChange: (v) => setF((p) => ({ ...p, amountPaid: v, lastPaidEdit: "amount" })), invalid: brN(amtVal) > brN(f.originalPrice) && brN(f.originalPrice) > 0 }),
+          num("Percentage paid", { k: "pctPaid", dec: true, suffix: "%", value: pctVal, onChange: (v) => setF((p) => ({ ...p, pctPaid: v, lastPaidEdit: "pct" })) }),
+          ro("Remaining to developer", brAed(r.remainingToDev)),
+          ro("Seller " + (r.isDiscount ? "discount" : "premium"), (r.isDiscount ? "\u2212 " : "") + brAed(Math.abs(r.premium)), r.isDiscount ? T.bad : T.ok),
+          num("Override premium (optional)", { k: "premiumVal", prefix: "AED", ph: r.resalePrice || r.originalPrice ? String(Math.round(r.autoPremium)) : "" }),
+          ro("Total payable to seller now", brAed(r.payableToSeller), T.gold),
+        ])}
+        {brSection("Transfer & buying costs", [
+          num("DLD fee", { k: "dldPct", dec: true, suffix: "%", hint: "= " + brAed(r.dld) }),
+          num("Agency commission", { k: "agencyPct", dec: true, suffix: "%", hint: "= " + brAed(r.agency) }),
+          num("VAT on commission", { k: "vatPct", dec: true, suffix: "%", hint: "= " + brAed(r.vat) }),
+          num("Trustee fee", { k: "trustee", prefix: "AED" }),
+          num("Developer NOC / admin fee", { k: "noc", prefix: "AED" }),
+          num("Sale progression fee", { k: "saleProg", prefix: "AED" }),
+          num("Other admin charges", { k: "other", prefix: "AED" }),
+        ])}
+      </div>
+      <div style={{ position: narrow ? "static" : "sticky", top: 16 }}>
+        <SummaryCard title="Off-plan resale summary" rows={rows} headline={{ label: "Buyer immediate cash", value: brAed(r.immediateCash) }} warnings={warns} />
+        <BreakdownActions makeDoc={(J) => buildBreakdownDoc(J, "offplan", f, r, user)} filename={"Amber-Homes-Off-Plan-Resale-Breakdown-" + brSafeName(f.clientName) + ".pdf"} waText={waOffPlan(f, r)} onReset={() => setF(INITIAL_OFFPLAN)} />
+      </div>
+    </div>
+  );
+}
+
+function ReadyCalc({ user, narrow }) {
+  const [f, setF] = useState(INITIAL_READY);
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const r = calcReady(f);
+  const lbl = brLbl(), inp = brInp();
+  const txt = (label, k, ph, req) => <div key={k}><label style={lbl}>{label}{req ? <span style={{ color: T.bad }}> *</span> : null}</label><input value={f[k]} placeholder={ph || ""} onChange={(e) => set(k, e.target.value)} style={inp} /></div>;
+  const sel = (label, k, opts) => <div key={k}><label style={lbl}>{label}</label><select value={f[k]} onChange={(e) => set(k, e.target.value)} style={{ ...inp, cursor: "pointer" }}>{opts.map((o) => <option key={o} value={o}>{o === "" ? "Select…" : o}</option>)}</select></div>;
+  const num = (label, o) => <div key={o.k || label}><label style={lbl}>{label}{o.req ? <span style={{ color: T.bad }}> *</span> : null}</label><BrNum value={f[o.k]} onChange={(v) => set(o.k, v)} allowDecimal={o.dec} prefix={o.prefix} suffix={o.suffix} placeholder={o.ph} />{o.hint ? <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3 }}>{o.hint}</div> : null}</div>;
+  const finFields = [
+    num("Selling price", { k: "sellingPrice", prefix: "AED", req: true }),
+    num("DLD fee", { k: "dldPct", dec: true, suffix: "%", hint: "= " + brAed(r.dld) }),
+    num("Agency commission", { k: "agencyPct", dec: true, suffix: "%", hint: "= " + brAed(r.agency) }),
+    num("VAT on commission", { k: "vatPct", dec: true, suffix: "%", hint: "= " + brAed(r.vat) }),
+    num("Trustee fee", { k: "trustee", prefix: "AED" }),
+    num("Title deed / map / admin fee", { k: "titleAdmin", prefix: "AED" }),
+    num("Developer NOC fee", { k: "noc", prefix: "AED" }),
+  ];
+  if (r.buyerMortgage) { finFields.push(num("Mortgage amount", { k: "mortgageAmount", prefix: "AED" })); finFields.push(num("Mortgage registration", { k: "mortgageRegPct", dec: true, suffix: "%", hint: "= " + brAed(r.mortgageReg) })); }
+  if (r.sellerMortgage) finFields.push(num("Mortgage release / blocking", { k: "mortgageRelease", prefix: "AED" }));
+  finFields.push(num("Other charges", { k: "other", prefix: "AED" }));
+  const rows = [
+    { label: "Selling price", value: brAed(r.sellingPrice), strong: true },
+    { divider: true },
+    { label: "DLD fee", value: brAed(r.dld) },
+    { label: "Agency commission + VAT", value: brAed(r.agencyVat) },
+    { label: "Trustee fee", value: brAed(r.trustee) },
+    { label: "Title / map / admin", value: brAed(r.titleAdmin) },
+    { label: "Developer NOC", value: brAed(r.noc) },
+    ...(r.buyerMortgage ? [{ label: "Mortgage registration", value: brAed(r.mortgageReg) }] : []),
+    ...(r.sellerMortgage && r.mortgageRelease > 0 ? [{ label: "Mortgage release / blocking", value: brAed(r.mortgageRelease) }] : []),
+    ...(r.other > 0 ? [{ label: "Other charges", value: brAed(r.other) }] : []),
+    { label: "Total buying costs", value: brAed(r.totalBuying), strong: true },
+  ];
+  return (
+    <div style={{ display: narrow ? "block" : "grid", gridTemplateColumns: narrow ? undefined : "minmax(0,1fr) 360px", gap: 18, alignItems: "start" }}>
+      <div>
+        {brSection("Property details", [
+          txt("Client name", "clientName", "e.g. Mr. Ahmed", true), txt("Property / building name", "propertyName"), txt("Unit number", "unitNumber"),
+          sel("Property type", "propertyType", BRK_PROP_TYPES), txt("Location / community", "location"), sel("Bedrooms", "bedrooms", BRK_BEDS),
+          num("Size (sq ft)", { k: "sizeSqft", dec: true, suffix: "ft²" }), sel("Mortgage status", "mortgageStatus", BRK_MORTGAGE),
+        ])}
+        {brSection("Financial inputs", finFields)}
+      </div>
+      <div style={{ position: narrow ? "static" : "sticky", top: 16 }}>
+        <SummaryCard title="Ready resale summary" rows={rows} headline={{ label: "Total buyer cash requirement", value: brAed(r.totalCash) }} warnings={[]} />
+        <BreakdownActions makeDoc={(J) => buildBreakdownDoc(J, "ready", f, r, user)} filename={"Amber-Homes-Ready-Resale-Breakdown-" + brSafeName(f.clientName) + ".pdf"} waText={waReady(f, r)} onReset={() => setF(INITIAL_READY)} />
+      </div>
+    </div>
+  );
+}
+
+function BreakdownCalculator({ user, narrow }) {
+  const [mode, setMode] = useState("offplan");
+  useEffect(() => { loadJsPdf(); }, []);
+  const cards = [
+    { id: "offplan", title: "Off-Plan Resale", desc: "Calculate paid amount, premium, remaining developer payment plan, transfer costs and buyer cash requirement.", Icon: Building2 },
+    { id: "ready", title: "Ready Property Resale", desc: "Calculate full ready-property resale costs including DLD, commission, trustee, NOC and admin charges.", Icon: Home },
+  ];
+  return (
+    <div>
+      <div style={{ fontSize: 13, color: T.muted, marginBottom: 16 }}>Create client-ready Dubai property resale cost breakdowns in seconds.</div>
+      <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 20 }}>
+        {cards.map((c) => { const on = mode === c.id; return (
+          <button key={c.id} onClick={() => setMode(c.id)} style={{ textAlign: "left", border: `1.5px solid ${on ? T.gold : T.hair}`, background: on ? T.goldSoft : T.paper, borderRadius: 14, padding: "16px 18px", cursor: "pointer", boxShadow: on ? T.shadow : "none", transition: "all .15s" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 9, background: on ? T.gold : T.bone, display: "grid", placeItems: "center" }}><c.Icon size={17} color={on ? "#fff" : T.muted} /></div>
+              <div style={{ fontFamily: DISPLAY, fontSize: 15.5, fontWeight: 800, color: T.ink }}>{c.title}</div>
+              {on && <CheckCircle2 size={16} color={T.gold} style={{ marginLeft: "auto" }} />}
+            </div>
+            <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.5 }}>{c.desc}</div>
+          </button>); })}
+      </div>
+      {mode === "offplan" ? <OffPlanCalc user={user} narrow={narrow} /> : <ReadyCalc user={user} narrow={narrow} />}
     </div>
   );
 }
