@@ -637,26 +637,8 @@ export default function App() {
     })();
     return () => { mounted = false; };
   }, []);
-  useEffect(() => { if (user) registerDevice(); }, [user]);   // record device + honor remote/auto sign-out
+  useEffect(() => { if (user) registerDevice(); }, [user]);   // record device + honor remote/cap sign-out
   const signOut = async () => { await supabase.auth.signOut(); setUser(null); };
-  // ----- App lock (PIN / Face ID) -----
-  const [lockConfig, setLockConfig] = useState(() => readLock());
-  const [unlocked, setUnlocked] = useState(false);
-  const [lockDismissed, setLockDismissed] = useState(() => { try { return sessionStorage.getItem("amber_lock_dismissed") === "1"; } catch (e) { return false; } });
-  const hasLock = !!(user && lockConfig && lockConfig.uid === user.id);
-  const lockedNow = !!(hasLock && !user.mustChangePw && authChecked && !unlocked);
-  const showLockSetup = !!(user && !user.mustChangePw && authChecked && !hasLock && !lockDismissed);
-  useEffect(() => {
-    const onVis = () => {
-      if (typeof document === "undefined") return;
-      if (document.visibilityState === "hidden") _hiddenAt = Date.now();
-      else if (document.visibilityState === "visible" && user && lockConfig && lockConfig.uid === user.id && _hiddenAt && (Date.now() - _hiddenAt > 180000)) setUnlocked(false);
-    };
-    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVis);
-    return () => { if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVis); };
-  }, [lockConfig, user]);
-  const dismissLockSetup = () => { setLockDismissed(true); try { sessionStorage.setItem("amber_lock_dismissed", "1"); } catch (e) {} };
-  const forgotPin = () => { clearLock(); setLockConfig(null); setUnlocked(false); try { sessionStorage.removeItem("amber_lock_dismissed"); } catch (e) {} signOut(); };
   const [accent, setAccent] = useState("gold");
   const ACCENTS = [["gold", "Violet", "#7C5CFA"], ["emerald", "Emerald", "#1F6B52"],
     ["sapphire", "Sapphire", "#2C4E78"], ["burgundy", "Burgundy", "#7C2D3E"]];
@@ -787,8 +769,6 @@ export default function App() {
         <AskAmber narrow={narrow} user={user} openLead={openLead} />
         <PushSetup user={user} />
       </main>}
-      {lockedNow && <LockGate lock={lockConfig} onUnlock={() => setUnlocked(true)} onForgot={forgotPin} />}
-      {showLockSetup && <LockSetup user={user} onDone={() => { setLockConfig(readLock()); setUnlocked(true); dismissLockSetup(); }} onSkip={dismissLockSetup} />}
     </div>
   );
 }
@@ -2583,6 +2563,22 @@ function Performance({ go }) {
 function SecurityLog({ go }) {
   const [ai, setAi] = useState(null);
   const [authRows, setAuthRows] = useState(null);
+  const [shared, setShared] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await supabase.from("user_devices").select("device_id, user_id, label, last_ip, city, region, country, last_seen").order("last_seen", { ascending: false }).limit(2000);
+        const rows = data || [];
+        const byDev = {};
+        rows.forEach((r) => { (byDev[r.device_id] = byDev[r.device_id] || []).push(r); });
+        const groups = Object.values(byDev).map((list) => ({ list, users: [...new Set(list.map((x) => x.user_id))] })).filter((g) => g.users.length >= 2);
+        const ids = [...new Set(groups.flatMap((g) => g.users))];
+        const names = {};
+        if (ids.length) { const { data: p } = await supabase.from("profiles").select("id, full_name").in("id", ids); (p || []).forEach((x) => { names[x.id] = x.full_name; }); }
+        setShared(groups.map((g) => ({ users: g.users, names: g.users.map((u) => names[u] || "Unknown"), rep: g.list[0] })));
+      } catch (e) { setShared([]); }
+    })();
+  }, []);
   useEffect(() => {
     (async () => {
       const { data } = await supabase.from("auth_logs").select("email, event, status, reason, ip, device, created_at").order("created_at", { ascending: false }).limit(100);
@@ -2606,6 +2602,16 @@ function SecurityLog({ go }) {
     })();
   }, []);
   return <div>
+    <div style={{ ...card, padding: 16, marginBottom: 14, borderColor: shared && shared.length ? T.badSoft : T.hair }}>
+      <div style={{ fontSize: 13.5, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}><Smartphone size={16} color={T.gold} /> Devices used by multiple accounts</div>
+      {shared === null ? <div style={{ color: T.muted, fontSize: 12.5 }}>Checking devices…</div>
+        : shared.length === 0 ? <div style={{ color: T.muted, fontSize: 12.5 }}>No device is signed into by more than one account.</div>
+        : <div style={{ display: "grid", gap: 10 }}>{shared.map((g, i) => (
+            <div key={i} style={{ background: T.badSoft, borderRadius: 10, padding: "10px 13px" }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: T.bad }}><AlertTriangle size={13} style={{ verticalAlign: "-2px", marginRight: 5 }} /> {g.users.length} accounts on one device: {g.names.join(", ")}</div>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 4 }}>{(g.rep.label || "Device")} · IP {g.rep.last_ip || "—"} · {[g.rep.city, g.rep.country].filter(Boolean).join(", ") || "location n/a"} · last seen {g.rep.last_seen ? new Date(g.rep.last_seen).toLocaleString() : "—"}</div>
+            </div>))}</div>}
+    </div>
     <div style={{ ...card, padding: 16, marginBottom: 14, borderColor: ai && (ai.inappropriate || ai.nonwork) ? T.badSoft : T.hair }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         <div style={{ fontSize: 13.5, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 8 }}><Sparkle size={16} color={T.gold} /> Ask Amber misuse — last 24h</div>
@@ -5396,7 +5402,7 @@ function DevicesSecurity({ user }) {
   const [capBusy, setCapBusy] = useState(false);
   const load = async () => {
     setRows(null);
-    try { const { data: cs } = await supabase.from("app_settings").select("value").eq("key", "device_limit_enabled").maybeSingle(); setCapOn(!!(cs && String(cs.value).toLowerCase() === "true")); } catch (e) {}
+    try { const { data: cs } = await supabase.from("app_settings").select("value").eq("key", "device_limit_enabled").maybeSingle(); setCapOn(!(cs && String(cs.value).toLowerCase() === "false")); } catch (e) {}
     const { data: d } = await supabase.from("user_devices")
       .select("id, user_id, device_id, label, user_agent, last_ip, city, region, country, last_seen, first_seen, revoked")
       .order("last_seen", { ascending: false }).limit(1000);
@@ -5463,155 +5469,6 @@ function DevicesSecurity({ user }) {
               );
             })}
           </div>}
-    </div>
-  );
-}
-
-// ===== App lock: 4-digit PIN (+ optional Face ID / Touch ID) on top of the long session =====
-let _hiddenAt = 0;  // when the app was last backgrounded (for re-lock on return)
-function readLock() {
-  try { const r = localStorage.getItem("amber_lock"); if (!r) return null; const o = JSON.parse(r); return (o && o.hash && o.salt && o.uid) ? o : null; } catch (e) { return null; }
-}
-function writeLock(o) { try { localStorage.setItem("amber_lock", JSON.stringify(o)); } catch (e) {} }
-function clearLock() { try { localStorage.removeItem("amber_lock"); } catch (e) {} }
-function randHex(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return [...a].map((b) => b.toString(16).padStart(2, "0")).join(""); }
-async function hashPin(salt, pin) {
-  const data = new TextEncoder().encode(salt + ":" + pin);
-  const buf = await crypto.subtle.digest("SHA-256", data);
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-function b64uFromBuf(buf) { let s = ""; const a = new Uint8Array(buf); for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
-function bufFromB64u(s) { s = String(s).replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "="; const bin = atob(s); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a.buffer; }
-async function bioAvailable() {
-  try { return !!(window.PublicKeyCredential && (await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())); } catch (e) { return false; }
-}
-async function bioRegister(u) {
-  try {
-    const challenge = new Uint8Array(32); crypto.getRandomValues(challenge);
-    const uid = new TextEncoder().encode(((u && u.id) || "amber").slice(0, 60));
-    const cred = await navigator.credentials.create({ publicKey: {
-      challenge, rp: { name: "Amber Homes CRM", id: window.location.hostname },
-      user: { id: uid, name: (u && u.email) || "user", displayName: (u && u.name) || "User" },
-      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
-      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
-      timeout: 60000, attestation: "none" } });
-    return cred ? b64uFromBuf(cred.rawId) : null;
-  } catch (e) { return null; }
-}
-async function bioVerify(credId) {
-  try {
-    const challenge = new Uint8Array(32); crypto.getRandomValues(challenge);
-    const assertion = await navigator.credentials.get({ publicKey: {
-      challenge, timeout: 60000, userVerification: "required", rpId: window.location.hostname,
-      allowCredentials: credId ? [{ type: "public-key", id: bufFromB64u(credId) }] : undefined } });
-    return !!assertion;
-  } catch (e) { return false; }
-}
-
-function PinPad({ value, onChange, max = 4 }) {
-  const press = (d) => { if (value.length < max) onChange(value + d); };
-  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "\u232b"];
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "center", gap: 14, margin: "4px 0 18px" }}>
-        {[0, 1, 2, 3].map((i) => <div key={i} style={{ width: 13, height: 13, borderRadius: "50%", background: i < value.length ? T.gold : "transparent", border: `2px solid ${i < value.length ? T.gold : "rgba(255,255,255,.4)"}`, transition: "all .12s" }} />)}
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 62px)", gap: 11, justifyContent: "center" }}>
-        {keys.map((k, i) => k === "" ? <div key={i} /> : (
-          <button key={i} onClick={() => k === "\u232b" ? onChange(value.slice(0, -1)) : press(k)} style={{ width: 62, height: 62, borderRadius: "50%", border: "1px solid rgba(255,255,255,.18)", background: "rgba(255,255,255,.06)", color: "#fff", fontSize: k === "\u232b" ? 20 : 23, fontWeight: 500, cursor: "pointer", fontFamily: UI }}>{k}</button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// Full-screen lock shown when a PIN is configured for the signed-in user and the app isn't unlocked.
-function LockGate({ lock, onUnlock, onForgot }) {
-  const [pin, setPin] = useState("");
-  const [err, setErr] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const tryBio = async () => { if (lock.bio && lock.credId && (await bioVerify(lock.credId))) onUnlock(); };
-  useEffect(() => { tryBio(); }, []);  // best-effort: offer Face ID on open
-  useEffect(() => {
-    if (pin.length === 4) {
-      (async () => {
-        setChecking(true);
-        const h = await hashPin(lock.salt, pin);
-        setChecking(false);
-        if (h === lock.hash) onUnlock();
-        else { setErr(true); setPin(""); setTimeout(() => setErr(false), 600); }
-      })();
-    }
-  }, [pin]);
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 99999, background: "#130a26", display: "grid", placeItems: "center", padding: 20, paddingTop: "max(env(safe-area-inset-top), 40px)" }}>
-      <style>{"@keyframes amberShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}"}</style>
-      <div style={{ textAlign: "center", maxWidth: 340, width: "100%" }}>
-        <div style={{ fontFamily: DISPLAY, fontSize: 20, color: "#F4F2FF", fontWeight: 800 }}>Amber Homes</div>
-        <div style={{ fontSize: 12.5, color: "rgba(255,255,255,.6)", marginTop: 6, marginBottom: 14 }}>Enter your 4-digit PIN to unlock</div>
-        <div style={{ animation: err ? "amberShake .4s" : "none" }}><PinPad value={pin} onChange={setPin} max={4} /></div>
-        <div style={{ minHeight: 18, marginTop: 6 }}>
-          {err && <span style={{ color: "#ff9a9a", fontSize: 12 }}>Wrong PIN — try again</span>}
-          {checking && !err && <span style={{ color: "rgba(255,255,255,.5)", fontSize: 12 }}>Checking…</span>}
-        </div>
-        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
-          {lock.bio && lock.credId && <button onClick={tryBio} style={{ background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.2)", color: "#fff", padding: "10px 18px", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: UI, display: "flex", alignItems: "center", gap: 8 }}><Fingerprint size={16} /> Use Face ID / Touch ID</button>}
-          <button onClick={onForgot} style={{ background: "none", border: "none", color: "rgba(255,255,255,.5)", fontSize: 12, cursor: "pointer", textDecoration: "underline", fontFamily: UI }}>Forgot PIN? Sign in with password</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Optional opt-in prompt after login to set up the lock.
-function LockSetup({ user, onDone, onSkip }) {
-  const [step, setStep] = useState("intro");  // intro | pin | confirm
-  const [pin, setPin] = useState("");
-  const [first, setFirst] = useState("");
-  const [bioOk, setBioOk] = useState(false);
-  const [wantBio, setWantBio] = useState(false);
-  const [err, setErr] = useState("");
-  const [saving, setSaving] = useState(false);
-  useEffect(() => { bioAvailable().then(setBioOk); }, []);
-  const save = async (finalPin) => {
-    setSaving(true);
-    const salt = randHex(16);
-    const hash = await hashPin(salt, finalPin);
-    let credId = null;
-    if (wantBio && bioOk) credId = await bioRegister(user);
-    writeLock({ uid: user.id, salt, hash, bio: !!credId, credId });
-    setSaving(false);
-    onDone();
-  };
-  useEffect(() => {
-    if (step === "pin" && pin.length === 4) { setFirst(pin); setPin(""); setStep("confirm"); }
-    else if (step === "confirm" && pin.length === 4) {
-      if (pin === first) save(pin);
-      else { setErr("PINs didn't match — start again"); setPin(""); setFirst(""); setStep("pin"); setTimeout(() => setErr(""), 1800); }
-    }
-  }, [pin]);
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 99998, background: "rgba(10,5,20,.72)", display: "grid", placeItems: "center", padding: 20 }}>
-      <div style={{ background: T.paper, borderRadius: 18, padding: 26, maxWidth: 380, width: "100%", boxShadow: "0 30px 80px rgba(0,0,0,.5)", textAlign: "center" }}>
-        {step === "intro" && <>
-          <div style={{ width: 52, height: 52, borderRadius: 14, background: T.goldSoft, display: "grid", placeItems: "center", margin: "0 auto 14px" }}><Lock size={24} color={T.gold} /></div>
-          <div style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 800, color: T.ink }}>Secure this app</div>
-          <div style={{ fontSize: 13, color: T.muted, marginTop: 8, lineHeight: 1.55 }}>You'll stay signed in, so set a 4-digit PIN to unlock the app each time you open it.{bioOk ? " You can add Face ID / Touch ID too." : ""}</div>
-          {bioOk && <label style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", marginTop: 14, fontSize: 13, color: T.ink, cursor: "pointer" }}>
-            <input type="checkbox" checked={wantBio} onChange={(e) => setWantBio(e.target.checked)} /> Also enable Face ID / Touch ID</label>}
-          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-            <button onClick={onSkip} style={{ flex: 1, padding: "11px", borderRadius: 10, border: `1px solid ${T.hair}`, background: T.bone, color: T.muted, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>Not now</button>
-            <button onClick={() => setStep("pin")} style={{ flex: 1, padding: "11px", borderRadius: 10, border: "none", background: T.gold, color: "#fff", fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Set PIN</button>
-          </div>
-        </>}
-        {(step === "pin" || step === "confirm") && <>
-          <div style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 800, color: T.ink }}>{step === "pin" ? "Choose a 4-digit PIN" : "Confirm your PIN"}</div>
-          <div style={{ marginTop: 14, background: "#130a26", borderRadius: 14, padding: "18px 10px" }}><PinPad value={pin} onChange={setPin} max={4} /></div>
-          {err && <div style={{ color: T.bad, fontSize: 12, marginTop: 10 }}>{err}</div>}
-          {saving && <div style={{ color: T.muted, fontSize: 12, marginTop: 10 }}>Saving…</div>}
-          <button onClick={onSkip} style={{ marginTop: 14, background: "none", border: "none", color: T.faint, fontSize: 12, cursor: "pointer", fontFamily: UI }}>Cancel</button>
-        </>}
-      </div>
     </div>
   );
 }

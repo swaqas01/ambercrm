@@ -32,9 +32,9 @@ function labelFor(ua) {
 async function capEnabled() {
   try {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?key=eq.device_limit_enabled&select=value`, { headers: svc });
-    if (!r.ok) return false;
+    if (!r.ok) return false; // can't read settings -> don't enforce (avoid accidental sign-outs)
     const j = await r.json();
-    return !!(j && j[0] && String(j[0].value).toLowerCase() === "true");
+    return !(j && j[0] && String(j[0].value).toLowerCase() === "false"); // default ON unless explicitly disabled
   } catch (e) { return false; }
 }
 
