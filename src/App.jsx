@@ -555,6 +555,7 @@ const NAV = [
   ["open", "Open Leads", Unlock],
   ["performance", "Agent Performance", BarChart3],
   ["security", "Suspicious Activity", ShieldAlert],
+  ["devices", "Devices & Sessions", Smartphone],
   ["matching", "Property Matching", Building2],
   ["score", "Investment Score", Gauge],
   ["careers", "Careers / Hiring", Briefcase],
@@ -635,6 +636,7 @@ export default function App() {
     })();
     return () => { mounted = false; };
   }, []);
+  useEffect(() => { if (user) registerDevice(); }, [user]);   // record device + honor remote/auto sign-out
   const signOut = async () => { await supabase.auth.signOut(); setUser(null); };
   const [accent, setAccent] = useState("gold");
   const ACCENTS = [["gold", "Violet", "#7C5CFA"], ["emerald", "Emerald", "#1F6B52"],
@@ -669,7 +671,7 @@ export default function App() {
     if (user && screen !== "lead" && screen !== "dealdetail") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />, devices: <DevicesSecurity user={user} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <Performance go={go} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
@@ -5342,6 +5344,95 @@ async function ensurePushSubscribed() {
 }
 
 // Subtle opt-in prompt for phone notifications. iPhone (not yet installed) gets Add-to-Home-Screen steps.
+// ===== Device registry (security): record this device; self-sign-out if revoked =====
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem("amber_device_id");
+    if (!id) { id = "dev-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10); localStorage.setItem("amber_device_id", id); }
+    return id;
+  } catch (e) { return "dev-unknown"; }
+}
+async function registerDevice() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session && session.access_token;
+    if (!token) return null;
+    const r = await fetch("/api/session-log", { method: "POST", headers: { "content-type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ device_id: getDeviceId(), user_agent: navigator.userAgent }) });
+    const j = await r.json().catch(() => null);
+    if (j && j.revoked) { try { await supabase.auth.signOut(); } catch (e) {} try { window.location.reload(); } catch (e) {} }
+    return j;
+  } catch (e) { return null; }
+}
+
+// Admin-only: every device each user is signed in on, with IP, approximate location and device ID.
+function DevicesSecurity({ user }) {
+  const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
+  const [rows, setRows] = useState(null);
+  const [profs, setProfs] = useState({});
+  const [busy, setBusy] = useState("");
+  const load = async () => {
+    setRows(null);
+    const { data: d } = await supabase.from("user_devices")
+      .select("id, user_id, device_id, label, user_agent, last_ip, city, region, country, last_seen, first_seen, revoked")
+      .order("last_seen", { ascending: false }).limit(1000);
+    const list = d || [];
+    setRows(list);
+    const ids = [...new Set(list.map((r) => r.user_id))];
+    if (ids.length) {
+      const { data: p } = await supabase.from("profiles").select("id, full_name, role").in("id", ids);
+      const map = {}; (p || []).forEach((x) => { map[x.id] = x; }); setProfs(map);
+    }
+  };
+  useEffect(() => { if (isAdmin) load(); }, [isAdmin]);
+  const revoke = async (row, on) => {
+    setBusy(row.id);
+    try {
+      await supabase.from("user_devices").update(on
+        ? { revoked: true, revoked_at: new Date().toISOString(), revoked_by: user.id }
+        : { revoked: false, revoked_at: null, revoked_by: null }).eq("id", row.id);
+      await load();
+    } catch (e) {}
+    setBusy("");
+  };
+  if (!isAdmin) return <div style={{ ...card, padding: 24, color: T.muted }}>Admins only.</div>;
+  const loc = (r) => [r.city, r.region, r.country].filter(Boolean).join(", ") || "—";
+  const shortId = (s) => (s ? String(s).slice(0, 10) + "…" : "—");
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12.5, color: T.muted, maxWidth: 640, lineHeight: 1.5 }}>Every device each user is signed in on, with its IP, approximate location (from the IP) and device ID. "Sign out" forces that device to re-authenticate on its next use.</div>
+        <button onClick={load} style={{ ...miniBtn() }}>Refresh</button>
+      </div>
+      {rows === null ? <div style={{ color: T.muted, fontSize: 13 }}>Loading…</div>
+        : rows.length === 0 ? <div style={{ ...card, padding: 24, color: T.muted }}>No device sign-ins recorded yet. They appear here once users open the app after this update.</div>
+        : <div style={{ display: "grid", gap: 10 }}>
+            {rows.map((r) => {
+              const p = profs[r.user_id] || {};
+              return (
+                <div key={r.id} style={{ ...card, padding: 14, opacity: r.revoked ? 0.6 : 1 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13.5, color: T.ink }}>{p.full_name || "—"} <span style={{ fontSize: 10.5, color: T.faint, fontWeight: 600 }}>{roleLabel(p.role)}</span></div>
+                      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3 }}>{r.label || r.user_agent || "Unknown device"}</div>
+                      <div style={{ fontSize: 11, color: T.faint, marginTop: 4, lineHeight: 1.7 }}>
+                        IP: {r.last_ip || "—"} &nbsp;·&nbsp; Location: {loc(r)}<br />
+                        Device ID: {shortId(r.device_id)} &nbsp;·&nbsp; Last seen: {r.last_seen ? new Date(r.last_seen).toLocaleString("en-GB") : "—"}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: r.revoked ? T.bad : T.ok }}>{r.revoked ? "Signed out" : "Active"}</span>
+                      <button onClick={() => revoke(r, !r.revoked)} disabled={busy === r.id} style={{ ...miniBtn(), borderColor: r.revoked ? T.ok : T.bad, color: r.revoked ? T.ok : T.bad }}>{busy === r.id ? "…" : (r.revoked ? "Allow again" : "Sign out")}</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>}
+    </div>
+  );
+}
+
 function PushSetup({ user }) {
   const [show, setShow] = useState(false);
   const [mode, setMode] = useState("enable"); // 'enable' | 'ios-install'

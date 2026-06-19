@@ -4,7 +4,11 @@ import { createClient } from "@supabase/supabase-js";
 const URL = import.meta.env.VITE_SUPABASE_URL || "https://fkeniejcitwlqfatkopi.supabase.co";
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_3M0eOBeRvTuC8yjMWWcEqg_BPZfYyKJ";
 
-export const supabase = createClient(URL, KEY);
+export const supabase = createClient(URL, KEY, {
+  // Keep users signed in across app restarts; the access token auto-refreshes from the long-lived
+  // refresh token. (Session length is also governed by the Supabase dashboard session settings.)
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+});
 
 const ROLES = {
   master_admin: { label: "Master Admin", home: "admin" },
@@ -28,7 +32,7 @@ export function resolveRole(email, dbRole) {
 // Which sidebar screens each role may open. 'users' is Master-Admin only.
 const SCREEN_ACCESS = {
   master_admin: "ALL",
-  admin:        ["projects","hotdeals","admin","lead","assign","performance","deals","dealdetail"],
+  admin:        ["projects","hotdeals","admin","lead","assign","performance","deals","dealdetail","devices"],
   sales_manager:["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","matching","score","deals","dealdetail"],
   agent:        ["projects","hotdeals","agent","live","open","lead","deals","dealdetail"],
   marketing:    ["projects","admin","live","open","lead","settings"],
