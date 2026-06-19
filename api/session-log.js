@@ -6,8 +6,6 @@ const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "https://fkeniejcitwlqfatk
 const ANON_KEY     = process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_3M0eOBeRvTuC8yjMWWcEqg_BPZfYyKJ";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAX_DEVICES  = 2;
-// The Master Admin is never auto-signed-out by the device cap (Saad uses several devices).
-const MASTER_EMAIL = String(process.env.MASTER_ADMIN_EMAIL || "saad@amberhomes.ae").toLowerCase();
 
 const svc = { apikey: SERVICE_KEY, Authorization: "Bearer " + SERVICE_KEY, "content-type": "application/json" };
 
@@ -47,12 +45,12 @@ export default async function handler(req, res) {
   const authz = req.headers.authorization || "";
   const token = authz.startsWith("Bearer ") ? authz.slice(7) : null;
   if (!token) return res.status(401).json({ error: "Not signed in." });
-  let uid = null, userEmail = null;
+  let uid = null;
   try {
     const who = await fetch(SUPABASE_URL + "/auth/v1/user", { headers: { apikey: ANON_KEY, Authorization: "Bearer " + token } });
     if (!who.ok) return res.status(401).json({ error: "Invalid session." });
     const u = await who.json(); if (!u || !u.id) return res.status(401).json({ error: "Invalid session." });
-    uid = u.id; userEmail = String(u.email || "").toLowerCase();
+    uid = u.id;
   } catch (e) { return res.status(401).json({ error: "Could not verify session." }); }
 
   try {
@@ -68,31 +66,22 @@ export default async function handler(req, res) {
       method: "POST", headers: { ...svc, Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(row),
     });
 
-    // Active devices for this user, newest first.
-    const ar = await fetch(`${SUPABASE_URL}/rest/v1/user_devices?user_id=eq.${uid}&revoked=eq.false&select=id,device_id,last_seen&order=last_seen.desc`, { headers: svc });
+    // Active devices (informational count for the response).
+    const ar = await fetch(`${SUPABASE_URL}/rest/v1/user_devices?user_id=eq.${uid}&revoked=eq.false&select=id&order=last_seen.desc`, { headers: svc });
     const active = ar.ok ? await ar.json() : [];
 
-    const isMaster = userEmail === MASTER_EMAIL;
-    if (isMaster) {
-      // Master Admin: never auto-signed-out by the cap. Heal any stale revoked flag on this device
-      // (e.g. a previous cap revocation) so the session stays put.
-      try { await fetch(`${SUPABASE_URL}/rest/v1/user_devices?user_id=eq.${uid}&device_id=eq.${encodeURIComponent(deviceId)}`, { method: "PATCH", headers: { ...svc, Prefer: "return=minimal" }, body: JSON.stringify({ revoked: false, revoked_at: null }) }); } catch (e) {}
-      return res.status(200).json({ ok: true, revoked: false, active: active.length, master: true });
-    }
-
-    // Cap: keep the 2 most-recently-seen, sign out the rest. The current device just refreshed last_seen,
-    // so it is newest and is never the one signed out. Only runs when the setting is enabled.
-    if (active.length > MAX_DEVICES && await capEnabled()) {
-      for (const d of active.slice(MAX_DEVICES)) {
-        try { await fetch(`${SUPABASE_URL}/rest/v1/user_devices?id=eq.${d.id}`, { method: "PATCH", headers: { ...svc, Prefer: "return=minimal" }, body: JSON.stringify({ revoked: true, revoked_at: new Date().toISOString() }) }); } catch (e) {}
-      }
-    }
-
-    // Is THIS device revoked (e.g. an admin signed it out remotely, or the cap removed it)?
-    const tr = await fetch(`${SUPABASE_URL}/rest/v1/user_devices?user_id=eq.${uid}&device_id=eq.${encodeURIComponent(deviceId)}&select=revoked`, { headers: svc });
+    // The automatic device cap is DISABLED for ALL users — a session must never be dropped just because
+    // someone signed in on another device. Deliberate admin sign-out (the "Sign out" button in the Devices
+    // panel) sets revoked_by and is still honored. A stale CAP revocation (revoked=true with NO revoked_by,
+    // left over from when the cap was active) is healed here so it can't keep anyone signed out.
+    const tr = await fetch(`${SUPABASE_URL}/rest/v1/user_devices?user_id=eq.${uid}&device_id=eq.${encodeURIComponent(deviceId)}&select=revoked,revoked_by`, { headers: svc });
     const trj = tr.ok ? await tr.json() : [];
-    const revoked = !!(trj && trj[0] && trj[0].revoked);
-    return res.status(200).json({ ok: true, revoked, active: active.length });
+    const rec = trj && trj[0];
+    const manualRevoke = !!(rec && rec.revoked && rec.revoked_by);   // a real admin remote sign-out
+    if (rec && rec.revoked && !rec.revoked_by) {                     // stale cap revocation -> clear it
+      try { await fetch(`${SUPABASE_URL}/rest/v1/user_devices?user_id=eq.${uid}&device_id=eq.${encodeURIComponent(deviceId)}`, { method: "PATCH", headers: { ...svc, Prefer: "return=minimal" }, body: JSON.stringify({ revoked: false, revoked_at: null }) }); } catch (e) {}
+    }
+    return res.status(200).json({ ok: true, revoked: manualRevoke, active: active.length });
   } catch (e) {
     return res.status(500).json({ error: "session-log failed", detail: String((e && e.message) || e) });
   }
