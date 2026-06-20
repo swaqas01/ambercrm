@@ -134,17 +134,37 @@ Notes: Meraas, Nakheel and Dubai Holding share the same two contacts (Fahad and 
 // raise confidence by pulling from approved sources instead of general memory.
 const WEB_RESEARCH = `
 
-=== WEB RESEARCH MODE (ACTIVE) ===
-You have a web_search tool RESTRICTED to Amber Homes' approved sources only. Source hierarchy: 1) Amber Homes Knowledge Base above (highest — if it answers, use it and do NOT search; internal approved knowledge supersedes the web, and never disclose private/internal details unless agent-visible). 2) Official government / DLD (laws, RERA, project status, transactions, Golden Visa rules). 3) Official developer sites (project details, launches, payment plans, handover, amenities). 4) Approved portals / market-data for discovery and comparison only — never final truth unless confirmed by DLD or developer. 5) Approved news for market context only.
+=== RESEARCH MODE (web_search ACTIVE) ===
+You can search the live web. Behave like a sharp Dubai/UAE real-estate research analyst and full AI assistant — not a restricted FAQ bot. Answer real-estate, project, community, developer, lifestyle, investor and market questions fully and usefully; do not refuse a normal question just because it is broad or needs the web.
 
-When a project or topic is NOT in the knowledge section, prefer an approved web source over general memory, then give a SHORT useful answer. Do NOT dead-end by replying that something is "not in our knowledge base" — if the KB lacks it, SEARCH the approved sources and answer with the best available info. Only say you could not find it if BOTH the KB and an approved web search return nothing reliable, and say clearly what you could not verify. For a project, try to give developer, location, property type, and (if found) starting price, payment plan and handover — labelling portal-sourced figures as indicative/reported and to be verified before sending to a client.
+WHEN YOU MUST SEARCH BEFORE ANSWERING (do NOT answer these from memory — memory is often outdated or wrong on project-specifics):
+- a specific project's specs, unit mix, sizes, amenities, payment plan, price, launch status or handover;
+- a developer or community FACT (golf courses, schools, hospitals, beaches, malls, metro/road/airport access, master-plan details);
+- golf course details — hole count, par, floodlighting, designer — VERIFY, never assume "18 holes";
+- DLD / RERA / Dubai REST / government rules, fees, transactions, or Golden Visa rules;
+- anything the user calls "latest", asks you to "verify", or that may have changed; or anything you are not sure of.
+If the Amber Homes Knowledge section already answers it, use that and skip the search.
 
-Every answer that uses the web MUST end with two lines, exactly:
+SOURCE PRIORITY (prefer the highest you can find): 1) official developer site; 2) official community / project / club page; 3) DLD / RERA / Dubai REST / UAE government; 4) reputable portals (Property Finder, Bayut, dxbinteract) and data providers — discovery/comparison only, label as indicative; 5) reputable news for context. For any specification, prefer an official source. For an Aldar community (e.g. Yas Acres) start with Aldar's official pages.
+
+ACCURACY: run a focused search, READ the source, answer from it — paraphrase accurately, do not dump links. If sources conflict, say so and give the most authoritative. If you cannot verify a project spec from a reliable source, say "I couldn't verify this from an official source" and do NOT state it confidently. NEVER invent prices, payment plans, sizes, availability, handover dates, fees, ROI or specs.
+
+EVERY answer that used the web ENDS with:
 Confidence: High | Medium | Low
-Source: Amber Homes Knowledge Base | DLD/Government | Developer | Portal | News
-Confidence guide: High = Amber Homes approved knowledge, or DLD + official developer. Medium = developer only, or partial official data. Low = portal/news only, or general guidance pending verification.
+Sources: <title — clickable link> (1-3)
+Confidence guide: High = official source, or DLD + official developer, or multiple reliable sources agree. Medium = one reputable non-official source, or partial official data. Low = portal/news/secondary only, or conflicting/uncertain. For project specs, only claim High/Medium with a real source behind it.
 
-NEVER invent prices, payment plans, unit sizes, availability, handover dates, fees or ROI. If a fact is not on an approved source, say it needs verification. Never present an off-plan launch as confirmed unless an official developer/DLD source (or approved internal knowledge) supports it. For Golden Visa, never guarantee eligibility; recommend confirming with the official authority.`;
+FOR REAL-ESTATE ANSWERS, when useful, also add:
+Client-safe wording: a short, accurate, client-ready way to say it — no guarantees of ROI/appreciation/yield/allocation/resale/discount/Golden-Visa approval or delivery timelines.
+Sales angle: one honest line on positioning for an end-user vs an investor, comparing against alternatives where relevant.
+
+CRM NUMBERS ARE NEVER FROM THE WEB: lead counts, deal counts, commissions and per-agent stats come ONLY from the CRM tools/context — never search the web for internal CRM figures and never guess them.`;
+
+const VERIFIED_FACTS = `
+
+=== VERIFIED FACTS & CORRECTIONS (authoritative — these override general memory) ===
+- Yas Acres Golf & Country Club (Aldar; Yas Island, Abu Dhabi) is a 9-HOLE floodlit championship golf course — par 36, designed by Dana Fry and Jason Straka. It is NOT a full physical 18-hole course. Golfers can play an 18-hole ROUND by playing the 9 holes twice from different tee positions, but never describe Yas Acres as a built/physical 18-hole golf course. Client-safe wording: "Yas Acres is a premium golf community centred on a 9-hole floodlit championship course with country-club amenities, with the flexibility to play an extended round depending on tee setup." Comparison: unlike full 18-hole golf communities, Yas Acres offers a more compact, accessible, floodlit golf lifestyle with shorter playing times and strong family/residential appeal.
+- General rule: golf-course hole counts, par, unit sizes and project specs are easy to get wrong from memory — verify from the developer/official source before stating, and never assume a golf community is 18 holes.`;
 
 // Role-specific behaviour. Prepended to the system prompt so the SAME assistant behaves as a
 // precise reporting tool for Master Admin, a limited ops assistant for Admin/Manager, and a pure
@@ -267,7 +287,7 @@ let _webCache = { at: 0, enabled: true, domains: DEFAULT_SOURCES };
 async function getWebConfig() {
   const now = Date.now();
   if (now - _webCache.at < 60000) return _webCache;
-  let enabled = true, domains = DEFAULT_SOURCES;
+  let enabled = true, domains = DEFAULT_SOURCES, customSet = false;
   try {
     const h = { apikey: ANON_KEY, Authorization: "Bearer " + ANON_KEY };
     // Optional kill switch: only an explicit 'false' turns web research off.
@@ -282,10 +302,10 @@ async function getWebConfig() {
       const dj = await dres.json();
       const custom = (Array.isArray(dj) ? dj : []).map((r) => String(r.domain || "").trim().toLowerCase()
         .replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "")).filter(Boolean);
-      if (custom.length) domains = custom.slice(0, 60);
+      if (custom.length) { domains = custom.slice(0, 60); customSet = true; }
     }
   } catch (e) { /* tables may not exist yet — keep the baked-in defaults */ }
-  _webCache = { at: now, enabled, domains };
+  _webCache = { at: now, enabled, domains, custom: customSet };
   return _webCache;
 }
 
@@ -332,12 +352,12 @@ export default async function handler(req, res) {
     let sysBlocks = null;  // mentor path: [cached static prefix, dynamic per-request tail]
     if (mentor && MENTORS[mentor]) {
       const isAgentRole = (role === "agent" || !role);
-      const staticPrefix = SAFETY + LANG + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + DEVELOPER_CONTACTS +
+      const staticPrefix = SAFETY + LANG + COMPANY_PROFILE + LOCATION_RULES + DEVELOPER_OFFICES + DEVELOPER_CONTACTS + VERIFIED_FACTS +
         (ROLE_RULES[role] || ROLE_RULES.agent) + POWER_TOOLS + (isAgentRole ? AGENT_DRIVE : "") +
         (web.enabled ? WEB_RESEARCH : "") + (wantLookup && web.enabled ? CLIENT_LOOKUP : "") +
         (isAgentRole ? FEWSHOT : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt;
       const dynamicTail =
-        (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — highest priority; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
+        (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — highest priority; never contradict or exceed it. Use it naturally as your own expertise; do NOT tell the user \"according to founder knowledge\" or name an internal knowledge base — just answer like an Amber-Homes-trained advisor) ===\n" + String(knowledge).slice(0, 14000) : "") +
         (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)") +
         lookupTarget;
       // Prompt caching: the static prefix (instructions + persona + examples) is byte-identical across
@@ -359,18 +379,13 @@ export default async function handler(req, res) {
       messages: messages.slice(-12),
     };
     if (web.enabled) {
-      if (web.openWeb) {
-        // Person lookup: search the whole web like Google (no domain filter), with a Dubai/UAE
-        // location bias so the people Amber actually deals with rank first. Extra search allowed
-        // to let the model refine/disambiguate a common name.
-        body.tools = [{
-          type: "web_search_20250305", name: "web_search", max_uses: 5,
-          user_location: { type: "approximate", country: "AE", city: "Dubai", timezone: "Asia/Dubai" },
-        }];
-      } else {
-        // Project / market research: stay on Amber's approved source list.
-        body.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4, allowed_domains: web.domains }];
-      }
+      // Search the OPEN web so official developer / community / club / government pages are reachable
+      // (the cause of stale answers like the Yas Acres golf-course error was a hard domain whitelist).
+      // A hard domain filter is applied ONLY when a Master Admin has explicitly configured a custom
+      // source whitelist (ai_sources). Person lookups always use the open web. Dubai/UAE location bias.
+      const tool = { type: "web_search_20250305", name: "web_search", max_uses: 5, user_location: { type: "approximate", country: "AE", city: "Dubai", timezone: "Asia/Dubai" } };
+      if (!web.openWeb && web.custom) tool.allowed_domains = web.domains;
+      body.tools = [tool];
     }
 
     let r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body) });
