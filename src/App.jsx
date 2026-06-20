@@ -661,11 +661,26 @@ export default function App() {
   const [leadFrom, setLeadFrom] = useState(null);  // screen a lead was opened from (drives the Back button)
   const [leadSiblings, setLeadSiblings] = useState([]);  // ordered lead IDs of the list it was opened from (drives Prev/Next)
   const go = (s, f = null) => { setScreen(s); setFilter(f); setNavOpen(false); };
-  const openLead = (id, siblings) => { setLeadFrom((prev) => (screen === "lead" ? prev : screen)); setDetailId(id); setLeadSiblings(Array.isArray(siblings) ? siblings : []); setScreen("lead"); setFilter(null); setNavOpen(false); };
+  const openLead = (id, siblings) => { setLeadFrom((prev) => (screen === "lead" ? prev : screen)); setDetailId(id); setLeadSiblings(Array.isArray(siblings) ? siblings : []); setScreen("lead"); setFilter(null); setNavOpen(false); try { window.history.pushState({ amberDetail: "lead" }, ""); } catch (e) {} };
   const [dealDetailId, setDealDetailId] = useState(null);
-  const openDeal = (id) => { setDealDetailId(id); setScreen("dealdetail"); setNavOpen(false); };
+  const openDeal = (id) => { setDealDetailId(id); setScreen("dealdetail"); setNavOpen(false); try { window.history.pushState({ amberDetail: "dealdetail" }, ""); } catch (e) {} };
   const [agentDetailId, setAgentDetailId] = useState(null);
-  const openAgent = (id) => { setAgentDetailId(id); setScreen("agentprofile"); setFilter(null); setNavOpen(false); };
+  const openAgent = (id) => { setAgentDetailId(id); setScreen("agentprofile"); setFilter(null); setNavOpen(false); try { window.history.pushState({ amberDetail: "agentprofile" }, ""); } catch (e) {} };
+  // Browser / phone BACK button: opening a lead/deal/agent pushes a history entry; pressing back here closes the
+  // detail and returns to the list it came from. The list re-reads its saved search/filters/page/scroll on remount,
+  // so the previous view is restored without touching the existing CRM "Back" buttons.
+  const screenRef = useRef(screen); useEffect(() => { screenRef.current = screen; }, [screen]);
+  const leadFromRef = useRef(leadFrom); useEffect(() => { leadFromRef.current = leadFrom; }, [leadFrom]);
+  useEffect(() => {
+    const onPop = () => {
+      const s = screenRef.current;
+      if (s === "lead") { setDetailId(null); setFilter(null); setScreen(leadFromRef.current || (user && user.role === "agent" ? "agent" : "live")); }
+      else if (s === "dealdetail") { setScreen("deals"); }
+      else if (s === "agentprofile") { setScreen("performance"); }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [user]);
   // role guard — agents may only open their own surfaces
   useEffect(() => {
     if (user && !canOpen(user.role, screen)) {
@@ -7600,6 +7615,8 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   useEffect(() => { if (firstRun.current) { firstRun.current = false; return; } setPage(0); setSelected({}); setSelectAllMatching(false); }, [dq, tab, agentFilter, typeFilter, sort, pageSize]); // real view change → page 1, clear selection (skip on mount/restore)
   useEffect(() => { setSelected({}); }, [page]);   // page-specific selection clears when paging
   useEffect(() => { const v = { q, dq, tab, sort, agentFilter, typeFilter, page, pageSize }; LEADS_VIEW_CACHE[viewKey] = v; try { sessionStorage.setItem("amber_lv_" + viewKey, JSON.stringify(v)); } catch (e) {} }, [viewKey, q, dq, tab, sort, agentFilter, typeFilter, page, pageSize]); // remember filters across open-lead → back (survives reload)
+  const scrollRestored = useRef(false);
+  useEffect(() => { if (leads && !scrollRestored.current) { scrollRestored.current = true; let y = 0; try { y = parseInt(sessionStorage.getItem("amber_lvscroll_" + viewKey) || "0", 10); } catch (e) {} if (y > 0) { requestAnimationFrame(() => { try { window.scrollTo(0, y); } catch (e) {} }); try { sessionStorage.removeItem("amber_lvscroll_" + viewKey); } catch (e) {} } } }, [leads]); // restore scroll once when returning from a lead
 
   // Build the leads query with EVERY scope/permission rule + active filters applied AT THE DATABASE.
   // RLS independently enforces the same boundaries, so an agent can never receive another agent's leads.
@@ -7933,7 +7950,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                        : <><span style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 3, background: T.bone, margin: "-10px 0", padding: "10px 0" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Client</span><span>Phone</span><span>Email</span><span>Agent</span><span>Type</span><span>Project</span><span>Area</span><span>Source</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
             </div>
             {filtered.map((l, i) => (isAgent ? (
-              <div key={l.id} onClick={() => openLead && openLead(l.id, allIds.length ? allIds : filtered.map((x) => x.id))} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
+              <div key={l.id} onClick={() => { try { sessionStorage.setItem("amber_lvscroll_" + viewKey, String(window.scrollY || 0)); } catch (e) {} openLead && openLead(l.id, allIds.length ? allIds : filtered.map((x) => x.id)); }} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5, cursor: "pointer" }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{l.client_name}
@@ -7966,7 +7983,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 </span>
               </div>
             ) : (
-              <div key={l.id} onClick={() => openLead && openLead(l.id, allIds.length ? allIds : filtered.map((x) => x.id))} style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
+              <div key={l.id} onClick={() => { try { sessionStorage.setItem("amber_lvscroll_" + viewKey, String(window.scrollY || 0)); } catch (e) {} openLead && openLead(l.id, allIds.length ? allIds : filtered.map((x) => x.id)); }} style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12, cursor: "pointer", background: selected[l.id] ? T.goldSoft : "transparent" }}>
                 <span onClick={(e) => e.stopPropagation()} style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 2, background: selected[l.id] ? T.goldSoft : T.paper, margin: "-12px 0", padding: "12px 0" }}><input type="checkbox" checked={!!selected[l.id]} onChange={() => toggleSel(l.id)} style={{ cursor: "pointer", width: 14, height: 14 }} /></span>
                 <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 600, lineHeight: 1.3 }}>{fmtDubai(l.created_at || l.created_on)}</span>
