@@ -8134,6 +8134,7 @@ function AddLeadModal({ onClose, onSaved, me, user, openLead }) {
     // audit
     if (me && ins) supabase.from("lead_activity").insert({ lead_id: ins.id, actor_id: me.id,
       action: aiUsed ? "lead_created_ai" : "lead_created", detail: { lead_code: code } }).then(() => {});
+    if (ins && ins.id) pushNotify({ leadId: ins.id });   // email/push the assignee (server no-ops if the lead is unassigned)
     setBusy(false); onSaved();
   };
   const [aiUsed] = useState(false);
