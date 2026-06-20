@@ -2845,6 +2845,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <button onClick={() => go(backTo.screen)} style={{ ...miniBtn() }}>← {backTo.label}</button>
         {lead && lead.client_name && <button onClick={() => { try { window.dispatchEvent(new CustomEvent("amber-open", { detail: { lead, lookup: true } })); } catch (e) {} }} title="Search public/professional sources for this client" style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}><Search size={13} /> Look up client online</button>}
+        {lead && lead.client_name && lead.email && <span style={{ fontSize: 10.5, color: T.muted, display: "inline-flex", alignItems: "center" }}>Using name + email domain for better match accuracy.</span>}
       </div>
       {sibs.length > 1 && sibIdx >= 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -7096,9 +7097,9 @@ function AskAmber({ narrow, user, openLead }) {
       const d = e && e.detail;
       setOpen(true);
       if (!mentor) pick(MENTORS[0], d && d.lead);
-      else if (d && d.lead) { try { setCtx(await buildCrmContext(user, d.lead)); setLeadInfo(d.lead.client_name ? { name: d.lead.client_name } : null); } catch (err) {} }
+      else if (d && d.lead) { try { setCtx(await buildCrmContext(user, d.lead)); setLeadInfo(d.lead.client_name ? { name: d.lead.client_name, email: d.lead.email || null, lead: d.lead } : null); } catch (err) {} }
       if (d && d.prompt) setInput(d.prompt);
-      if (d && d.lookup && d.lead && d.lead.client_name) setPendingLookup(d.lead.client_name);
+      if (d && d.lookup && d.lead && d.lead.client_name) { setLeadInfo({ name: d.lead.client_name, email: d.lead.email || null, lead: d.lead }); setPendingLookup(d.lead); }
     };
     window.addEventListener("amber-open", onOpen);
     return () => window.removeEventListener("amber-open", onOpen);
@@ -7153,7 +7154,7 @@ function AskAmber({ narrow, user, openLead }) {
     send(q, true);
   };
   const scheduleFollowupFor = (ld) => { logLeadAction("schedule_followup", ld); if (openLead) { openLead(ld.id); setOpen(false); } };
-  const send = async (q, forceModel, lookup) => {
+  const send = async (q, forceModel, lookup, lookupLead) => {
     const text = (q != null ? q : input).trim();
     if (!text || busy || !mentor) return;
     setInput("");
@@ -7195,7 +7196,7 @@ function AskAmber({ narrow, user, openLead }) {
     setMsgs(next); setBusy(true);
     const picked = pickKnowledge(text, kb, mentor.id); // relevant verified knowledge for THIS question
     try {
-      const res = await callAi({ mentor: mentor.id, crmContext: ctx, knowledge: picked.text, role: user && user.role, clientLookup: lookup || undefined,
+      const res = await callAi({ mentor: mentor.id, crmContext: ctx, knowledge: picked.text, role: user && user.role, clientLookup: lookup || undefined, lookupLead: lookupLead || undefined,
           messages: next.slice(-12).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })) });
       const data = await res.json();
       if (data.error) {
@@ -7223,9 +7224,21 @@ function AskAmber({ narrow, user, openLead }) {
     } finally { setBusy(false); }
   };
 
-  const lookupQueryFor = (nm) => `Look up "${nm}" online. First one line on what the name's origin likely is, then list the top 3–5 public people who match this name (each: name — role, company/field, city), flag anyone high-profile, and remind me to open their full profiles to confirm which one is my client. Keep it short and scannable, no essay.`;
-  const runLookup = (nm) => { if (!nm || busy || !mentor) return; logLeadAction("client_lookup", { id: nm, name: nm }); send(lookupQueryFor(nm), true, true); };
-  useEffect(() => { if (pendingLookup && mentor && !busy) { const n = pendingLookup; setPendingLookup(null); runLookup(n); } }, [pendingLookup, mentor, busy]); // eslint-disable-line
+  const lookupMessageFor = (ld) => {
+    const nm = ld.client_name || ld.name || "this lead";
+    const em = ld.email || "";
+    return em
+      ? `Research ${nm} before I call — use their email (${em}) and its domain for an accurate match, not the name alone. Give me a confidence-scored result and don't guess.`
+      : `Research ${nm} before I call. List the possible public matches so I can verify which one is my client — give a confidence level and don't guess.`;
+  };
+  const runLookup = (ld) => {
+    if (!ld || busy || !mentor) return;
+    const nm = ld.client_name || ld.name;
+    logLeadAction("client_lookup", { id: nm, name: nm });
+    const lookupLead = { name: nm, email: ld.email || null, nationality: ld.nationality || null, residence: ld.country_residence || ld.residence || null };
+    send(lookupMessageFor(ld), true, true, lookupLead);
+  };
+  useEffect(() => { if (pendingLookup && mentor && !busy) { const ld = pendingLookup; setPendingLookup(null); runLookup(ld); } }, [pendingLookup, mentor, busy]); // eslint-disable-line
 
   // floating launcher
   if (!open) return (
@@ -7339,7 +7352,7 @@ function AskAmber({ narrow, user, openLead }) {
         </div>
         {msgs.filter((m) => m.role === "user").length === 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 14px 10px", background: T.bone }}>
-            {leadInfo && <button key="lookup" onClick={() => runLookup(leadInfo.name)} style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold, borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 5 }}><Search size={11} /> Look up {leadInfo.name} online</button>}
+            {leadInfo && <button key="lookup" onClick={() => runLookup(leadInfo.lead || leadInfo)} style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold, borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI, display: "inline-flex", alignItems: "center", gap: 5 }}><Search size={11} /> Look up {leadInfo.name} online</button>}
             {(leadInfo ? [`What should I do next with ${leadInfo.name}?`, `Profile ${leadInfo.name}`] : []).concat(["Compare two projects", "Analyze a client chat", "Practice a tough client", "What's launching soon?", "Match my leads to hot deals", "What should I focus on today?", "Show me my hot leads", "Draft a WhatsApp follow-up"]).map((s) => (
               <button key={s} onClick={() => send(s)} style={{ border: `1px solid ${T.goldEdge}`, background: T.goldSoft, color: T.gold,
                 borderRadius: 9, padding: "6px 11px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>{s}</button>))}

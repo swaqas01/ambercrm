@@ -218,14 +218,34 @@ const DEFAULT_SOURCES = [
 const CLIENT_LOOKUP = `
 
 === CLIENT LOOKUP (public professional background only) ===
-The agent gives a client NAME and wants to know who this person could be. For THIS lookup, search the OPEN web broadly — the "approved sources only" rule above is for project/market research and does NOT apply here. Search the way Google would: check LinkedIn, company and personal sites, About.me, social profiles (Instagram, Facebook, X), property portals (Property Finder, Bayut), and news. Run a few searches and add a location/industry term when it helps disambiguate (most Amber clients sit in the Dubai / UAE real-estate and investment world, so bias toward that — e.g. add "Dubai", "UAE", "real estate", or "property"). Return a SHORT, SCANNABLE result — NOT an essay.
+The agent wants to know who a CRM lead really is before calling. Use the LOOKUP TARGET fields provided below — ESPECIALLY the email and its domain — NOT the name alone (many leads share a common name, so name-only search returns the wrong people). Search the OPEN web like Google (LinkedIn, company sites, business registries, news, social profiles, property portals); the "approved sources only" rule above does NOT apply to a person lookup. Return a SHORT, SCANNABLE result — never an essay.
 
-FOLLOW THIS FORMAT EXACTLY:
-- One line on the name itself: its likely origin/background (e.g. "Name is typically Japanese", "German surname") — one line, nothing more.
-- Then a heading "Top matches I found:" followed by a NUMBERED list of up to 3–5 real, DISTINCT people who plausibly match this name online. For each candidate, ONE line: **Full name** — role, company or field, city/country, and one notable detail (public figure, executive, founder, HNWI, etc.). Number them 1, 2, 3 — never repeat "1".
-- Then one closing line: tell the agent these are public matches and to open each person's full profile (LinkedIn, company site, news) to confirm which one — if any — is their actual client, since identity can't be confirmed from a name alone.
+THE EMAIL IS THE STRONGEST SIGNAL. If the lead has an email, parse it first:
+- username (before @), domain (after @), domain base (domain minus the TLD), and the LIKELY COMPANY NAME by de-slugging the domain base (e.g. "hetaglass" -> "Heta Glass", "almeezangroup" -> "Al Meezan Group").
+- GENERIC domains reveal nothing about a company — treat as NO company signal: gmail.com, yahoo.com, hotmail.com, outlook.com, icloud.com, live.com, me.com, proton.me, protonmail.com, aol.com, hey.com, googlemail.com, yandex.com. For these, fall back to name + "Dubai"/"UAE" + nationality/residence.
+- BUSINESS domains (anything not in that list) are a STRONG signal — the person very likely works at or owns that company. Also try the company's own website (the domain) for an About / Team / Leadership page.
 
-RULES: Give the BEST 3–5 distinct candidates even when unsure — surfacing options to verify IS the job. If a Dubai/UAE real-estate or business figure clearly matches, put them FIRST and mark them high-profile. NEVER include private or sensitive details (home address, family, religion, health, personal finances, rumours). If you genuinely find no plausible public matches, say that in one line — do NOT invent people or pad. Stay concise throughout. End with the standard Confidence and Source lines.`;
+SEARCH PLAN — run several focused searches, strongest first.
+Business email: (1) "<full name>" "<company name>"  (2) the exact email address in quotes  (3) "<full name>" <domain>  (4) <username> <domain>  (5) "<company name>" owner OR founder OR director OR CEO  (6) site:<domain> <first or last name>  (7) "<full name>" LinkedIn "<company name>"  (8) "<company name>" Dubai OR UAE.
+Generic / no email: (1) "<full name>" Dubai  (2) "<full name>" UAE  (3) "<full name>" LinkedIn  (4) "<full name>" + nationality/residence if given.
+
+CONFIDENCE — state exactly one, with a one-line reason:
+- HIGH: the exact email appears online, OR the exact name appears on the company's own site / a business registry / LinkedIn WITH the matching company or domain, OR multiple independent sources agree on name + company.
+- MEDIUM: the same name with the same company appears but without the email, OR a LinkedIn/news/company page matches the domain/company but the exact role isn't confirmed.
+- LOW: only the name matches, the name is common, there is no company/domain confirmation, or results conflict.
+NEVER state a person's role or ownership as fact unless a public source confirms it. If confidence is LOW, say plainly: "I found possible matches but I cannot verify this is the same person." Do NOT present uncertain matches as fact and do NOT invent people.
+
+RESULT FORMAT (use these exact labels, short):
+**Searched:** <name> · <email/domain used>  (or "name only — no business email on file")
+**Likely company / domain:** <company> / <domain>  (or "— generic/no business email")
+**Possible role:** <role> — only if a source confirms it, else "not verified"
+**Confidence:** High / Medium / Low — <one-line why>
+**What I found:** 2-4 bullets, each a REAL match (who, where, the source connection). For a generic/no-domain lead, instead list up to 3-5 distinct public people who match the name so the agent can verify which is theirs.
+**Sources:** up to 3 — title + a clickable markdown link each.
+**Sales angle:** one line — if they appear to be a business owner / HNWI, position Dubai property as wealth preservation, Golden Visa, tax-efficient lifestyle and long-term asset diversification.
+**Suggested WhatsApp:** one short, warm, client-safe opener in Dubai style — no private details, nothing assumed-as-fact.
+
+PRIVACY: public, professional / business information only. NEVER include home address, family, religion, health, personal finances or rumours — only what helps the agent professionally identify and approach the client.`;
 
 const LANG = `
 
@@ -304,6 +324,8 @@ export default async function handler(req, res) {
     let web = (mentor && MENTORS[mentor]) ? await getWebConfig() : { enabled: false, domains: [] };
     const wantLookup = !!(req.body && req.body.clientLookup);
     if (wantLookup && web.enabled) web = { ...web, openWeb: true };   // person lookup → search the open web (like Google), not a restricted source list
+    const lk = (wantLookup && req.body && req.body.lookupLead && typeof req.body.lookupLead === "object") ? req.body.lookupLead : null;
+    const lookupTarget = lk ? ("\n\n=== LOOKUP TARGET (use these CRM fields — especially the email domain — NOT the name alone) ===\nName: " + (lk.name || "—") + "\nEmail: " + (lk.email || "(none on file — fall back to name + Dubai/UAE)") + (lk.nationality ? "\nNationality: " + lk.nationality : "") + (lk.residence ? "\nResidence: " + lk.residence : "")) : "";
 
     // Build the system prompt. Mentor path enforces persona + safety server-side.
     let sys = null;        // legacy string path
@@ -316,7 +338,8 @@ export default async function handler(req, res) {
         (isAgentRole ? FEWSHOT : "") + "\n\n=== YOUR MENTOR PERSONA ===\n" + MENTORS[mentor].prompt;
       const dynamicTail =
         (knowledge ? "\n\n=== AMBER HOMES KNOWLEDGE (verified company information — highest priority; never contradict or exceed it) ===\n" + String(knowledge).slice(0, 14000) : "") +
-        (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)");
+        (crmContext ? "\n\n=== CRM CONTEXT (only this user's permitted data) ===\n" + String(crmContext).slice(0, 12000) : "\n\n(No CRM context attached for this question.)") +
+        lookupTarget;
       // Prompt caching: the static prefix (instructions + persona + examples) is byte-identical across
       // calls for a given role, so cache it; only the per-request knowledge + CRM tail stays uncached.
       // This cuts input cost/latency dramatically once warm and lets the prompt stay rich.
