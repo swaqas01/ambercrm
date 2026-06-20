@@ -106,6 +106,7 @@ export default async function handler(req, res) {
     if (pushReady) webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
     const body = req.body || {};
     let targetUserId = null, title = "", text = "", url = "/";
+    let leadSource = null, leadType = null, leadProject = null;
 
     if (body.summary) {
       // Bulk digest — only a non-agent (admin/ops/manager) can bulk-assign, so gate it to them.
@@ -119,13 +120,14 @@ export default async function handler(req, res) {
       url = "/";
     } else if (body.leadId) {
       // Single assignment — templated from the lead's real current assignee (can't be spoofed by the caller).
-      const lr = await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${body.leadId}&select=client_name,project,area,assigned_agent`, { headers: svcHeaders });
+      const lr = await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${body.leadId}&select=client_name,project,area,source,lead_type,assigned_agent`, { headers: svcHeaders });
       const lead = lr.ok ? (((await lr.json())[0]) || null) : null;
       if (!lead || !lead.assigned_agent) return res.status(200).json({ sent: 0, reason: "no assignee" });
       targetUserId = lead.assigned_agent;
       title = "New lead assigned to you";
       text = (lead.client_name || "New lead") + (lead.project ? " — " + lead.project : (lead.area ? " — " + lead.area : ""));
       url = "/?lead=" + body.leadId;
+      leadSource = lead.source; leadType = lead.lead_type; leadProject = lead.project;
     } else {
       return res.status(400).json({ error: "leadId or summary required" });
     }
@@ -155,10 +157,27 @@ export default async function handler(req, res) {
     // ---- Channel 2: Email (Resend) — fires whenever RESEND_API_KEY is set.
     let emailSent = false;
     if (agent && agent.email) {
-      const bodyLine = body.leadId
-        ? ("A new lead has been assigned to you: <b>" + (text || "New lead") + "</b>.")
-        : ("<b>" + title + "</b> — open Ask Amber to start working them.");
-      emailSent = await sendEmail(agent.email, title, assignEmailHtml(firstName, bodyLine, link));
+      let subject, bodyLine;
+      if (body.summary) {
+        // Bulk assignment — one digest email (sources can be mixed).
+        subject = title;
+        bodyLine = "<b>" + title + "</b><br><br>Kindly go into the CRM, call the clients and update each lead.";
+      } else {
+        const norm = String(leadSource || "").toLowerCase().replace(/[^a-z]/g, "");
+        const isPropertyFinder = norm.includes("propertyfinder");
+        if (isPropertyFinder) {
+          subject = "A Property Finder lead has been assigned to you";
+          bodyLine = "A lead from Property Finder has been assigned to you for your property. Kindly go into the CRM and check.";
+        } else {
+          // Off Plan / WhatsApp / Email / Social Media (and any other non-PropertyFinder source).
+          subject = "An Off Plan lead has been assigned to you";
+          bodyLine = "An Off Plan lead has been assigned to you."
+            + "<br><br><b>Project:</b> " + (leadProject || "—")
+            + "<br><b>Lead Type:</b> " + (leadType || "Buyer")
+            + "<br><br>Kindly call and update in the system. If the lead is not updated within 2 hours, the lead shall be assigned to the next available agent.";
+        }
+      }
+      emailSent = await sendEmail(agent.email, subject, assignEmailHtml(firstName, bodyLine, link));
     }
 
     // ---- Channel 3: WhatsApp (Meta Cloud API) — fires only when the WHATSAPP_* env vars are configured.
