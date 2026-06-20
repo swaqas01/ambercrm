@@ -7663,6 +7663,11 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       else if (filter.type === "due") query = NOT_CLOSED(query.not("next_followup", "is", null).lte("next_followup", tday));
       else if (filter.type === "overdue") query = NOT_CLOSED(query.not("next_followup", "is", null).lt("next_followup", tday));
     }
+    // Rule: Agent-type leads must NEVER appear in the Open Leads pool — only client leads
+    // (Buyer / Seller / Tenant, plus legacy blank-type) belong there. Excludes "Agent" while
+    // keeping null/blank types visible (a plain .neq would also drop nulls).
+    const openPoolView = initialAgentFilter === "open" || agentFilter === "open" || (filter && filter.type === "open");
+    if (openPoolView) query = query.or("lead_type.is.null,lead_type.neq.Agent");
     // lead type (Buyer also matches legacy null type, to mirror the old default)
     if (typeFilter) query = (typeFilter === "Buyer") ? query.or("lead_type.eq.Buyer,lead_type.is.null") : query.eq("lead_type", typeFilter);
     // search (server-side ilike; sanitized so the or-filter can't be broken)
@@ -7730,7 +7735,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const matchAgentFilter = (l) => {
     if (isAgent || !agentFilter) return true;
     if (agentFilter === "unassigned") return !l.assigned_agent && !l.is_open;
-    if (agentFilter === "open") return l.is_open === true;
+    if (agentFilter === "open") return l.is_open === true && String(l.lead_type || "").trim().toLowerCase() !== "agent";
     return l.assigned_agent === agentFilter;
   };
   const sortCmp = (a, b) => {
