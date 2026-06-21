@@ -378,7 +378,22 @@ export default async function handler(req, res) {
       system: sysBlocks || sys,
       messages: messages.slice(-12),
     };
-    if (web.enabled) {
+    // ---- Ask Amber latency: attach web search ONLY when the query plausibly needs research.
+    // Fast/Reporting modes — simple CRM lookups, draft requests, counts, target checks and reports —
+    // answer from CRM context + knowledge with NO web round-trip. Web stays ON for person lookups,
+    // explicit research signals, and anything that isn't clearly simple, so the research upgrade
+    // (Yas Acres etc.) is fully preserved. Heuristic only — no extra model call, no added latency.
+    const lastUserMsg = (() => { try { for (let i = messages.length - 1; i >= 0; i--) { if (messages[i] && messages[i].role === "user") return String(messages[i].content || ""); } } catch (e) {} return ""; })().toLowerCase();
+    const simpleIntent =
+      /\b(draft|write|compose|reply|whatsapp|message|email|sms)\b/.test(lastUserMsg) ||
+      /\bmy (latest|new|newest|hot|warm|cold|recent|open|today'?s)?\s*leads?\b|\bshow my\b|\blist my\b|\bmy pipeline\b|\bassigned to me\b|\bmy follow.?ups?\b/.test(lastUserMsg) ||
+      /\bhow many\b|\bnumber of\b|\bcount of\b|\btotal (leads|deals|calls)\b/.test(lastUserMsg) ||
+      /\btarget\b|\bquota\b|\bcalls (today|did i)\b|\bhit my\b/.test(lastUserMsg) ||
+      /\b(performance|commission|leaderboard)\b|\bwho (made|closed|has the)\b|\bclosed (this|last) (month|week|quarter|year)\b/.test(lastUserMsg);
+    const researchSignal =
+      /\b(latest|newest|price|pricing|cost|payment plan|handover|launch|completion|golden visa|golf|school|hospital|clinic|metro|beach|mall|amenit|yield|roi|appreciation|rent(al)?|developer|community|master ?plan|spec|brochure|floor ?plan|unit mix|rera|dld|compare|comparison|versus|\bvs\b|verify|current|market|news)\b/.test(lastUserMsg);
+    const attachWeb = web.enabled && (wantLookup || researchSignal || !simpleIntent);
+    if (attachWeb) {
       // Search the OPEN web so official developer / community / club / government pages are reachable
       // (the cause of stale answers like the Yas Acres golf-course error was a hard domain whitelist).
       // A hard domain filter is applied ONLY when a Master Admin has explicitly configured a custom
