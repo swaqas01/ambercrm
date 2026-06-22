@@ -2514,6 +2514,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
   const [err, setErr] = useState("");
   const [err2, setErr2] = useState("");
   const [revealed, setRevealed] = useState(false);
+  const [prevReveal, setPrevReveal] = useState(false);     // true when THIS agent revealed THIS lead in a past session
   const [revealMsg, setRevealMsg] = useState("");          // quota / pause / low-balance notice
   const [openModal, setOpenModal] = useState(false);        // "Mark as Open" reason dialog
   const [openReason, setOpenReason] = useState("");
@@ -2577,7 +2578,18 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
     const { data: l, error } = await supabase.from("leads").select("*").eq("id", leadId).single();
     if (error || !l) { setErr("load"); return; }
     setLead(l);
-    if (isAdmin) { setRevealed(true); logAction("view", l, me && me.id); }
+    logAction("view", l, me && me.id);                   // per-lead view log for EVERY opener (incl. Prev/Next)
+    setRevealMsg("");
+    if (isAdmin) { setRevealed(true); }
+    else {
+      // Reveal state is strictly per (lead, user): every lead starts MASKED, then unmasks ONLY if this
+      // exact agent already revealed this exact lead before — so Next never inherits Lead A's reveal.
+      setRevealed(false); setPrevReveal(false);
+      try {
+        const { data: pr } = await supabase.from("lead_reveals").select("id").eq("lead_id", leadId).eq("agent_id", me.id).limit(1);
+        if (pr && pr.length) { setRevealed(true); setPrevReveal(true); }
+      } catch (e) {}
+    }
     if (isAdmin) {
       const { data: ag } = await supabase.from("profiles").select("id, full_name, role, active").eq("active", true).order("full_name");
       setAgents(ag || []);
@@ -2612,7 +2624,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
   const reveal = async () => {
     setRevealMsg("");
     const { data, error } = await supabase.rpc("reveal_contact", { p_lead_id: lead.id });
-    if (error) { setRevealed(true); logAction("view_number", lead, me && me.id); markContacted(); return; }  // pre-migration fallback
+    if (error) { setRevealed(true); logAction("view_number", lead, me && me.id); return; }  // pre-migration fallback (reveal only — not a contact)
     if (data && data.error) { setRevealMsg(data.error === "forbidden" ? "You don't have access to this lead's contact details." : "Couldn't reveal this contact. Please try again."); return; }
     if (data && data.blocked) {
       setRevealMsg(data.reason === "quota"
@@ -2621,7 +2633,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
       return;
     }
     if (data && (data.phone || data.whatsapp || data.email)) setLead((l) => ({ ...l, phone: data.phone || l.phone, whatsapp: data.whatsapp || l.whatsapp, email: data.email || l.email }));
-    setRevealed(true); markContacted();
+    setRevealed(true);   // revealing logs the reveal (RPC) but is NOT "contact" — Last Contact updates only on call/WhatsApp/email/follow-up
     if (data && data.warn && data.remaining != null) setRevealMsg("Heads up — " + data.remaining + " contact reveals left this week.");
   };
   const doMarkOpen = async () => {
@@ -2734,6 +2746,16 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
       setLead((l) => ({ ...l, last_contacted: today, last_contacted_at: nowIso, last_contacted_by: me.id })); } catch (e) {}
   };
 
+  // Derive the lead's "next follow-up" from the EARLIEST still-pending follow-up (completed/cancelled
+  // ones are excluded). If none remain pending, clear it to null so the lead shows "no follow-up".
+  const recalcNextFup = async (list) => {
+    const pend = (list || []).filter((f) => f.status === "scheduled" && f.due_at).sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+    const nf = pend[0]
+      ? { next_followup_at: pend[0].due_at, next_followup: new Date(pend[0].due_at).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }) }
+      : { next_followup_at: null, next_followup: null };
+    try { await supabase.from("leads").update(nf).eq("id", lead.id); setLead((l) => ({ ...l, ...nf })); } catch (e) {}
+  };
+
   const openSchedule = (fup) => {
     if (fup) { setEditFup(fup); const d = new Date(fup.due_at);
       setSchedDate(d.toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }));
@@ -2772,7 +2794,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
       if (canEditAll) await supabase.from("admin_audit").insert({ action: editFup ? "followup_rescheduled" : "followup_scheduled", performed_by: me.id, new_value: { due: dueIso, type: schedType }, detail: lead.client_name });
       setSched(false); setSchedBusy(false); setEditFup(null);
       const { data: fs } = await supabase.from("follow_ups").select("*").eq("lead_id", lead.id).order("due_at", { ascending: true });
-      setFups(fs || []); loadTimeline();
+      setFups(fs || []); await recalcNextFup(fs); loadTimeline();
     } catch (e) {
       setSchedBusy(false);
       setSchedErr(/permission|protected/i.test(e.message || "") ? "You do not have permission to do this." : "Unable to schedule follow-up. Please try again.");
@@ -2796,7 +2818,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
       if (canEditAll) await supabase.from("admin_audit").insert({ action: "followup_completed", performed_by: me.id, new_value: { outcome }, detail: lead.client_name });
       setDoneFup(null); setOutcome(""); setOutcomeNote(""); setDoneBusy(false);
       const { data: fs } = await supabase.from("follow_ups").select("*").eq("lead_id", lead.id).order("due_at", { ascending: true });
-      setFups(fs || []); loadTimeline();
+      setFups(fs || []); await recalcNextFup(fs); loadTimeline();
     } catch (e) { setDoneBusy(false); setDoneErr("Unable to save. Please try again."); }
   };
 
@@ -2883,6 +2905,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
     {/* action buttons */}
     <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
       {!revealed && <Btn icon={Eye} label="View Number" onClick={reveal} />}
+      {revealed && prevReveal && !isAdmin && <span style={{ alignSelf: "center", fontSize: 11, fontWeight: 600, color: T.muted, background: T.bone, border: `1px solid ${T.hair}`, borderRadius: 7, padding: "4px 9px" }}>Previously revealed</span>}
       {revealed && lead.phone && <Btn icon={Phone} label="Call" onClick={() => { logAction("call", lead, me && me.id); markContacted(); window.location.href = telHref(lead.phone); }} />}
       {(revealed || !mustRevealOpen) && lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="wa" onClick={() => { logAction("whatsapp", lead, me && me.id); markContacted(); window.open(waHref(lead.phone), "_blank"); }} />}
       {revealed && lead.email && <Btn icon={Mail} label="Email" onClick={() => { logAction("email", lead, me && me.id); markContacted(); window.location.href = "mailto:" + lead.email; }} />}
