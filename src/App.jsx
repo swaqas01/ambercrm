@@ -642,7 +642,7 @@ export default function App() {
     return () => { mounted = false; };
   }, []);
   useEffect(() => { if (user) registerDevice(); }, [user]);   // record device + honor remote/cap sign-out
-  const signOut = async () => { await supabase.auth.signOut(); setUser(null); };
+  const signOut = async () => { clearTrustToken(); await supabase.auth.signOut(); setUser(null); };
   const [accent, setAccent] = useState("gold");
   const ACCENTS = [["gold", "Violet", "#7C5CFA"], ["emerald", "Emerald", "#1F6B52"],
     ["sapphire", "Sapphire", "#2C4E78"], ["burgundy", "Burgundy", "#7C2D3E"]];
@@ -6377,6 +6377,10 @@ function getDeviceId() {
     return id;
   } catch (e) { return "dev-unknown"; }
 }
+// 7-day trusted-session token (proves this device already passed 2FA; lets login skip 2FA for 7 days).
+function getTrustToken() { try { return localStorage.getItem("amber_trust_token") || ""; } catch (e) { return ""; } }
+function setTrustToken(t) { try { if (t) localStorage.setItem("amber_trust_token", t); } catch (e) {} }
+function clearTrustToken() { try { localStorage.removeItem("amber_trust_token"); } catch (e) {} }
 async function registerDevice() {
   try {
     const { data: { session } } = await supabase.auth.getSession();
@@ -7455,7 +7459,7 @@ function LoginFlow({ onLogin }) {
     if (!pw) { setErr("Enter your password."); return; }
     setBusy(true); setEmail(mail);
     try {
-      const res = await api("start", { email: mail, password: pw });
+      const res = await api("start", { email: mail, password: pw, deviceId: getDeviceId(), trustToken: getTrustToken() });
       if (!res.ok) { setErr(friendly(res.reason)); setBusy(false); return; }
       if (res.needs2fa) { setStage("twofa"); setBusy(false); setResendIn(30); setCode(""); setNote("Enter the 4-digit code we emailed to " + mail + "."); return; }
       await establish(res.token_hash, res.mustChange);
@@ -7465,8 +7469,9 @@ function LoginFlow({ onLogin }) {
     setErr(""); if (!/^\d{4}$/.test(code.trim())) { setErr("Enter the 4-digit code from your email."); return; }
     setBusy(true);
     try {
-      const res = await api("verify_2fa", { email, code: code.trim() });
+      const res = await api("verify_2fa", { email, code: code.trim(), deviceId: getDeviceId() });
       if (!res.ok) { setErr(friendly(res.reason)); setBusy(false); if (res.reason === "locked" || res.reason === "expired") { setStage("creds"); setCode(""); setPw(""); } return; }
+      if (res.trustToken) setTrustToken(res.trustToken);
       await establish(res.token_hash, res.mustChange);
     } catch (e) { setErr("Could not reach the server. Check your connection."); setBusy(false); }
   };

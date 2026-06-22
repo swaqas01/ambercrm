@@ -18,6 +18,15 @@ const svcClient  = () => createClient(SUPABASE_URL, SERVICE_KEY, { auth: { autoR
 const anonClient = () => createClient(SUPABASE_URL, ANON_KEY,    { auth: { autoRefreshToken: false, persistSession: false } });
 const gen4 = () => String(Math.floor(1000 + Math.random() * 9000));
 const hashCode = (code, email) => crypto.createHash("sha256").update(String(code) + "|" + email.toLowerCase() + "|" + OTP_PEPPER).digest("hex");
+const sha256pep = (s) => crypto.createHash("sha256").update(String(s) + "|" + OTP_PEPPER).digest("hex");
+const genTrustToken = () => crypto.randomBytes(32).toString("hex");
+const TRUST_DAYS = 7, MAX_TRUSTED_DEVICES = 2;
+function uaParts(ua) {
+  ua = String(ua || "");
+  const os = /iphone|ipad|ipod/i.test(ua) ? "iPhone/iPad" : /android/i.test(ua) ? "Android" : /windows/i.test(ua) ? "Windows" : /mac os x|macintosh/i.test(ua) ? "Mac" : /linux/i.test(ua) ? "Linux" : "Device";
+  const br = /edg\//i.test(ua) ? "Edge" : /(chrome|crios)/i.test(ua) ? "Chrome" : /(firefox|fxios)/i.test(ua) ? "Firefox" : /safari/i.test(ua) ? "Safari" : "Browser";
+  return { os, browser: br, label: os + " \u00b7 " + br };
+}
 
 async function logAuth(svc, o) {
   try { await svc.from("auth_logs").insert({ user_id: o.user_id || null, email: o.email || null, event: o.event,
@@ -41,8 +50,9 @@ export default async function handler(req, res) {
   const svc = svcClient();
   const ip = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || null;
   const device = String(req.headers["user-agent"] || "").slice(0, 240) || null;
-  const { action, password, code } = req.body || {};
-  const email = String((req.body || {}).email || "").trim().toLowerCase();
+  const reqBody = req.body || {};
+  const { action, password, code } = reqBody;
+  const email = String(reqBody.email || "").trim().toLowerCase();
 
   try {
     if (action === "start") {
@@ -64,6 +74,27 @@ export default async function handler(req, res) {
       const expired = !!(prof.password_expires_at && new Date(prof.password_expires_at).getTime() < now);
       const mustChange = !!prof.force_password_change || !!prof.first_login || expired;
       const needs2fa = prof.twofa_required === true;
+
+      // ---- Trusted-device fast path: a device that completed 2FA within the last 7 days skips 2FA. ----
+      const deviceId = String(reqBody.deviceId || "").slice(0, 200);
+      const trustToken = String(reqBody.trustToken || "");
+      if (needs2fa && deviceId && trustToken) {
+        try {
+          const dh = sha256pep(deviceId), th = sha256pep(trustToken);
+          const { data: sess } = await svc.from("user_device_sessions")
+            .select("id, trusted_until, is_active, revoked_at")
+            .eq("user_id", uid).eq("device_id_hash", dh).eq("session_id_hash", th).limit(1).maybeSingle();
+          if (sess && sess.is_active && !sess.revoked_at && sess.trusted_until && new Date(sess.trusted_until).getTime() > now) {
+            await svc.from("user_device_sessions").update({ last_seen_at: new Date().toISOString(), ip_address: ip, user_agent: device }).eq("id", sess.id);
+            const { data: link2, error: lErr2 } = await svc.auth.admin.generateLink({ type: "magiclink", email });
+            if (!lErr2 && link2?.properties?.hashed_token) {
+              await logAuth(svc, { user_id: uid, email, event: "trusted_session_refreshed", status: "ok", reason: "trusted_device", ip, device });
+              await logAuth(svc, { user_id: uid, email, event: "login_success", status: "ok", reason: "trusted_device", ip, device });
+              return res.status(200).json({ ok: true, needs2fa: false, token_hash: link2.properties.hashed_token, mustChange, expired, trusted: true });
+            }
+          }
+        } catch (e) {}
+      }
 
       if (needs2fa && RESEND_API_KEY) {
         const codeV = gen4();
@@ -94,13 +125,44 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: false, reason: "invalid", remaining: Math.max(0, 5 - (otp.attempts + 1)) });
       }
       await svc.from("auth_otp").update({ used: true }).eq("id", otp.id);
-      const { data: prof } = await svc.from("profiles").select("force_password_change, first_login, password_expires_at").eq("email", email).single();
+      const { data: prof } = await svc.from("profiles").select("id, force_password_change, first_login, password_expires_at").eq("email", email).single();
       const now = Date.now(); const expired = !!(prof?.password_expires_at && new Date(prof.password_expires_at).getTime() < now);
       const mustChange = !!(prof?.force_password_change) || !!(prof?.first_login) || expired;
       const { data: link, error: lErr } = await svc.auth.admin.generateLink({ type: "magiclink", email });
       if (lErr || !link?.properties?.hashed_token) return res.status(200).json({ ok: false, reason: "server" });
-      await logAuth(svc, { user_id: prof ? undefined : null, email, event: "2fa_success", status: "ok", ip, device });
-      await logAuth(svc, { email, event: "login_success", status: "ok", ip, device });
+      await logAuth(svc, { user_id: prof?.id || null, email, event: "two_factor_verified", status: "ok", ip, device });
+      await logAuth(svc, { user_id: prof?.id || null, email, event: "login_success", status: "ok", ip, device });
+      // ---- Create / refresh this device's 7-day trusted session (max 2 active; oldest revoked on overflow). ----
+      const dev2fa = String(reqBody.deviceId || "").slice(0, 200);
+      if (dev2fa && prof?.id) {
+        try {
+          const uid2 = prof.id;
+          const trustTokenNew = genTrustToken();
+          const dh = sha256pep(dev2fa), th = sha256pep(trustTokenNew);
+          const nowIso = new Date().toISOString();
+          const trustedUntil = new Date(Date.now() + TRUST_DAYS * 24 * 3600 * 1000).toISOString();
+          const { data: already } = await svc.from("user_device_sessions").select("id").eq("user_id", uid2).eq("device_id_hash", dh).limit(1).maybeSingle();
+          if (!already) {
+            const { data: act } = await svc.from("user_device_sessions").select("id, created_at")
+              .eq("user_id", uid2).eq("is_active", true).is("revoked_at", null).gt("trusted_until", nowIso).order("created_at", { ascending: true });
+            if (act && act.length >= MAX_TRUSTED_DEVICES) {
+              for (const rr of act.slice(0, act.length - (MAX_TRUSTED_DEVICES - 1))) {
+                await svc.from("user_device_sessions").update({ is_active: false, revoked_at: nowIso, revoked_reason: "third_device_login" }).eq("id", rr.id);
+                await logAuth(svc, { user_id: uid2, email, event: "session_revoked_due_to_third_device", status: "ok", ip, device });
+              }
+            }
+          }
+          const p = uaParts(device);
+          await svc.from("user_device_sessions").upsert({
+            user_id: uid2, device_id_hash: dh, session_id_hash: th,
+            device_label: p.label, browser: p.browser, os: p.os, ip_address: ip, user_agent: device,
+            last_seen_at: nowIso, last_2fa_verified_at: nowIso, trusted_until: trustedUntil,
+            revoked_at: null, revoked_reason: null, is_active: true,
+          }, { onConflict: "user_id,device_id_hash" });
+          await logAuth(svc, { user_id: uid2, email, event: "trusted_session_created", status: "ok", ip, device });
+          return res.status(200).json({ ok: true, token_hash: link.properties.hashed_token, mustChange, expired, trustToken: trustTokenNew });
+        } catch (e) {}
+      }
       return res.status(200).json({ ok: true, token_hash: link.properties.hashed_token, mustChange, expired });
     }
 
@@ -130,6 +192,7 @@ export default async function handler(req, res) {
       const expires = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
       await svc.from("profiles").update({ force_password_change: false, first_login: false, password_last_changed_at: new Date().toISOString(), password_expires_at: expires }).eq("id", uid);
       await logAuth(svc, { user_id: uid, email: who.user.email, event: "password_changed", status: "ok", ip, device });
+      try { await svc.from("user_device_sessions").update({ is_active: false, revoked_at: new Date().toISOString(), revoked_reason: "password_changed" }).eq("user_id", uid).eq("is_active", true); } catch (e) {}
       return res.status(200).json({ ok: true });
     }
 
