@@ -6628,7 +6628,7 @@ function buildBreakdownDoc(JsPDF, mode, d, r, user, lh, future) {
     sect("Seller Position");
     row("Resale Selling Price", brAed(r.resalePrice));
     row("Amount Paid to Developer", brAed(r.amountPaid) + "  (" + r.pctPaid.toFixed(1) + "%)");
-    row(r.isDiscount ? "Seller Discount" : "Seller Premium", (r.isDiscount ? "\u2212 " : "") + brAed(Math.abs(r.premium)));
+    row(r.isDiscount ? "Seller Discount" : "Seller Premium", brAed(Math.abs(r.premium)), r.isDiscount ? { color: RED } : undefined);
     row("Total Payable to Seller Now", brAed(r.payableToSeller), { bold: true });
     if (r.hasNoc) {
       sect("Developer NOC Payment Requirement");
