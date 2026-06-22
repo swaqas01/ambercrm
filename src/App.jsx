@@ -2582,13 +2582,19 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
     setRevealMsg("");
     if (isAdmin) { setRevealed(true); }
     else {
-      // Reveal state is strictly per (lead, user): every lead starts MASKED, then unmasks ONLY if this
-      // exact agent already revealed this exact lead before — so Next never inherits Lead A's reveal.
+      // Reveal state is strictly per (lead, user): every lead starts MASKED, so Next never inherits a reveal.
       setRevealed(false); setPrevReveal(false);
-      try {
-        const { data: pr } = await supabase.from("lead_reveals").select("id").eq("lead_id", leadId).eq("agent_id", me.id).limit(1);
-        if (pr && pr.length) { setRevealed(true); setPrevReveal(true); }
-      } catch (e) {}
+      // Open-pool leads the agent does NOT own: ALWAYS require a fresh reveal, so every single access is
+      // logged + quota-counted (no "previously revealed" shortcut). Only the agent's OWN leads restore a
+      // prior reveal — so they aren't re-charged for re-opening a lead they already hold.
+      const owns = me && (l.assigned_agent === me.id || l.created_by === me.id || l.current_owner === me.id);
+      const openPoolNotOwned = l.is_open === true && !owns;
+      if (!openPoolNotOwned) {
+        try {
+          const { data: pr } = await supabase.from("lead_reveals").select("id").eq("lead_id", leadId).eq("agent_id", me.id).limit(1);
+          if (pr && pr.length) { setRevealed(true); setPrevReveal(true); }
+        } catch (e) {}
+      }
     }
     if (isAdmin) {
       const { data: ag } = await supabase.from("profiles").select("id, full_name, role, active").eq("active", true).order("full_name");
