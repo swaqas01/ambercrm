@@ -618,7 +618,21 @@ export default function App() {
     let mounted = true;
     (async () => {
       if (!/type=recovery/.test(typeof window !== "undefined" ? (window.location.hash || "") : "")) {
-        const { data: { session } } = await supabase.auth.getSession();
+        let { data: { session } } = await supabase.auth.getSession();
+        if (!session?.user && mounted) {
+          // No local session (e.g. iOS/Safari wiped app storage). Try a silent restore from the
+          // HttpOnly trust cookie — no password, no 2FA — before falling back to the login screen.
+          try {
+            const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 5000);
+            const rr = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ action: "rehydrate" }), signal: ctl.signal });
+            clearTimeout(to);
+            const jj = await rr.json().catch(() => ({}));
+            if (jj && jj.ok && jj.token_hash) {
+              const { error: vErr } = await supabase.auth.verifyOtp({ token_hash: jj.token_hash, type: "magiclink" });
+              if (!vErr) { session = (await supabase.auth.getSession()).data.session; }
+            }
+          } catch (e) {}
+        }
         if (session?.user && mounted) {
           // Sessions no longer force-expire for anyone — they persist and the access token auto-refreshes
           // from the long-lived refresh token. (A first-seen stamp is kept only for the security record.)
@@ -642,7 +656,7 @@ export default function App() {
     return () => { mounted = false; };
   }, []);
   useEffect(() => { if (user) registerDevice(); }, [user]);   // record device + honor remote/cap sign-out
-  const signOut = async () => { clearTrustToken(); await supabase.auth.signOut(); setUser(null); };
+  const signOut = async () => { clearTrustToken(); try { await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ action: "logout" }) }); } catch (e) {} await supabase.auth.signOut(); setUser(null); };
   const [accent, setAccent] = useState("gold");
   const ACCENTS = [["gold", "Violet", "#7C5CFA"], ["emerald", "Emerald", "#1F6B52"],
     ["sapphire", "Sapphire", "#2C4E78"], ["burgundy", "Burgundy", "#7C2D3E"]];
@@ -7435,7 +7449,7 @@ function LoginFlow({ onLogin }) {
   }[reason] || "Something went wrong. Please try again.");
 
   const api = async (action, body) => {
-    const r = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...body }) });
+    const r = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ action, ...body }) });
     return r.json();
   };
   const fetchProfileAndFinish = async (uid) => {

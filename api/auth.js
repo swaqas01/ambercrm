@@ -28,6 +28,18 @@ function uaParts(ua) {
   return { os, browser: br, label: os + " \u00b7 " + br };
 }
 
+const TRUST_COOKIE = "amber_trust";
+function setTrustCookie(res, token) {
+  res.setHeader("Set-Cookie", TRUST_COOKIE + "=" + encodeURIComponent(token) + "; Max-Age=" + (TRUST_DAYS * 24 * 3600) + "; Path=/; HttpOnly; Secure; SameSite=Lax");
+}
+function clearTrustCookie(res) {
+  res.setHeader("Set-Cookie", TRUST_COOKIE + "=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax");
+}
+function readTrustCookie(req) {
+  const m = String(req.headers.cookie || "").match(/(?:^|;\s*)amber_trust=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+
 async function logAuth(svc, o) {
   try { await svc.from("auth_logs").insert({ user_id: o.user_id || null, email: o.email || null, event: o.event,
     status: o.status || "info", reason: o.reason || null, ip: o.ip || null, device: o.device || null }); } catch (e) {}
@@ -55,6 +67,40 @@ export default async function handler(req, res) {
   const email = String(reqBody.email || "").trim().toLowerCase();
 
   try {
+    if (action === "rehydrate") {
+      const tok = readTrustCookie(req);
+      if (!tok) return res.status(200).json({ ok: false, reason: "no_cookie" });
+      try {
+        const th = sha256pep(tok);
+        const { data: sess } = await svc.from("user_device_sessions")
+          .select("id, user_id, trusted_until, is_active, revoked_at")
+          .eq("session_id_hash", th).limit(1).maybeSingle();
+        if (!sess || !sess.is_active || sess.revoked_at || !sess.trusted_until || new Date(sess.trusted_until).getTime() <= Date.now()) {
+          clearTrustCookie(res);
+          return res.status(200).json({ ok: false, reason: "expired" });
+        }
+        const { data: rprof } = await svc.from("profiles").select("email, active").eq("id", sess.user_id).maybeSingle();
+        if (!rprof || rprof.active === false) { clearTrustCookie(res); return res.status(200).json({ ok: false, reason: "inactive" }); }
+        const remail = String(rprof.email || "").trim().toLowerCase();
+        const { data: rlink, error: rErr } = await svc.auth.admin.generateLink({ type: "magiclink", email: remail });
+        if (rErr || !rlink?.properties?.hashed_token) return res.status(200).json({ ok: false, reason: "server" });
+        await svc.from("user_device_sessions").update({ last_seen_at: new Date().toISOString(), ip_address: ip, user_agent: device }).eq("id", sess.id);
+        setTrustCookie(res, tok);
+        await logAuth(svc, { user_id: sess.user_id, email: remail, event: "trusted_session_refreshed", status: "ok", reason: "rehydrate", ip, device });
+        await logAuth(svc, { user_id: sess.user_id, email: remail, event: "login_success", status: "ok", reason: "rehydrate", ip, device });
+        return res.status(200).json({ ok: true, token_hash: rlink.properties.hashed_token });
+      } catch (e) { return res.status(200).json({ ok: false, reason: "server" }); }
+    }
+
+    if (action === "logout") {
+      try {
+        const tok = readTrustCookie(req);
+        if (tok) { const th = sha256pep(tok); await svc.from("user_device_sessions").update({ is_active: false, revoked_at: new Date().toISOString(), revoked_reason: "logout" }).eq("session_id_hash", th); }
+      } catch (e) {}
+      clearTrustCookie(res);
+      return res.status(200).json({ ok: true });
+    }
+
     if (action === "start") {
       if (!email || !password) return res.status(400).json({ ok: false, reason: "missing" });
       await logAuth(svc, { email, event: "login_attempt", ip, device });
@@ -90,6 +136,7 @@ export default async function handler(req, res) {
             if (!lErr2 && link2?.properties?.hashed_token) {
               await logAuth(svc, { user_id: uid, email, event: "trusted_session_refreshed", status: "ok", reason: "trusted_device", ip, device });
               await logAuth(svc, { user_id: uid, email, event: "login_success", status: "ok", reason: "trusted_device", ip, device });
+              setTrustCookie(res, trustToken);
               return res.status(200).json({ ok: true, needs2fa: false, token_hash: link2.properties.hashed_token, mustChange, expired, trusted: true });
             }
           }
@@ -160,6 +207,7 @@ export default async function handler(req, res) {
             revoked_at: null, revoked_reason: null, is_active: true,
           }, { onConflict: "user_id,device_id_hash" });
           await logAuth(svc, { user_id: uid2, email, event: "trusted_session_created", status: "ok", ip, device });
+          setTrustCookie(res, trustTokenNew);
           return res.status(200).json({ ok: true, token_hash: link.properties.hashed_token, mustChange, expired, trustToken: trustTokenNew });
         } catch (e) {}
       }
