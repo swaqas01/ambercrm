@@ -8012,7 +8012,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
         {total > PAGE && (() => { const totalPages = Math.max(1, Math.ceil(total / PAGE)); return (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "10px 14px", borderBottom: `1px solid ${T.hairSoft}`, background: T.bone }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12, color: T.muted }}>
-              <span>Showing {(page * PAGE + 1).toLocaleString()}\u2013{Math.min((page + 1) * PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
+              <span>Showing {(page * PAGE + 1).toLocaleString()}–{Math.min((page + 1) * PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Per page
                 <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))} style={{ border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, fontFamily: UI, color: T.ink, background: T.paper, cursor: "pointer" }}>
                   <option value={30}>30</option><option value={50}>50</option><option value={100}>100</option>
@@ -8020,13 +8020,13 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <button onClick={() => setPage(0)} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>\u00ab</button>
-              <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>\u2039 Prev</button>
+              <button onClick={() => setPage(0)} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>«</button>
+              <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>‹ Prev</button>
               {pageWindow(page, totalPages).map((n, i) => n === -1
-                ? <span key={"e" + i} style={{ color: T.faint, padding: "0 2px", fontSize: 12 }}>\u2026</span>
+                ? <span key={"e" + i} style={{ color: T.faint, padding: "0 2px", fontSize: 12 }}>…</span>
                 : <button key={n} onClick={() => setPage(n)} disabled={loading} style={{ ...miniBtn(), minWidth: 34, fontWeight: n === page ? 800 : 600, background: n === page ? T.btnBg : T.paper, color: n === page ? T.btnFg : T.ink, borderColor: n === page ? T.btnBg : T.hair, cursor: loading ? "default" : "pointer" }}>{(n + 1).toLocaleString()}</button>)}
-              <button onClick={() => setPage((p) => ((p + 1) * PAGE < total ? p + 1 : p))} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>Next \u203a</button>
-              <button onClick={() => setPage(totalPages - 1)} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>\u00bb</button>
+              <button onClick={() => setPage((p) => ((p + 1) * PAGE < total ? p + 1 : p))} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>Next ›</button>
+              <button onClick={() => setPage(totalPages - 1)} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>»</button>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: T.muted }}>Go to
                 <input type="number" min={1} max={totalPages} value={jumpVal} onChange={(e) => setJumpVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { const n = Math.min(totalPages, Math.max(1, parseInt(jumpVal || "1", 10) || 1)); setPage(n - 1); setJumpVal(""); } }} placeholder={String(page + 1)} style={{ width: 56, border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, fontFamily: UI, color: T.ink, background: T.paper }} />
                 <button onClick={() => { const n = Math.min(totalPages, Math.max(1, parseInt(jumpVal || "1", 10) || 1)); setPage(n - 1); setJumpVal(""); }} disabled={loading} style={{ ...miniBtn(), cursor: loading ? "default" : "pointer" }}>Go</button>
