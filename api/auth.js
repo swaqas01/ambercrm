@@ -20,7 +20,7 @@ const gen4 = () => String(Math.floor(1000 + Math.random() * 9000));
 const hashCode = (code, email) => crypto.createHash("sha256").update(String(code) + "|" + email.toLowerCase() + "|" + OTP_PEPPER).digest("hex");
 const sha256pep = (s) => crypto.createHash("sha256").update(String(s) + "|" + OTP_PEPPER).digest("hex");
 const genTrustToken = () => crypto.randomBytes(32).toString("hex");
-const TRUST_DAYS = 7, MAX_TRUSTED_DEVICES = 2;
+const TRUST_DAYS = 7, MAX_TRUSTED_DEVICES = 3;
 function uaParts(ua) {
   ua = String(ua || "");
   const os = /iphone|ipad|ipod/i.test(ua) ? "iPhone/iPad" : /android/i.test(ua) ? "Android" : /windows/i.test(ua) ? "Windows" : /mac os x|macintosh/i.test(ua) ? "Mac" : /linux/i.test(ua) ? "Linux" : "Device";
@@ -179,7 +179,7 @@ export default async function handler(req, res) {
       if (lErr || !link?.properties?.hashed_token) return res.status(200).json({ ok: false, reason: "server" });
       await logAuth(svc, { user_id: prof?.id || null, email, event: "two_factor_verified", status: "ok", ip, device });
       await logAuth(svc, { user_id: prof?.id || null, email, event: "login_success", status: "ok", ip, device });
-      // ---- Create / refresh this device's 7-day trusted session (max 2 active; oldest revoked on overflow). ----
+      // ---- Create / refresh this device's 7-day trusted session (max 3 active; oldest revoked on overflow). ----
       const dev2fa = String(reqBody.deviceId || "").slice(0, 200);
       if (dev2fa && prof?.id) {
         try {
