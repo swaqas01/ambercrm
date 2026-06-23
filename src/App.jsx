@@ -7669,6 +7669,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const [loading, setLoading] = useState(true);
   const [pageSize, setPageSize] = useState([30, 50, 100].includes(_vc.pageSize) ? _vc.pageSize : 50);   // leads per page (adjustable)
   const [allIds, setAllIds] = useState([]);   // all matching lead IDs (id-only, loaded in background) so Prev/Next can span pages
+  const [jumpVal, setJumpVal] = useState("");
   const PAGE = pageSize;
   const LEAD_COLS = "id,lead_code,client_name,phone,whatsapp,email,lead_type,project,area,budget,purpose,property_type,status,temperature,source,next_followup,last_contacted,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,original_agent,created_at,created_on,deleted";
   const firstRun = useRef(true);
@@ -7738,17 +7739,18 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     const uid = au?.id;
     try {
       const sc = SORT_COL[sort] || SORT_COL.newest;
-      const { data: rows, error } = await applyFilters(supabase.from("leads").select(LEAD_COLS), tab, uid)
-        .order(sc[0], { ascending: sc[1], nullsFirst: false }).range(page * PAGE, page * PAGE + PAGE - 1);
-      if (error) throw error;
-      setLeads(rows || []);
-      const tc = await applyFilters(supabase.from("leads").select("id", { count: "exact", head: true }), tab, uid);
-      setTotal(typeof tc.count === "number" ? tc.count : (rows || []).length);
-      const counts = {};
-      await Promise.all(TABS.map(async (t) => {
+      const [rowsRes, tcRes] = await Promise.all([
+        applyFilters(supabase.from("leads").select(LEAD_COLS), tab, uid).order(sc[0], { ascending: sc[1], nullsFirst: false }).range(page * PAGE, page * PAGE + PAGE - 1),
+        applyFilters(supabase.from("leads").select("id", { count: "exact", head: true }), tab, uid),
+      ]);
+      if (rowsRes.error) throw rowsRes.error;
+      const rows = rowsRes.data || [];
+      setLeads(rows);
+      setTotal(typeof tcRes.count === "number" ? tcRes.count : rows.length);
+      setLoading(false);   // list + pagination interactive as soon as rows + total are in (tab badges fill in below)
+      (async () => { const counts = {}; await Promise.all(TABS.map(async (t) => {
         try { const r = await applyFilters(supabase.from("leads").select("id", { count: "exact", head: true }), t, uid); counts[t] = r.count ?? 0; } catch (e) { counts[t] = 0; }
-      }));
-      setTabCounts(counts);
+      })); setTabCounts(counts); })();
       // background: gather ALL matching IDs (id-only, light) so Prev/Next can step across page boundaries
       (async () => { try {
         const sc2 = SORT_COL[sort] || SORT_COL.newest;
@@ -8007,6 +8009,31 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       </div>
     ) : (
       <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
+        {total > PAGE && (() => { const totalPages = Math.max(1, Math.ceil(total / PAGE)); return (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "10px 14px", borderBottom: `1px solid ${T.hairSoft}`, background: T.bone }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12, color: T.muted }}>
+              <span>Showing {(page * PAGE + 1).toLocaleString()}\u2013{Math.min((page + 1) * PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Per page
+                <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))} style={{ border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, fontFamily: UI, color: T.ink, background: T.paper, cursor: "pointer" }}>
+                  <option value={30}>30</option><option value={50}>50</option><option value={100}>100</option>
+                </select>
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <button onClick={() => setPage(0)} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>\u00ab</button>
+              <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>\u2039 Prev</button>
+              {pageWindow(page, totalPages).map((n, i) => n === -1
+                ? <span key={"e" + i} style={{ color: T.faint, padding: "0 2px", fontSize: 12 }}>\u2026</span>
+                : <button key={n} onClick={() => setPage(n)} disabled={loading} style={{ ...miniBtn(), minWidth: 34, fontWeight: n === page ? 800 : 600, background: n === page ? T.btnBg : T.paper, color: n === page ? T.btnFg : T.ink, borderColor: n === page ? T.btnBg : T.hair, cursor: loading ? "default" : "pointer" }}>{(n + 1).toLocaleString()}</button>)}
+              <button onClick={() => setPage((p) => ((p + 1) * PAGE < total ? p + 1 : p))} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>Next \u203a</button>
+              <button onClick={() => setPage(totalPages - 1)} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>\u00bb</button>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: T.muted }}>Go to
+                <input type="number" min={1} max={totalPages} value={jumpVal} onChange={(e) => setJumpVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { const n = Math.min(totalPages, Math.max(1, parseInt(jumpVal || "1", 10) || 1)); setPage(n - 1); setJumpVal(""); } }} placeholder={String(page + 1)} style={{ width: 56, border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, fontFamily: UI, color: T.ink, background: T.paper }} />
+                <button onClick={() => { const n = Math.min(totalPages, Math.max(1, parseInt(jumpVal || "1", 10) || 1)); setPage(n - 1); setJumpVal(""); }} disabled={loading} style={{ ...miniBtn(), cursor: loading ? "default" : "pointer" }}>Go</button>
+              </span>
+            </div>
+          </div>
+        ); })()}
         <div style={{ overflowX: "auto" }}>
           <div style={{ minWidth: isAgent ? 900 : 2040 }}>
             <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr" : "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
@@ -8099,6 +8126,14 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     {showBulk && <BulkAssignModal count={selectAllMatching ? total : selIds.length} agents={assignable} onClose={() => setShowBulk(false)} onRun={runBulk} />}
     {toast && <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.ink, color: "#fff", padding: "11px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600, zIndex: 200, boxShadow: T.shadowLg }}>{toast}</div>}
   </div>;
+}
+function pageWindow(cur, totalP) {
+  if (totalP <= 7) return Array.from({ length: totalP }, (_, i) => i);
+  const picked = [0, totalP - 1, cur, cur - 1, cur + 1].filter((n) => n >= 0 && n < totalP);
+  const uniq = Array.from(new Set(picked)).sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < uniq.length; i++) { if (i && uniq[i] - uniq[i - 1] > 1) out.push(-1); out.push(uniq[i]); }
+  return out;
 }
 function miniBtn() { return { background: T.paper, color: T.ink, border: `1px solid ${T.hair}`, borderRadius: 9,
   padding: "8px 13px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: UI,
