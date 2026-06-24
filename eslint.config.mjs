@@ -1,0 +1,14 @@
+import globals from "globals";
+export default [{
+  files: ["src/**/*.jsx","src/**/*.js"],
+  languageOptions: {
+    ecmaVersion: 2022, sourceType: "module",
+    parserOptions: { ecmaFeatures: { jsx: true } },
+    globals: { ...globals.browser, ...globals.serviceworker,
+      crypto:"readonly", TextEncoder:"readonly", TextDecoder:"readonly", Uint8Array:"readonly",
+      PushManager:"readonly", self:"readonly", caches:"readonly", process:"readonly",
+      CustomEvent:"readonly", Notification:"readonly", FileReader:"readonly", Blob:"readonly",
+      atob:"readonly", btoa:"readonly", requestAnimationFrame:"readonly", AbortController:"readonly" }
+  },
+  rules: { "no-undef":"error" }
+}];

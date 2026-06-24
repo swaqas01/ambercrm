@@ -8009,31 +8009,6 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       </div>
     ) : (
       <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
-        {total > PAGE && (() => { const totalPages = Math.max(1, Math.ceil(total / PAGE)); return (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "10px 14px", borderBottom: `1px solid ${T.hairSoft}`, background: T.bone }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12, color: T.muted }}>
-              <span>Showing {(page * PAGE + 1).toLocaleString()}–{Math.min((page + 1) * PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Per page
-                <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))} style={{ border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, fontFamily: UI, color: T.ink, background: T.paper, cursor: "pointer" }}>
-                  <option value={30}>30</option><option value={50}>50</option><option value={100}>100</option>
-                </select>
-              </span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <button onClick={() => setPage(0)} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>«</button>
-              <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>‹ Prev</button>
-              {pageWindow(page, totalPages).map((n, i) => n === -1
-                ? <span key={"e" + i} style={{ color: T.faint, padding: "0 2px", fontSize: 12 }}>…</span>
-                : <button key={n} onClick={() => setPage(n)} disabled={loading} style={{ ...miniBtn(), minWidth: 34, fontWeight: n === page ? 800 : 600, background: n === page ? T.btnBg : T.paper, color: n === page ? T.btnFg : T.ink, borderColor: n === page ? T.btnBg : T.hair, cursor: loading ? "default" : "pointer" }}>{(n + 1).toLocaleString()}</button>)}
-              <button onClick={() => setPage((p) => ((p + 1) * PAGE < total ? p + 1 : p))} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>Next ›</button>
-              <button onClick={() => setPage(totalPages - 1)} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>»</button>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: T.muted }}>Go to
-                <input type="number" min={1} max={totalPages} value={jumpVal} onChange={(e) => setJumpVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { const n = Math.min(totalPages, Math.max(1, parseInt(jumpVal || "1", 10) || 1)); setPage(n - 1); setJumpVal(""); } }} placeholder={String(page + 1)} style={{ width: 56, border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, fontFamily: UI, color: T.ink, background: T.paper }} />
-                <button onClick={() => { const n = Math.min(totalPages, Math.max(1, parseInt(jumpVal || "1", 10) || 1)); setPage(n - 1); setJumpVal(""); }} disabled={loading} style={{ ...miniBtn(), cursor: loading ? "default" : "pointer" }}>Go</button>
-              </span>
-            </div>
-          </div>
-        ); })()}
         <div style={{ overflowX: "auto" }}>
           <div style={{ minWidth: isAgent ? 900 : 2040 }}>
             <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr" : "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
@@ -8095,25 +8070,33 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 <span style={{ fontSize: 11, color: T.faint }}>{createdByLabel(l)}</span>
               </div>
             )))}
-            {total > 30 && (
-              <div style={{ padding: "14px 16px", borderTop: `1px solid ${T.hairSoft}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 12, color: T.muted }}>Showing {(page * PAGE + 1).toLocaleString()}–{Math.min((page + 1) * PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: T.muted }}>Per page
-                    <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))} style={{ border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, fontFamily: UI, color: T.ink, background: T.paper, cursor: "pointer" }}>
-                      <option value={30}>30</option><option value={50}>50</option><option value={100}>100</option>
-                    </select>
-                  </span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>‹ Prev</button>
-                  <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, whiteSpace: "nowrap" }}>Page {page + 1} / {Math.max(1, Math.ceil(total / PAGE))}</span>
-                  <button onClick={() => setPage((p) => ((p + 1) * PAGE < total ? p + 1 : p))} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>Next ›</button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
+        {total > PAGE && (() => { const totalPages = Math.max(1, Math.ceil(total / PAGE)); return (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "10px 14px", borderTop: `1px solid ${T.hairSoft}`, background: T.bone }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12, color: T.muted }}>
+              <span>Showing {(page * PAGE + 1).toLocaleString()}–{Math.min((page + 1) * PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Per page
+                <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))} style={{ border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, fontFamily: UI, color: T.ink, background: T.paper, cursor: "pointer" }}>
+                  <option value={30}>30</option><option value={50}>50</option><option value={100}>100</option>
+                </select>
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <button onClick={() => setPage(0)} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>«</button>
+              <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading} style={{ ...miniBtn(), opacity: (page === 0 || loading) ? 0.45 : 1, cursor: (page === 0 || loading) ? "default" : "pointer" }}>‹ Prev</button>
+              {pageWindow(page, totalPages).map((n, i) => n === -1
+                ? <span key={"e" + i} style={{ color: T.faint, padding: "0 2px", fontSize: 12 }}>…</span>
+                : <button key={n} onClick={() => setPage(n)} disabled={loading} style={{ ...miniBtn(), minWidth: 34, fontWeight: n === page ? 800 : 600, background: n === page ? T.btnBg : T.paper, color: n === page ? T.btnFg : T.ink, borderColor: n === page ? T.btnBg : T.hair, cursor: loading ? "default" : "pointer" }}>{(n + 1).toLocaleString()}</button>)}
+              <button onClick={() => setPage((p) => ((p + 1) * PAGE < total ? p + 1 : p))} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>Next ›</button>
+              <button onClick={() => setPage(totalPages - 1)} disabled={(page + 1) * PAGE >= total || loading} style={{ ...miniBtn(), opacity: ((page + 1) * PAGE >= total || loading) ? 0.45 : 1, cursor: ((page + 1) * PAGE >= total || loading) ? "default" : "pointer" }}>»</button>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: T.muted }}>Go to
+                <input type="number" min={1} max={totalPages} value={jumpVal} onChange={(e) => setJumpVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { const n = Math.min(totalPages, Math.max(1, parseInt(jumpVal || "1", 10) || 1)); setPage(n - 1); setJumpVal(""); } }} placeholder={String(page + 1)} style={{ width: 56, border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, fontFamily: UI, color: T.ink, background: T.paper }} />
+                <button onClick={() => { const n = Math.min(totalPages, Math.max(1, parseInt(jumpVal || "1", 10) || 1)); setPage(n - 1); setJumpVal(""); }} disabled={loading} style={{ ...miniBtn(), cursor: loading ? "default" : "pointer" }}>Go</button>
+              </span>
+            </div>
+          </div>
+        ); })()}
       </div>
     )}
     <div style={{ fontSize: 11, color: T.faint, marginTop: 10 }}>
