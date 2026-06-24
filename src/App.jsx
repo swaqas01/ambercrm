@@ -2610,10 +2610,10 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
         } catch (e) {}
       }
     }
-    if (isAdmin) {
-      const { data: ag } = await supabase.from("profiles").select("id, full_name, role, active").eq("active", true).order("full_name");
-      setAgents(ag || []);
-    }
+    try {
+      const { data: ag } = await supabase.rpc("user_directory");
+      setAgents((ag || []).slice().sort((a, b) => String(a.full_name || "").localeCompare(String(b.full_name || ""))));
+    } catch (e) {}
     const [{ data: cs }, { data: ts }, { data: fs }] = await Promise.all([
       supabase.from("lead_comments").select("*, author:profiles!lead_comments_author_id_fkey(full_name, role)").eq("lead_id", leadId).eq("deleted", false).order("created_at", { ascending: false }),
       supabase.from("lead_activity").select("*, actor:profiles!lead_activity_actor_id_fkey(full_name, role)").eq("lead_id", leadId).order("created_at", { ascending: false }).limit(60),
@@ -3039,8 +3039,8 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
           comments.map((c) => (
           <div key={c.id} style={{ padding: "10px 0", borderBottom: `1px solid ${T.hairSoft}` }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Av name={c.author?.full_name || "User"} size={24} />
-              <span style={{ fontSize: 12.5, fontWeight: 700 }}>{c.author?.full_name || "User"}</span>
+              <Av name={c.author?.full_name || agentNameFor(c.author_id) || "User"} size={24} />
+              <span style={{ fontSize: 12.5, fontWeight: 700 }}>{c.author?.full_name || agentNameFor(c.author_id) || (c.author_id ? "User" : "Imported")}</span>
               <span style={{ fontSize: 10, color: T.faint }}>{roleLabel(c.author?.role)}</span>
               <span style={{ fontSize: 10, color: T.faint, marginLeft: "auto" }}>{when(c.created_at)}</span>
               {(isAdmin || c.author_id === (me && me.id)) && <button onClick={() => delComment(c)} title="Delete"
@@ -3064,7 +3064,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600 }}>{actText(t)}</div>
-            <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>{t.actor?.full_name || "System"} · {roleLabel(t.actor?.role)} · {when(t.created_at)}</div>
+            <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>{t.actor?.full_name || agentNameFor(t.actor_id) || "System"} · {roleLabel(t.actor?.role)} · {when(t.created_at)}</div>
           </div>
         </div>
       ))}
@@ -5148,6 +5148,8 @@ function DealDetail({ dealId, user, go }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [ov, setOv] = useState(null); // commission override buffer
+  const [dir, setDir] = useState([]);
+  const dirName = (id) => { const a = dir.find((x) => x.id === id); return a ? a.full_name : null; };
 
   const load = async () => {
     const { data: d, error } = await supabase.from("deals").select("*").eq("id", dealId).single();
@@ -5158,6 +5160,7 @@ function DealDetail({ dealId, user, go }) {
       supabase.from("deal_activity").select("*, actor:profiles!deal_activity_actor_id_fkey(full_name, role)").eq("deal_id", dealId).order("created_at", { ascending: false }).limit(60),
     ]);
     setDocs(dd || []); setActs(aa || []);
+    try { const { data: ag } = await supabase.rpc("user_directory"); setDir(ag || []); } catch (e) {}
   };
   useEffect(() => { load(); }, [dealId]);
 
@@ -5286,7 +5289,7 @@ function DealDetail({ dealId, user, go }) {
         acts.map((t, i) => <div key={t.id} style={{ display: "flex", gap: 11, paddingBottom: i === acts.length - 1 ? 0 : 14 }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}><div style={{ width: 9, height: 9, borderRadius: 9, background: T.gold, marginTop: 3 }} />{i !== acts.length - 1 && <div style={{ width: 2, flex: 1, background: T.hairSoft, marginTop: 3 }} />}</div>
           <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, textTransform: "capitalize" }}>{String(t.action).replace(/_/g, " ")}{t.detail && t.detail.note ? ' — "' + t.detail.note + '"' : ""}</div>
-            <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>{t.actor?.full_name || "System"} · {when(t.created_at)}</div></div>
+            <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>{t.actor?.full_name || dirName(t.actor_id) || "System"} · {when(t.created_at)}</div></div>
         </div>)}
     </div>
     {err && <div style={{ ...card, padding: 12, marginTop: 12, borderColor: T.badSoft, color: T.bad, fontSize: 12.5 }}>{err}</div>}
