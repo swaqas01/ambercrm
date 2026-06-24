@@ -3260,6 +3260,146 @@ function ApMiniBar({ done, target, color }) {
   );
 }
 
+function RevealQuotaPanel({ onClose }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sel, setSel] = useState({});
+  const [editId, setEditId] = useState(null);
+  const [editVal, setEditVal] = useState("");
+  const [bulkVal, setBulkVal] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const load = async () => {
+    setErr(""); setMsg("");
+    try {
+      const { data, error } = await supabase.rpc("admin_reveal_usage");
+      if (error) throw error;
+      setRows(data || []);
+    } catch (e) { setErr((e && e.message) || "Could not load reveal quotas."); setRows([]); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const apply = async (ids, opts) => {
+    if (!ids || !ids.length) return;
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const { data, error } = await supabase.rpc("admin_set_reveal_quota", {
+        p_agent_ids: ids,
+        p_weekly: (opts.weekly != null && opts.weekly !== "") ? Math.max(0, parseInt(opts.weekly, 10) || 0) : null,
+        p_clear: !!opts.clear,
+        p_reset: !!opts.reset,
+      });
+      if (error) throw error;
+      if (data && data.error) throw new Error(data.error === "forbidden" ? "Only Master Admin can change limits." : data.error);
+      setMsg(opts.reset ? ("Usage reset for " + ids.length + " agent(s).") : opts.clear ? "Reset to the global default limit." : ("Limit updated for " + ids.length + " agent(s)."));
+      setEditId(null); setEditVal("");
+      await load();
+    } catch (e) { setErr((e && e.message) || "Update failed."); }
+    setBusy(false);
+  };
+
+  const selIds = rows ? rows.filter((r) => sel[r.id]).map((r) => r.id) : [];
+  const allOn = rows && rows.length > 0 && selIds.length === rows.length;
+  const toggleAll = () => { if (!rows) return; if (allOn) setSel({}); else { const n = {}; rows.forEach((r) => { n[r.id] = true; }); setSel(n); } };
+  const fmtReset = (t) => t ? new Date(t).toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "2-digit" }) : "\u2014";
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(20,18,15,.55)", zIndex: 9999, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "4vh 12px", overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: "100%", maxWidth: 900, padding: 0, overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 18px", borderBottom: `1px solid ${T.hairSoft}`, background: T.bone }}>
+          <Eye size={18} color={T.gold} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 800, color: T.ink }}>Weekly reveal quotas</div>
+            <div style={{ fontSize: 11.5, color: T.muted, marginTop: 1 }}>Contact reveals each agent may make per rolling 7 days. Admins are unlimited.</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", padding: 4 }}><X size={18} /></button>
+        </div>
+
+        {msg && <div style={{ padding: "8px 18px", fontSize: 12.5, color: T.ok, background: T.okSoft }}>{msg}</div>}
+        {err && <div style={{ padding: "8px 18px", fontSize: 12.5, color: T.bad, background: T.badSoft }}>{err}</div>}
+
+        {selIds.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 18px", borderBottom: `1px solid ${T.hairSoft}`, background: T.paper }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>{selIds.length} selected</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12, color: T.muted }}>Set weekly limit to</span>
+              <input type="number" min={0} value={bulkVal} onChange={(e) => setBulkVal(e.target.value)} placeholder="e.g. 300" style={{ width: 92, border: `1px solid ${T.hair}`, borderRadius: 8, padding: "6px 9px", fontSize: 12.5, fontFamily: UI, color: T.ink, background: T.paper }} />
+              <button disabled={busy || bulkVal === ""} onClick={() => { apply(selIds, { weekly: bulkVal }); setBulkVal(""); }} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold, opacity: (busy || bulkVal === "") ? 0.5 : 1 }}>Apply to selected</button>
+            </span>
+            <button disabled={busy} onClick={() => apply(selIds, { clear: true })} style={{ ...miniBtn(), opacity: busy ? 0.5 : 1 }}>Set to default</button>
+            <button disabled={busy} onClick={() => apply(selIds, { reset: true })} style={{ ...miniBtn(), opacity: busy ? 0.5 : 1 }}>Reset usage</button>
+            <button onClick={() => setSel({})} style={{ ...miniBtn() }}>Clear</button>
+          </div>
+        )}
+
+        <div style={{ maxHeight: "62vh", overflowY: "auto", overflowX: "auto" }}>
+          {rows === null ? <div style={{ padding: 24, color: T.muted, fontSize: 13 }}>Loading\u2026</div>
+            : rows.length === 0 ? <div style={{ padding: 24, color: T.muted, fontSize: 13 }}>{err ? "" : "No agents found."}</div>
+            : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 620 }}>
+              <thead>
+                <tr style={{ background: T.bone, color: T.muted, textAlign: "left" }}>
+                  <th style={{ padding: "9px 10px 9px 18px", width: 30 }}><input type="checkbox" checked={!!allOn} onChange={toggleAll} /></th>
+                  <th style={{ padding: "9px 8px" }}>Agent</th>
+                  <th style={{ padding: "9px 8px" }}>Limit / week</th>
+                  <th style={{ padding: "9px 8px" }}>Used</th>
+                  <th style={{ padding: "9px 8px" }}>Remaining</th>
+                  <th style={{ padding: "9px 8px" }}>Last reset</th>
+                  <th style={{ padding: "9px 18px 9px 8px", textAlign: "right" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const editing = editId === r.id;
+                  const low = r.remaining <= 20;
+                  return (
+                    <tr key={r.id} style={{ borderTop: `1px solid ${T.hairSoft}` }}>
+                      <td style={{ padding: "9px 10px 9px 18px" }}><input type="checkbox" checked={!!sel[r.id]} onChange={(e) => setSel((p) => ({ ...p, [r.id]: e.target.checked }))} /></td>
+                      <td style={{ padding: "9px 8px" }}>
+                        <div style={{ fontWeight: 700, color: T.ink }}>{r.full_name || "\u2014"}</div>
+                        <div style={{ fontSize: 10.5, color: T.faint }}>{roleLabel(r.role)}{r.active === false ? " \u00b7 inactive" : ""}</div>
+                      </td>
+                      <td style={{ padding: "9px 8px" }}>
+                        {editing ? (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <input type="number" min={0} autoFocus value={editVal} onChange={(e) => setEditVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && editVal !== "") apply([r.id], { weekly: editVal }); if (e.key === "Escape") { setEditId(null); setEditVal(""); } }} style={{ width: 82, border: `1px solid ${T.hair}`, borderRadius: 8, padding: "5px 8px", fontSize: 12.5, fontFamily: UI, color: T.ink, background: T.paper }} />
+                            <button disabled={busy || editVal === ""} onClick={() => apply([r.id], { weekly: editVal })} style={{ ...miniBtn(), padding: "5px 9px", borderColor: T.gold, color: T.gold, opacity: (busy || editVal === "") ? 0.5 : 1 }}>Save</button>
+                            <button onClick={() => { setEditId(null); setEditVal(""); }} style={{ ...miniBtn(), padding: "5px 9px" }}>Cancel</button>
+                          </span>
+                        ) : (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <b style={{ color: T.ink }}>{r.effective_limit}</b>
+                            <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 6, color: r.is_custom ? T.gold : T.faint, background: r.is_custom ? (T.warnSoft) : T.hairSoft }}>{r.is_custom ? "custom" : "default"}</span>
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: "9px 8px", color: T.inkSoft }}>{r.used_week}</td>
+                      <td style={{ padding: "9px 8px", color: low ? T.bad : T.inkSoft, fontWeight: low ? 700 : 500 }}>{r.remaining}</td>
+                      <td style={{ padding: "9px 8px", color: T.muted }}>{fmtReset(r.reset_at)}</td>
+                      <td style={{ padding: "9px 18px 9px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                        {!editing && (<span>
+                          <button onClick={() => { setEditId(r.id); setEditVal(String(r.effective_limit)); }} style={{ ...miniBtn(), padding: "5px 9px" }}>Edit</button>
+                          {r.is_custom && <button disabled={busy} onClick={() => apply([r.id], { clear: true })} title="Use the global default" style={{ ...miniBtn(), padding: "5px 9px", marginLeft: 6 }}>Default</button>}
+                          <button disabled={busy} onClick={() => apply([r.id], { reset: true })} title="Reset this week's usage" style={{ ...miniBtn(), padding: "5px 9px", marginLeft: 6 }}>Reset</button>
+                        </span>)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div style={{ padding: "10px 18px", borderTop: `1px solid ${T.hairSoft}`, fontSize: 10.5, color: T.faint, lineHeight: 1.5 }}>
+          The limit caps contact reveals over a rolling 7-day window. "Reset" starts this agent's week from now (the reveal history and audit log are preserved). Raising a limit never grants access to leads an agent is not already allowed to see.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AgentPerformance({ user, go, openAgent }) {
   const isMaster = !!(user && user.role === "master_admin");
   const canView = !!(user && (user.role === "master_admin" || user.role === "admin"));
@@ -3270,6 +3410,7 @@ function AgentPerformance({ user, go, openAgent }) {
   const [roleF, setRoleF] = useState("all");
   const [statusF, setStatusF] = useState("all");
   const [state, setState] = useState({ loading: true, rows: [], err: "" });
+  const [quotaOpen, setQuotaOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -3375,7 +3516,7 @@ function AgentPerformance({ user, go, openAgent }) {
 
   return (
     <div style={{ maxWidth: 1180, margin: "0 auto" }}>
-      <SectionTitle right={isMaster ? <button onClick={() => go("targets")} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Manage targets</button> : null}>Agent Performance</SectionTitle>
+      <SectionTitle right={isMaster ? <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><button onClick={() => setQuotaOpen(true)} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Reveal quotas</button><button onClick={() => go("targets")} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Manage targets</button></span> : null}>Agent Performance</SectionTitle>
 
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 13 }}>
         {AP_PERIODS.map(([p, l]) => {
@@ -3443,6 +3584,7 @@ function AgentPerformance({ user, go, openAgent }) {
       <div style={{ fontSize: 10.5, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>
         All counts are real action logs in Dubai time. Calls = call actions, WhatsApp = WhatsApp actions, Reveals = contact-number reveals — counted separately. Deals closed and Net to Amber come only from <b>approved</b> deals in the Deals module (hot resale / listings are never counted). Call / WhatsApp target bars apply to Today / Week / Month.{canSeeCommission ? "" : " Commission is hidden for your role."}
       </div>
+      {quotaOpen && <RevealQuotaPanel onClose={() => setQuotaOpen(false)} />}
     </div>
   );
 }
