@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Component } from "react";
-import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall, resolveRole, MASTER_ADMIN_EMAIL } from "./supabase.js";
+import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall, resolveRole, MASTER_ADMIN_EMAIL, logActivityReliable, stampContactedReliable } from "./supabase.js";
 import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, isPureGreeting, categorize, logAi, fetchKnowledge, pickKnowledge } from "./mentors.js";
 import {
   BookOpen, Pencil, Trash2, Save, Check,
@@ -2410,7 +2410,7 @@ function AgentDash({ go, user, openLead, onAvatar }) {
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button onClick={() => openLead && openLead(f.lead_id)} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11 }}>Open</button>
                     {f.lead?.phone && <button title="WhatsApp" onClick={() => window.open(waHref(f.lead.phone), "_blank")} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11, borderColor: WA, color: WA }}><MessageCircle size={12} /></button>}
-                    {f.lead?.phone && <button title="Call" onClick={() => { window.location.href = telHref(f.lead.phone); }} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11 }}><Phone size={12} /></button>}
+                    {f.lead?.phone && <button title="Call" onClick={() => { logActivityReliable("call", { id: f.lead_id, client_name: f.lead && f.lead.client_name }, user && user.id); stampContactedReliable(f.lead_id, user && user.id); window.location.href = telHref(f.lead.phone); }} style={{ ...miniBtn(), padding: "6px 10px", fontSize: 11 }}><Phone size={12} /></button>}
                   </div>
                 </div>
               ))}
@@ -2450,7 +2450,7 @@ function AgentDash({ go, user, openLead, onAvatar }) {
                   style={{ width: 34, height: 34, borderRadius: 9, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
                   <MessageCircle size={15} color={WA} /></a>}
                 {l.phone && <a href={telHref(l.phone)}
-                  onClick={(e) => { e.stopPropagation(); logAction("call", l, user && user.id); }}
+                  onClick={(e) => { e.stopPropagation(); logActivityReliable("call", l, user && user.id); stampContactedReliable(l.id, user && user.id); }}
                   style={{ width: 34, height: 34, borderRadius: 9, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
                   <Phone size={14} color={T.inkSoft} /></a>}
               </div>
@@ -2926,7 +2926,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
     <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
       {!revealed && <Btn icon={Eye} label="View Number" onClick={reveal} />}
       {revealed && prevReveal && !isAdmin && <span style={{ alignSelf: "center", fontSize: 11, fontWeight: 600, color: T.muted, background: T.bone, border: `1px solid ${T.hair}`, borderRadius: 7, padding: "4px 9px" }}>Previously revealed</span>}
-      {revealed && lead.phone && <Btn icon={Phone} label="Call" onClick={() => { logAction("call", lead, me && me.id); markContacted(); window.location.href = telHref(lead.phone); }} />}
+      {revealed && lead.phone && <Btn icon={Phone} label="Call" onClick={() => { logActivityReliable("call", lead, me && me.id); markContacted(); stampContactedReliable(lead.id, me && me.id); window.location.href = telHref(lead.phone); }} />}
       {(revealed || !mustRevealOpen) && lead.phone && <Btn icon={MessageCircle} label="WhatsApp" tone="wa" onClick={() => { logAction("whatsapp", lead, me && me.id); markContacted(); window.open(waHref(lead.phone), "_blank"); }} />}
       {revealed && lead.email && <Btn icon={Mail} label="Email" onClick={() => { logAction("email", lead, me && me.id); markContacted(); window.location.href = "mailto:" + lead.email; }} />}
       {user && user.role === "agent" && lead.is_open && <Btn icon={UserPlus} label="Assign to Me" tone="ok" onClick={doAssignSelf} />}
@@ -8189,7 +8189,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.okSoft, display: "grid", placeItems: "center", textDecoration: "none" }}>
                     <MessageCircle size={14} color={WA} /></a>}
                   {l.phone && <a href={telHref(l.phone)} title="Call"
-                    onClick={(e) => { e.stopPropagation(); logAction("call", l, me && me.id); }}
+                    onClick={(e) => { e.stopPropagation(); logActivityReliable("call", l, me && me.id); stampContactedReliable(l.id, me && me.id); }}
                     style={{ width: 30, height: 30, borderRadius: 8, background: T.bone, border: `1px solid ${T.hair}`, display: "grid", placeItems: "center", textDecoration: "none" }}>
                     <Phone size={13} color={T.inkSoft} /></a>}
                   </>}

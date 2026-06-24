@@ -54,3 +54,42 @@ export async function adminCall(action, payload) {
     body: JSON.stringify({ action, payload }) });
   return res.json();
 }
+
+// --- Reliable activity logging that survives mobile navigation to tel: -------------------------
+// A normal supabase insert is sent with fetch and is CANCELLED when the page navigates to the
+// phone dialer (tel:), so on mobile/PWA call clicks were being lost: an agent could tap Call many
+// times and have almost none recorded. fetch(..., { keepalive: true }) tells the browser to finish
+// the request even as the page unloads. RLS is unchanged — the row is still written as the
+// signed-in user (actor_id must equal auth.uid()). We cache the access token so the call path is
+// fully synchronous (no await) before the dialer opens.
+let _amberToken = null;
+try { supabase.auth.getSession().then(({ data }) => { _amberToken = (data && data.session && data.session.access_token) || null; }, () => {}); } catch (e) {}
+try { supabase.auth.onAuthStateChange((_e, session) => { _amberToken = (session && session.access_token) || null; }); } catch (e) {}
+
+export function logActivityReliable(action, lead, actorId, extra) {
+  if (!actorId) return;
+  const row = { lead_id: (lead && lead.id) || null, actor_id: actorId, action,
+    detail: { client: lead && lead.client_name, lead_code: lead && lead.lead_code, ...(extra || {}) } };
+  try {
+    if (_amberToken) {
+      fetch(URL + "/rest/v1/lead_activity", { method: "POST", keepalive: true,
+        headers: { apikey: KEY, Authorization: "Bearer " + _amberToken, "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify(row) }).catch(() => {});
+      return;
+    }
+  } catch (e) {}
+  // Fallback only if the token is not cached yet (e.g. very first action after load).
+  try { supabase.from("lead_activity").insert(row).then(() => {}, () => {}); } catch (e) {}
+}
+
+// Reliable "last contacted" stamp (also survives navigation). Mirrors markContacted's write.
+export function stampContactedReliable(leadId, actorId) {
+  if (!leadId || !actorId || !_amberToken) return;
+  const nowIso = new Date().toISOString();
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+  try {
+    fetch(URL + "/rest/v1/leads?id=eq." + leadId, { method: "PATCH", keepalive: true,
+      headers: { apikey: KEY, Authorization: "Bearer " + _amberToken, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({ last_contacted: today, last_contacted_at: nowIso, last_contacted_by: actorId }) }).catch(() => {});
+  } catch (e) {}
+}
