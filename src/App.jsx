@@ -25,6 +25,9 @@ const T = {
 const WA = "#25D366"; // official WhatsApp green — used for all WhatsApp actions in both themes
 const THEME_CSS = `
   html, body { background:#130a26; }
+  /* Lead/list grids: keep every row's columns identical and clip long values to one line. */
+  .amber-grid > * { min-width: 0; }
+  .amber-grid > *:not(:first-child) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [data-amber] button { font-family:'Lato', system-ui, -apple-system, sans-serif; font-weight:700; }
   [data-amber] {
     --ink:#0F172A; --inkSoft:#334155; --muted:#64748B; --faint:#94A3B8;
@@ -8169,14 +8172,14 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       <div style={{ ...card, overflow: "hidden", marginTop: 14 }}>
         <div style={{ overflowX: "auto" }}>
           <div style={{ minWidth: isAgent ? 900 : 2040 }}>
-            <div style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr" : "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
+            <div className="amber-grid" style={{ display: "grid", gridTemplateColumns: isAgent ? "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr" : "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr", gap: 8,
               padding: "10px 16px", fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
               color: T.muted, borderBottom: `1px solid ${T.hair}`, background: T.bone }}>
               {isAgent ? <><span>Client</span><span>Project</span><span>Location</span><span>Budget</span><span>Next follow-up</span><span>Status</span><span>Contact</span></>
                        : <><span style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 3, background: T.bone, margin: "-10px 0", padding: "10px 0" }}><input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} title="Select all visible" style={{ cursor: "pointer", width: 14, height: 14 }} /></span><span>Date</span><span>Client</span><span>Phone</span><span>Email</span><span>Agent</span><span>Type</span><span>Project</span><span>Area</span><span>Source</span><span>Status</span><span>Temp</span><span>Last contact</span><span>Next f/u</span><span>Created by</span></>}
             </div>
             {filtered.map((l, i) => (isAgent ? (
-              <div key={l.id} onClick={() => { try { sessionStorage.setItem("amber_lvscroll_" + viewKey, String(window.scrollY || 0)); } catch (e) {} openLead && openLead(l.id, allIds.length ? allIds : filtered.map((x) => x.id)); }} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
+              <div key={l.id} onClick={() => { try { sessionStorage.setItem("amber_lvscroll_" + viewKey, String(window.scrollY || 0)); } catch (e) {} openLead && openLead(l.id, allIds.length ? allIds : filtered.map((x) => x.id)); }} className="amber-grid" style={{ display: "grid", gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr 1.1fr 0.85fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12.5, cursor: "pointer" }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{l.client_name}
@@ -8209,7 +8212,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
                 </span>
               </div>
             ) : (
-              <div key={l.id} onClick={() => { try { sessionStorage.setItem("amber_lvscroll_" + viewKey, String(window.scrollY || 0)); } catch (e) {} openLead && openLead(l.id, allIds.length ? allIds : filtered.map((x) => x.id)); }} style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
+              <div key={l.id} onClick={() => { try { sessionStorage.setItem("amber_lvscroll_" + viewKey, String(window.scrollY || 0)); } catch (e) {} openLead && openLead(l.id, allIds.length ? allIds : filtered.map((x) => x.id)); }} className="amber-grid" style={{ display: "grid", gridTemplateColumns: "0.5fr 1.2fr 1.5fr 1.2fr 1.4fr 1.1fr 0.85fr 1.2fr 0.9fr 0.9fr 0.9fr 0.85fr 0.95fr 0.95fr 1fr",
                 gap: 8, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${T.hairSoft}` : "none", fontSize: 12, cursor: "pointer", background: selected[l.id] ? T.goldSoft : "transparent" }}>
                 <span onClick={(e) => e.stopPropagation()} style={{ display: "grid", placeItems: "center", position: "sticky", left: 0, zIndex: 2, background: selected[l.id] ? T.goldSoft : T.paper, margin: "-12px 0", padding: "12px 0" }}><input type="checkbox" checked={!!selected[l.id]} onChange={() => toggleSel(l.id)} style={{ cursor: "pointer", width: 14, height: 14 }} /></span>
                 <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 600, lineHeight: 1.3 }}>{fmtDubai(l.created_at || l.created_on)}</span>
