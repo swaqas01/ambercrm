@@ -711,7 +711,7 @@ export default function App() {
     if (user && screen !== "lead" && screen !== "dealdetail" && screen !== "agentprofile") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} openAgent={openAgent} />, admin: <AdminDash go={go} user={user} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />, devices: <DevicesSecurity user={user} />, breakdown: <BreakdownCalculator user={user} narrow={narrow} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} openAgent={openAgent} />, admin: <AdminDash go={go} user={user} openLead={openLead} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />, devices: <DevicesSecurity user={user} />, breakdown: <BreakdownCalculator user={user} narrow={narrow} />,
     myprofile: <AgentProfile user={user} agentId={user && user.id} self go={go} openLead={openLead} openAgent={openAgent} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, agentprofile: <AgentProfile user={user} agentId={agentDetailId} go={go} openLead={openLead} openAgent={openAgent} />, agents: <AgentsRoster user={user} go={go} openAgent={openAgent} />, targets: <TargetsAdmin user={user} go={go} openAgent={openAgent} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <AgentPerformance user={user} go={go} openAgent={openAgent} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
@@ -982,7 +982,7 @@ function BackupExport({ user }) {
   );
 }
 
-function DuplicateLeads({ user }) {
+function DuplicateLeads({ user, openLead }) {
   const [busy, setBusy] = useState(false);
   const [groups, setGroups] = useState(null); // null = not scanned yet
   const [err, setErr] = useState("");
@@ -990,15 +990,12 @@ function DuplicateLeads({ user }) {
   const scan = async () => {
     setBusy(true); setErr(""); setGroups(null);
     try {
-      const { data, error } = await supabase.from("leads")
-        .select("id, client_name, phone, email, assigned_agent_name, status, temperature, is_open, created_at")
-        .eq("deleted", false).limit(10000);
+      const { data, error } = await supabase.rpc("find_duplicate_leads");
       if (error) throw error;
       const byKey = {};
-      const add = (key, kind, l) => { if (!key) return; const k = kind + "|" + key; (byKey[k] = byKey[k] || { key, kind, leads: [] }).leads.push(l); };
-      (data || []).forEach((l) => {
-        const ph = normIntl(l.phone); if (ph && ph.length >= 7) add(ph, "phone", l);
-        const em = String(l.email || "").trim().toLowerCase(); if (/.+@.+\..+/.test(em)) add(em, "email", l);
+      (data || []).forEach((r) => {
+        const k = r.kind + "|" + r.group_key;
+        (byKey[k] = byKey[k] || { key: r.group_key, kind: r.kind, leads: [] }).leads.push({ id: r.lead_id, client_name: r.client_name, phone: r.phone, email: r.email, assigned_agent_name: r.assigned_agent_name, status: r.status, temperature: r.temperature, is_open: r.is_open, created_at: r.created_at });
       });
       const clusters = Object.values(byKey).map((g) => {
         const seen = new Set(); const uniq = g.leads.filter((l) => (seen.has(l.id) ? false : (seen.add(l.id), true)));
@@ -1027,7 +1024,7 @@ function DuplicateLeads({ user }) {
             {groups.slice(0, 50).map((g, i) => (
               <div key={i} style={{ border: `1px solid ${g.crossAgent ? T.badSoft : T.hair}`, borderRadius: 10, padding: "10px 12px", background: T.bone }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft }}>{g.kind === "phone" ? "Phone: +" + g.key : "Email: " + g.key}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft }}>{g.kind === "phone" ? "Phone: " + g.key : "Email: " + g.key}</span>
                   <span style={{ fontSize: 10, fontWeight: 700, background: T.goldSoft, color: T.gold, borderRadius: 6, padding: "1px 6px" }}>{g.leads.length} leads</span>
                   {g.crossAgent && <span style={{ fontSize: 10, fontWeight: 700, background: T.badSoft, color: T.bad, borderRadius: 6, padding: "1px 6px" }}>{g.agents.length} different agents</span>}
                 </div>
@@ -1038,6 +1035,7 @@ function DuplicateLeads({ user }) {
                       <span>{l.assigned_agent_name || (l.is_open ? "Open pool" : "Unassigned")}</span><span style={{ color: T.faint }}>·</span>
                       <span style={{ color: T.muted }}>{l.status || "—"}</span><span style={{ color: T.faint }}>·</span>
                       <span style={{ color: T.faint }}>{fmtDate(l.created_at)}</span>
+                      {openLead && <button onClick={() => openLead(l.id)} style={{ ...miniBtn(), padding: "2px 9px", fontSize: 10.5, marginLeft: "auto", borderColor: T.gold, color: T.gold }}>View</button>}
                     </div>
                   ))}
                 </div>
@@ -1051,7 +1049,7 @@ function DuplicateLeads({ user }) {
   </>);
 }
 
-function AdminDash({ go, user }) {
+function AdminDash({ go, user, openLead }) {
   const [leads, setLeads] = useState(null);
   const [acts, setActs] = useState([]);
   const [profs, setProfs] = useState([]);
@@ -1310,7 +1308,7 @@ function AdminDash({ go, user }) {
         </button>
       ))}
     </div>
-    <DuplicateLeads user={user} />
+    <DuplicateLeads user={user} openLead={openLead} />
     <BackupExport user={user} />
   </div>;
 }
