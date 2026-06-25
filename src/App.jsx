@@ -697,9 +697,10 @@ export default function App() {
   }, [user]);
   // role guard — agents may only open their own surfaces
   useEffect(() => {
-    if (user && !canOpen(user.role, screen)) {
+    const masterHidden = user && user.role === "master_admin" && (screen === "assign" || screen === "pipeline");
+    if (user && (!canOpen(user.role, screen) || masterHidden)) {
       try { console.warn("[access-denied] blocked screen access", { email: user.email, role: user.role, screen, at: new Date().toISOString() }); } catch (e) {}
-      setScreen(roleInfo(user.role).home === "agent" ? "agent" : "admin");
+      setScreen(masterHidden ? "live" : (roleInfo(user.role).home === "agent" ? "agent" : "admin"));
     }
   }, [user, screen]);
   // Remember the current top-level screen so a refresh returns here (detail screens need an id, so skip them).
@@ -743,7 +744,7 @@ export default function App() {
             <div style={{ fontFamily: DISPLAY, fontSize: 9.5, letterSpacing: ".34em", color: T.gold, marginTop: 4, fontWeight: 700 }}>REAL ESTATE CRM</div>
           </div>
           <nav style={{ flex: 1, overflowY: "auto", padding: "12px 12px" }}>
-            {NAV.filter(([k]) => user && canOpen(user.role, k)).map(([k, label0, Ic]) => {
+            {NAV.filter(([k]) => user && canOpen(user.role, k) && !(user.role === "master_admin" && (k === "assign" || k === "pipeline"))).map(([k, label0, Ic]) => {
               const label = screenLabel(k, user);
               const on = screen === k;
               return (
