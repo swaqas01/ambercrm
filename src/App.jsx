@@ -7826,6 +7826,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   useEffect(() => { const v = { q, dq, tab, sort, agentFilter, typeFilter, page, pageSize }; LEADS_VIEW_CACHE[viewKey] = v; try { sessionStorage.setItem("amber_lv_" + viewKey, JSON.stringify(v)); } catch (e) {} }, [viewKey, q, dq, tab, sort, agentFilter, typeFilter, page, pageSize]); // remember filters across open-lead → back (survives reload)
   const scrollRestored = useRef(false);
   const reqRef = useRef(0);   // ignore results from stale (superseded) loads
+  const lastTabSig = useRef(null);   // recompute tab counts only when the filter set changes (not on page/sort)
   useEffect(() => { if (leads && !scrollRestored.current) { scrollRestored.current = true; let y = 0; try { y = parseInt(sessionStorage.getItem("amber_lvscroll_" + viewKey) || "0", 10); } catch (e) {} if (y > 0) { requestAnimationFrame(() => { try { window.scrollTo(0, y); } catch (e) {} }); try { sessionStorage.removeItem("amber_lvscroll_" + viewKey); } catch (e) {} } } }, [leads]); // restore scroll once when returning from a lead
 
   // Build the leads query with EVERY scope/permission rule + active filters applied AT THE DATABASE.
@@ -7905,21 +7906,20 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       setLeads(rows);
       setTotal(typeof tcRes.count === "number" ? tcRes.count : rows.length);
       setLoading(false);   // list + pagination interactive as soon as rows + total are in (tab badges fill in below)
-      (async () => { const counts = {}; await Promise.all(TABS.map(async (t) => {
-        try { const r = await applyFilters(supabase.from("leads").select("id", { count: "exact", head: true }), t, uid); counts[t] = r.count ?? 0; } catch (e) { counts[t] = 0; }
-      })); setTabCounts(counts); })();
+      const tabSig = (dq || "") + "|" + (agentFilter || "") + "|" + (typeFilter || "") + "|" + (uid || "");
+      if (tabSig !== lastTabSig.current) {
+        lastTabSig.current = tabSig;
+        (async () => { const counts = {}; await Promise.all(TABS.map(async (t) => {
+          try { const r = await applyFilters(supabase.from("leads").select("id", { count: "exact", head: true }), t, uid); counts[t] = r.count ?? 0; } catch (e) { counts[t] = 0; }
+        })); setTabCounts(counts); })();
+      }
       // background: gather ALL matching IDs (id-only, light) so Prev/Next can step across page boundaries
       (async () => { try {
         const sc2 = SORT_COL[sort] || SORT_COL.newest;
-        let ids = [], from = 0;
-        for (;;) {
-          const { data, error } = await applyFilters(supabase.from("leads").select("id"), tab, uid).order(sc2[0], { ascending: sc2[1], nullsFirst: false }).range(from, from + 999);
-          if (error) break;
-          ids = ids.concat((data || []).map((r) => r.id));
-          if (!data || data.length < 1000) break;
-          from += 1000; if (from >= 100000) break;
-        }
-        setAllIds(ids);
+        // One light request (first 1000 ids) so Prev/Next can step across the first pages without
+        // paging the entire table on every load. Beyond that, navigation falls back to the page.
+        const { data } = await applyFilters(supabase.from("leads").select("id"), tab, uid).order(sc2[0], { ascending: sc2[1], nullsFirst: false }).range(0, 999);
+        setAllIds((data || []).map((r) => r.id));
       } catch (e) {} })();
     } catch (error) {
       if (myReq !== reqRef.current) return;          // stale failure — ignore so it can't blank a good list
