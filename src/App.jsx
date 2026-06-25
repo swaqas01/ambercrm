@@ -7823,6 +7823,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   useEffect(() => { setSelected({}); }, [page]);   // page-specific selection clears when paging
   useEffect(() => { const v = { q, dq, tab, sort, agentFilter, typeFilter, page, pageSize }; LEADS_VIEW_CACHE[viewKey] = v; try { sessionStorage.setItem("amber_lv_" + viewKey, JSON.stringify(v)); } catch (e) {} }, [viewKey, q, dq, tab, sort, agentFilter, typeFilter, page, pageSize]); // remember filters across open-lead → back (survives reload)
   const scrollRestored = useRef(false);
+  const reqRef = useRef(0);   // ignore results from stale (superseded) loads
   useEffect(() => { if (leads && !scrollRestored.current) { scrollRestored.current = true; let y = 0; try { y = parseInt(sessionStorage.getItem("amber_lvscroll_" + viewKey) || "0", 10); } catch (e) {} if (y > 0) { requestAnimationFrame(() => { try { window.scrollTo(0, y); } catch (e) {} }); try { sessionStorage.removeItem("amber_lvscroll_" + viewKey); } catch (e) {} } } }, [leads]); // restore scroll once when returning from a lead
 
   // Build the leads query with EVERY scope/permission rule + active filters applied AT THE DATABASE.
@@ -7865,8 +7866,15 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     // lead type (Buyer also matches legacy null type, to mirror the old default)
     if (typeFilter) query = (typeFilter === "Buyer") ? query.or("lead_type.eq.Buyer,lead_type.is.null") : query.eq("lead_type", typeFilter);
     // search (server-side ilike; sanitized so the or-filter can't be broken)
-    if (dq.trim()) { const s = dq.trim().replace(/[,()%*"]/g, " ").replace(/\s+/g, " ").trim();
-      if (s) query = query.or(`client_name.ilike.%${s}%,project.ilike.%${s}%,area.ilike.%${s}%,assigned_agent_name.ilike.%${s}%,lead_code.ilike.%${s}%,status.ilike.%${s}%`); }
+    if (dq.trim()) {
+      const raw = dq.trim();
+      const s = raw.replace(/[,()%*"\\]/g, " ").replace(/\s+/g, " ").trim();        // text-safe for the or-filter
+      const core = raw.replace(/\D/g, "").replace(/^0+/, "");                       // phone digits, leading zeros dropped
+      const ors = [];
+      if (s) ors.push(`client_name.ilike.%${s}%`, `project.ilike.%${s}%`, `area.ilike.%${s}%`, `assigned_agent_name.ilike.%${s}%`, `lead_code.ilike.%${s}%`, `email.ilike.%${s}%`, `status.ilike.%${s}%`);
+      if (core.length >= 4) ors.push(`normalized_phone.ilike.%${core}%`, `phone.ilike.%${core}%`, `whatsapp.ilike.%${core}%`);
+      if (ors.length) query = query.or(ors.join(","));
+    }
     // tab
     if (tabVal && tabVal !== "all") {
       if (tabVal === "Follow-up due") query = NOT_CLOSED(query.not("next_followup", "is", null).lte("next_followup", tday));
@@ -7878,6 +7886,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   };
   const SORT_COL = { newest: ["created_at", false], oldest: ["created_at", true], agent: ["assigned_agent_name", true], status: ["status", true], temp: ["temperature", true], source: ["source", true], project: ["project", true], area: ["area", true], lastcontact: ["last_contacted", false], nextfu: ["next_followup", true] };
   const load = async () => {
+    const myReq = ++reqRef.current;
     setLoading(true); setErr(""); setAllIds([]);
     let au = me;
     if (!au) { try { const r = await supabase.auth.getUser(); au = r.data?.user; setMe(au); } catch (e) {} }
@@ -7888,6 +7897,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
         applyFilters(supabase.from("leads").select(LEAD_COLS), tab, uid).order(sc[0], { ascending: sc[1], nullsFirst: false }).range(page * PAGE, page * PAGE + PAGE - 1),
         applyFilters(supabase.from("leads").select("id", { count: "exact", head: true }), tab, uid),
       ]);
+      if (myReq !== reqRef.current) return;          // a newer search started — drop this stale result
       if (rowsRes.error) throw rowsRes.error;
       const rows = rowsRes.data || [];
       setLeads(rows);
@@ -7910,8 +7920,10 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
         setAllIds(ids);
       } catch (e) {} })();
     } catch (error) {
+      if (myReq !== reqRef.current) return;          // stale failure — ignore so it can't blank a good list
       try { console.error("[Leads load failed]", { page, tab, uid, code: error.code, message: error.message, details: error.details, hint: error.hint, at: new Date().toISOString() }); } catch (e) {}
-      setErr("Unable to load leads right now. Please refresh or contact admin."); setLeads([]); setTotal(0);
+      // Non-destructive: keep whatever is already on screen and offer a retry instead of wiping to 0.
+      setErr((leads && leads.length) ? "Couldn't refresh the list — showing the last results. Tap Retry." : "Lead search could not complete. Tap Retry.");
     }
     setLoading(false);
     if (!isAgent && agents.length === 0) {
@@ -8057,7 +8069,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
       </div>
     </div>
 
-    {err && <div style={{ ...card, padding: 14, marginTop: 14, borderColor: T.badSoft, color: T.bad, fontSize: 13 }}>{err}</div>}
+    {err && <div style={{ ...card, padding: 14, marginTop: 14, borderColor: T.badSoft, color: T.bad, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}><span>{err}</span><button onClick={() => load()} style={{ ...miniBtn(), borderColor: T.bad, color: T.bad }}>Retry</button></div>}
 
     <div style={{ ...card, padding: "10px 14px", marginTop: 14, display: "flex", alignItems: "center", gap: 9 }}>
       <Search size={15} color={T.muted} />
