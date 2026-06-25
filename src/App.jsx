@@ -1050,7 +1050,7 @@ function DuplicateLeads({ user, openLead }) {
 }
 
 function AdminDash({ go, user, openLead }) {
-  const [leads, setLeads] = useState(null);
+  const [stats, setStats] = useState(null);
   const [acts, setActs] = useState([]);
   const [profs, setProfs] = useState([]);
   const [err, setErr] = useState("");
@@ -1060,21 +1060,21 @@ function AdminDash({ go, user, openLead }) {
     (async () => {
       try {
         const monthStartIso = new Date(dubaiToday().slice(0, 7) + "-01T00:00:00+04:00").toISOString();   // every activity metric is today/month/10-min, so only this month is needed
-        const [lr, ar, pr] = await Promise.all([
-          fetchAllRows("leads", "created_at,updated_at,status,temperature,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,source,next_followup,deal_value,commission_value").then((data) => ({ data })).catch((error) => ({ error })),
+        const [sr, ar, pr] = await Promise.all([
+          supabase.rpc("admin_dashboard_stats"),
           supabase.from("lead_activity").select("actor_id,action,created_at").gte("created_at", monthStartIso).order("created_at", { ascending: false }).limit(5000),
           supabase.from("profiles").select("id,full_name,role,active").limit(500),
         ]);
-        if (lr.error) { setErr("load"); setLeads([]); return; }
-        setLeads(lr.data || []); setActs(ar.data || []); setProfs(pr.data || []);
-      } catch (e) { setErr("load"); setLeads([]); }
+        if (sr.error) { setErr("load"); setStats({}); return; }
+        setStats(sr.data || {}); setActs(ar.data || []); setProfs(pr.data || []);
+      } catch (e) { setErr("load"); setStats({}); }
     })();
   }, []);
 
   if (err) return <div style={{ ...card, padding: 22, borderColor: T.badSoft }}>
     <div style={{ fontWeight: 700, color: T.bad }}>Unable to load this section.</div>
     <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>Please try again or contact admin.</div></div>;
-  if (leads === null) return <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading live data…</div>;
+  if (stats === null) return <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading live data…</div>;
 
   const ymd = (iso) => { try { return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return ""; } };
   const today = dubaiToday();
@@ -1088,20 +1088,19 @@ function AdminDash({ go, user, openLead }) {
   const inQuarter = (iso) => { const d = ymd(iso); return d.slice(0, 4) === yyyy && qOf(d) === thisQ; };
   const inYear = (iso) => ymd(iso).slice(0, 4) === yyyy;
 
-  const L = leads;
-  const won = L.filter((r) => r.status === "Closed Won");
-  const cnt = (f) => L.filter(f).length;
-  const sum = (arr, k) => arr.reduce((s, r) => s + (Number(r[k]) || 0), 0);
-  // A lead is ASSIGNED only if it is held by a real active agent account (uuid) or its
-  // imported agent-name matches an active account. An imported name with no matching active
-  // account is treated as UNASSIGNED ("not assigned to any active agent" per requirements).
-  const activeAgentNames = new Set(profs.filter((p) => p.active !== false && ["agent", "sales_manager", "admin", "master_admin", "marketing", "accounts"].includes(p.role)).map((p) => String(p.full_name || "").trim().toLowerCase()).filter(Boolean));
-  const isAssignedToAgent = (r) => !!(r.assigned_agent || r.current_owner || (r.assigned_agent_name && activeAgentNames.has(String(r.assigned_agent_name).trim().toLowerCase())));
-  const assignedTotal = cnt(isAssignedToAgent);
-  const convOverall = assignedTotal ? (won.length / assignedTotal * 100) : 0;
-  const wonMonth = won.filter((r) => inMonth(r.updated_at || r.created_at));
-  const monthLeads = L.filter((r) => inMonth(r.created_at));
-  const convMonth = monthLeads.length ? (wonMonth.length / monthLeads.length * 100) : 0;
+  // Lead-derived figures now come pre-aggregated from admin_dashboard_stats() (a single query) instead of
+  // pulling every lead to the browser and counting in JS — that fetch was the ~20s dashboard load.
+  const S = stats || {};
+  const num = (v) => Number(v) || 0;
+  const totalLeads = num(S.total);
+  const todayNew = num(S.today_new), monthNew = num(S.month_new), quarterNew = num(S.quarter_new), yearNew = num(S.year_new);
+  const unassignedN = num(S.unassigned), openPoolN = num(S.open_pool), hotN = num(S.hot), veryHotN = num(S.very_hot);
+  const dueTodayN = num(S.due_today), overdueN = num(S.overdue);
+  const wonTotalN = num(S.won_total), wonMonthN = num(S.won_month), wonQuarterN = num(S.won_quarter), wonYearN = num(S.won_year);
+  const assignedTotal = num(S.assigned_total);
+  const avgDealWon = num(S.avg_deal_won), pipelineValue = num(S.pipeline_value);
+  const convOverall = assignedTotal ? (wonTotalN / assignedTotal * 100) : 0;
+  const convMonth = monthNew ? (wonMonthN / monthNew * 100) : 0;
 
   // contact activity from the audit trail
   const isCall = (a) => a === "call", isWa = (a) => a === "whatsapp", isView = (a) => a === "view_number" || a === "reveal_phone";
@@ -1120,22 +1119,21 @@ function AdminDash({ go, user, openLead }) {
     if (c.call > 15) flags.push({ who: nameOf(id), reason: `${c.call} call clicks in 10 min`, sev: c.call > 30 ? "high" : "med", type: "call" });
   });
 
-  // team performance by agent name (where the imported lead data lives), activity matched by account name
-  const agentNames = [...new Set(L.map((r) => r.assigned_agent_name).filter(Boolean))];
-  const perf = agentNames.map((nm) => {
-    const mine = L.filter((r) => r.assigned_agent_name === nm);
-    const w = mine.filter((r) => r.status === "Closed Won").length;
-    const acc = profs.find((p) => (p.full_name || "").toLowerCase() === nm.toLowerCase());
+  // team performance: assigned/won/overdue per agent come from the aggregate; calls/WhatsApp/reveals are
+  // matched to the agent's account from this month's activity (kept client-side).
+  const perf = (S.agents || []).map((g) => {
+    const nm = g.nm;
+    const acc = profs.find((p) => (p.full_name || "").toLowerCase() === String(nm).toLowerCase());
     const accActs = acc ? acts.filter((x) => x.actor_id === acc.id && inMonth(x.created_at)) : null;
-    return { nm, assigned: mine.length, won: w, conv: mine.length ? (w / mine.length * 100) : 0,
+    return { nm, assigned: num(g.assigned), won: num(g.won), conv: num(g.assigned) ? (num(g.won) / num(g.assigned) * 100) : 0,
       hasAcc: !!acc,
       calls: accActs ? accActs.filter((x) => isCall(x.action)).length : null,
       wa: accActs ? accActs.filter((x) => isWa(x.action)).length : null,
       views: accActs ? accActs.filter((x) => isView(x.action)).length : null,
-      overdue: mine.filter((r) => r.next_followup && r.next_followup < today && r.status !== "Closed Won" && r.status !== "Closed Lost").length };
+      overdue: num(g.overdue) };
   }).sort((a, b) => b.assigned - a.assigned);
 
-  const bySource = Object.entries(L.reduce((m, r) => { const k = r.source || "Unknown"; m[k] = (m[k] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]);
+  const bySource = (S.sources || []).map((x) => [x.s, num(x.n)]);
   const maxSrc = Math.max(1, ...bySource.map((s) => s[1]));
 
   const Stat = ({ label, value, sub, tone, onClick }) => (
@@ -1174,7 +1172,7 @@ function AdminDash({ go, user, openLead }) {
       <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.okSoft, color: T.ok,
         borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700 }}>
         <span style={{ width: 7, height: 7, borderRadius: 7, background: T.ok }} /> LIVE DATA</span>
-      <span style={{ fontSize: 12.5, color: T.muted }}>{L.length} leads · {acts.length} activity events</span>
+      <span style={{ fontSize: 12.5, color: T.muted }}>{totalLeads} leads · {acts.length} activity events</span>
     </div>
 
     {deals !== null && <div style={{ marginBottom: 18 }}>
@@ -1207,36 +1205,36 @@ function AdminDash({ go, user, openLead }) {
 
     <SectionTitle>Leads</SectionTitle>
     <div style={grid}>
-      <Stat label="Today" value={cnt((r) => inToday(r.created_at))} sub="new" onClick={() => go("live", { type: "all", label: "All leads" })} />
-      <Stat label="This month" value={monthLeads.length} sub="new" />
-      <Stat label="This quarter" value={cnt((r) => inQuarter(r.created_at))} sub="new" />
-      <Stat label="This year" value={cnt((r) => inYear(r.created_at))} sub="new" />
-      <Stat label="Total" value={L.length} sub="all leads" onClick={() => go("live", { type: "all", label: "All leads" })} />
-      <Stat label="Unassigned" value={cnt((r) => !isAssignedToAgent(r))} sub="to assign" onClick={() => go("live", { type: "unassigned", label: "Unassigned leads" })} />
-      <Stat label="Open pool" value={cnt((r) => r.is_open)} tone="gold" onClick={() => go("live", { type: "open", label: "Open pool" })} />
-      <Stat label="Hot" value={cnt((r) => r.temperature === "Hot")} tone="bad" onClick={() => go("live", { type: "temp", value: "Hot", label: "Hot leads" })} />
-      <Stat label="Very Hot" value={cnt((r) => r.temperature === "Very Hot")} tone="bad" onClick={() => go("live", { type: "temp", value: "Very Hot", label: "Very Hot leads" })} />
-      <Stat label="Due today" value={cnt((r) => r.next_followup && r.next_followup <= today && r.status !== "Closed Won" && r.status !== "Closed Lost")} tone="gold" onClick={() => go("live", { type: "due", label: "Follow-ups due" })} />
-      <Stat label="Overdue" value={cnt((r) => r.next_followup && r.next_followup < today && r.status !== "Closed Won" && r.status !== "Closed Lost")} tone="bad" onClick={() => go("live", { type: "overdue", label: "Overdue follow-ups" })} />
+      <Stat label="Today" value={todayNew} sub="new" onClick={() => go("live", { type: "all", label: "All leads" })} />
+      <Stat label="This month" value={monthNew} sub="new" />
+      <Stat label="This quarter" value={quarterNew} sub="new" />
+      <Stat label="This year" value={yearNew} sub="new" />
+      <Stat label="Total" value={totalLeads} sub="all leads" onClick={() => go("live", { type: "all", label: "All leads" })} />
+      <Stat label="Unassigned" value={unassignedN} sub="to assign" onClick={() => go("live", { type: "unassigned", label: "Unassigned leads" })} />
+      <Stat label="Open pool" value={openPoolN} tone="gold" onClick={() => go("live", { type: "open", label: "Open pool" })} />
+      <Stat label="Hot" value={hotN} tone="bad" onClick={() => go("live", { type: "temp", value: "Hot", label: "Hot leads" })} />
+      <Stat label="Very Hot" value={veryHotN} tone="bad" onClick={() => go("live", { type: "temp", value: "Very Hot", label: "Very Hot leads" })} />
+      <Stat label="Due today" value={dueTodayN} tone="gold" onClick={() => go("live", { type: "due", label: "Follow-ups due" })} />
+      <Stat label="Overdue" value={overdueN} tone="bad" onClick={() => go("live", { type: "overdue", label: "Overdue follow-ups" })} />
     </div>
 
     <SectionTitle>Deals & commission</SectionTitle>
     <div style={grid}>
-      <Stat label="Closed (month)" value={wonMonth.length} tone="ok" onClick={() => go("live", { type: "status", value: "Closed Won", label: "Closed Won" })} />
-      <Stat label="Closed (quarter)" value={won.filter((r) => inQuarter(r.updated_at || r.created_at)).length} tone="ok" />
-      <Stat label="Closed (year)" value={won.filter((r) => inYear(r.updated_at || r.created_at)).length} tone="ok" />
-      <Stat label="Closed (total)" value={won.length} tone="ok" onClick={() => go("live", { type: "status", value: "Closed Won", label: "Closed Won" })} />
+      <Stat label="Closed (month)" value={wonMonthN} tone="ok" onClick={() => go("live", { type: "status", value: "Closed Won", label: "Closed Won" })} />
+      <Stat label="Closed (quarter)" value={wonQuarterN} tone="ok" />
+      <Stat label="Closed (year)" value={wonYearN} tone="ok" />
+      <Stat label="Closed (total)" value={wonTotalN} tone="ok" onClick={() => go("live", { type: "status", value: "Closed Won", label: "Closed Won" })} />
       <Stat label="Commission (month)" value={money(sumD(apprMonth, "gross_commission"))} tone="gold" sub="approved deals" />
       <Stat label="Commission (year)" value={money(sumD(apprYear, "gross_commission"))} tone="gold" sub="approved deals" />
-      <Stat label="Avg deal value" value={won.length ? money(sum(won, "deal_value") / won.length) : "AED 0"} />
-      <Stat label="Pipeline value" value={money(sum(L.filter((r) => r.status !== "Closed Won" && r.status !== "Closed Lost" && r.status !== "Dead Lead"), "deal_value"))} />
+      <Stat label="Avg deal value" value={wonTotalN ? money(avgDealWon) : "AED 0"} />
+      <Stat label="Pipeline value" value={money(pipelineValue)} />
     </div>
 
     <SectionTitle>Conversion</SectionTitle>
     <div style={grid}>
       <Stat label="Overall" value={convOverall.toFixed(1) + "%"} sub="won / assigned" tone="gold" />
       <Stat label="This month" value={convMonth.toFixed(1) + "%"} sub="won / new" />
-      <Stat label="Won : assigned" value={`${won.length} : ${assignedTotal}`} />
+      <Stat label="Won : assigned" value={`${wonTotalN} : ${assignedTotal}`} />
     </div>
 
     <SectionTitle>Agent activity <span style={{ fontSize: 10.5, color: T.muted, fontWeight: 600 }}>· View Number / Call / WhatsApp clicks</span></SectionTitle>
