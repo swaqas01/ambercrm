@@ -6,6 +6,7 @@
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "https://fkeniejcitwlqfatkopi.supabase.co";
 const ANON_KEY     = process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_3M0eOBeRvTuC8yjMWWcEqg_BPZfYyKJ";
+const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;   // server-side only — lets the AI proxy read locked config tables (app_settings/ai_sources) without anonymous DB access
 
 const SAFETY = `You are "Ask Amber", the in-house AI sales mentor and assistant for Amber Homes Real Estate, a Dubai brokerage. You speak ONLY to Amber Homes staff. Your job: help agents sell more, handle clients better, and run their CRM well. Be the best Dubai real estate sales mentor they have — smart, practical, warm and direct.
 
@@ -289,7 +290,10 @@ async function getWebConfig() {
   if (now - _webCache.at < 60000) return _webCache;
   let enabled = true, domains = DEFAULT_SOURCES, customSet = false;
   try {
-    const h = { apikey: ANON_KEY, Authorization: "Bearer " + ANON_KEY };
+    // Read config with the service-role key (server-side only) so app_settings + ai_sources
+    // can be locked to NO anonymous access without disabling web research. Falls back to anon.
+    const cfgKey = SERVICE_KEY || ANON_KEY;
+    const h = { apikey: cfgKey, Authorization: "Bearer " + cfgKey };
     // Optional kill switch: only an explicit 'false' turns web research off.
     const sres = await fetch(SUPABASE_URL + "/rest/v1/app_settings?key=eq.web_research_enabled&select=value", { headers: h });
     if (sres.ok) {
