@@ -4938,10 +4938,125 @@ function DcTeam({ user }) {
   );
 }
 
+function DcUpload({ user }) {
+  const [rows, setRows] = useState(null);
+  const [fileName, setFileName] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const ALIASES = {
+    project_name: ["projectname", "project", "building", "tower", "development", "community", "projectbuilding"],
+    project_location: ["projectlocation", "location", "area", "address", "communitylocation"],
+    unit_number: ["unitnumber", "unit", "unitno", "apartment", "apt", "villa", "flat", "unitnumberno"],
+    owner_name: ["ownername", "owner", "name", "client", "customer", "fullname", "clientname"],
+    owner_phone: ["ownerphone", "phone", "mobile", "contact", "number", "phonenumber", "mobileno", "mobilenumber", "tel", "contactnumber"],
+    owner_email: ["owneremail", "email", "emailaddress", "mail", "emailid"],
+  };
+  const mapRow = (o) => {
+    const out = { project_name: "", project_location: "", unit_number: "", owner_name: "", owner_phone: "", owner_email: "" };
+    const entries = Object.entries(o);
+    for (const key of Object.keys(out)) {
+      for (const [h, v] of entries) {
+        if (ALIASES[key].includes(norm(h))) { out[key] = v == null ? "" : String(v).trim(); break; }
+      }
+    }
+    return out;
+  };
+  const parseCsv = (text) => {
+    const lines = text.split(/\r?\n/).filter((l) => l.trim());
+    if (!lines.length) return [];
+    const split = (l) => { const out = []; let cur = "", inq = false;
+      for (let i = 0; i < l.length; i++) { const ch = l[i];
+        if (ch === '"') inq = !inq; else if (ch === "," && !inq) { out.push(cur); cur = ""; } else cur += ch; }
+      out.push(cur); return out.map((x) => x.trim().replace(/^"|"$/g, "")); };
+    const hdr = split(lines[0]);
+    return lines.slice(1).map((l) => { const c = split(l); const o = {}; hdr.forEach((h, i) => { o[h] = c[i]; }); return o; });
+  };
+
+  const onFile = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    setErr(""); setRows(null); setResult(null); setFileName(file.name);
+    const name = file.name.toLowerCase();
+    try {
+      let records;
+      if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".xlsm")) {
+        const XLSX = await import("xlsx");
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+        records = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+      } else if (name.endsWith(".csv") || name.endsWith(".txt")) {
+        records = parseCsv(await file.text());
+      } else { setErr("Unsupported file. Upload a .xlsx or .csv file."); return; }
+      const mapped = records.map(mapRow).filter((r) => r.project_name && r.owner_name);
+      if (!mapped.length) { setErr("No valid rows found. Each row needs at least a Project and an Owner name. Download the template below to see the columns."); return; }
+      setRows(mapped);
+    } catch (x) { setErr("Couldn't read that file. Use a .xlsx or .csv export with a header row in the first line."); }
+  };
+
+  const run = async () => {
+    if (!rows || !rows.length) return;
+    setBusy(true); setErr(""); setResult(null);
+    const { data, error } = await supabase.rpc("upload_data_calling", { p_rows: rows, p_source_file: fileName || null });
+    setBusy(false);
+    if (error) { setErr(/admin only/i.test(error.message || "") ? "Only admins can upload data." : "Upload failed — please try again."); return; }
+    const r = Array.isArray(data) ? data[0] : data;
+    setResult(r || { received: rows.length, inserted: 0, skipped: 0 });
+  };
+
+  const downloadTemplate = () => {
+    const csv = "project_name,project_location,unit_number,owner_name,owner_phone,owner_email\nMarina Heights,Dubai Marina,1203,Ahmed Khan,+9715XXXXXXXX,owner@example.com\n";
+    try {
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+      const a = document.createElement("a"); a.href = url; a.download = "data_calling_template.csv"; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch (e) {}
+  };
+
+  return (
+    <div>
+      <div style={{ ...card, padding: 16, marginBottom: 14 }}>
+        <div style={{ fontWeight: 700, color: T.ink, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}><Upload size={16} color={T.gold} /> Upload owner data</div>
+        <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.6, marginBottom: 12 }}>
+          Upload an <b>Excel (.xlsx)</b> or <b>.csv</b> file with a header row. Columns are auto-detected: <b>Project</b>, <b>Location</b>, <b>Unit</b>, <b>Owner name</b>, <b>Phone</b>, <b>Email</b>. Each row needs at least a Project and an Owner name. Duplicates are skipped automatically. After uploading, assign records to agents from the <b>Team</b> tab.
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <input type="file" accept=".xlsx,.xls,.xlsm,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={onFile} style={{ fontSize: 13 }} />
+          <button onClick={downloadTemplate} style={miniBtn()}><Download size={14} /> Template</button>
+        </div>
+      </div>
+
+      {err && <div style={{ ...card, padding: 12, marginBottom: 12, color: T.bad, fontSize: 12.5, fontWeight: 600 }}>{err}</div>}
+
+      {rows && !result && (
+        <div style={{ ...card, padding: 16, marginBottom: 12 }}>
+          <div style={{ fontSize: 13, marginBottom: 10 }}>Ready to upload <b>{rows.length}</b> row{rows.length === 1 ? "" : "s"}{fileName ? " from " + fileName : ""}. First: <b>{rows[0].owner_name}</b> · {rows[0].project_name}{rows[0].unit_number ? " · Unit " + rows[0].unit_number : ""}</div>
+          <button onClick={run} disabled={busy} style={{ padding: "10px 20px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1, display: "inline-flex", alignItems: "center", gap: 7 }}>{busy ? "Uploading…" : <><Upload size={15} /> Upload {rows.length} records</>}</button>
+        </div>
+      )}
+
+      {result && (
+        <div style={{ ...card, padding: 16 }}>
+          <div style={{ fontWeight: 700, color: T.ink, marginBottom: 6 }}>Upload complete</div>
+          <div style={{ fontSize: 13.5, color: T.ok, fontWeight: 700 }}>{result.inserted} added</div>
+          <div style={{ fontSize: 13, color: T.warn }}>{result.skipped} skipped (already in the system)</div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>{result.received} rows read{fileName ? " from " + fileName : ""}.</div>
+          <button onClick={() => { setRows(null); setResult(null); setFileName(""); setErr(""); }} style={{ ...miniBtn(), marginTop: 12 }}>Upload another file</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DataCalling({ user, go, narrow }) {
   const role = user && user.role;
   const isManager = role === "master_admin" || role === "admin" || role === "sales_manager";
-  const [tab, setTab] = useState("worklist");
+  const canUpload = role === "admin" || role === "master_admin";
+  const TABS = [];
+  if (role !== "master_admin") TABS.push(["worklist", "My calls"]);   // master_admin has no personal worklist
+  if (isManager) TABS.push(["team", "Team"]);
+  if (canUpload) TABS.push(["upload", "Upload data"]);
+  const [tab, setTab] = useState(role === "master_admin" ? "team" : "worklist");
   const [rows, setRows] = useState(null);
   const [q, setQ] = useState("");
   const [projF, setProjF] = useState("");
@@ -4980,15 +5095,16 @@ function DataCalling({ user, go, narrow }) {
           <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 10 }}><Phone size={22} color={T.gold} /> Data Calling</div>
           <div style={{ color: T.muted, fontSize: 13, marginTop: 4 }}>Call property owners in your assigned projects and record who wants to sell or list with Amber. Every call and WhatsApp is logged automatically.</div>
         </div>
-        {isManager && (
+        {TABS.length > 1 && (
           <div style={{ display: "flex", gap: 6, background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 10, padding: 4 }}>
-            <button onClick={() => setTab("worklist")} style={{ ...miniBtn(), border: "none", background: tab === "worklist" ? T.goldTint : "transparent" }}>My calls</button>
-            <button onClick={() => setTab("team")} style={{ ...miniBtn(), border: "none", background: tab === "team" ? T.goldTint : "transparent" }}>Team</button>
+            {TABS.map(([k, lbl]) => (
+              <button key={k} onClick={() => setTab(k)} style={{ ...miniBtn(), border: "none", background: tab === k ? T.goldTint : "transparent" }}>{lbl}</button>
+            ))}
           </div>
         )}
       </div>
 
-      {tab === "team" && isManager ? <DcTeam user={user} /> : (
+      {tab === "team" && isManager ? <DcTeam user={user} /> : tab === "upload" && canUpload ? <DcUpload user={user} /> : (
         <div>
           <div style={{ ...card, padding: 14, marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <div style={{ position: "relative", flex: "1 1 220px" }}>
