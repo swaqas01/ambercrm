@@ -40,8 +40,10 @@ security definer
 set search_path = public
 as $$
 begin
-  -- gate: master admin only
-  if coalesce((select role from public.profiles where id = auth.uid()), '') <> 'master_admin' then
+  -- gate: block an authenticated NON-master app user; allow SQL-editor/service
+  -- context (auth.uid() null). Cast enum role to text for a safe comparison.
+  if auth.uid() is not null
+     and coalesce((select role::text from public.profiles where id = auth.uid()), '') <> 'master_admin' then
     raise exception 'security_self_audit: master admin only';
   end if;
 
