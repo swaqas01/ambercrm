@@ -7774,7 +7774,8 @@ function AskAmber({ narrow, user, openLead }) {
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           {mentor && <button onClick={reset} title="Switch mentor" style={hdrBtn()}><Users size={14} color="#fff" /></button>}
-          <button onClick={() => { setOpen(false); }} title="Close" style={hdrBtn()}><X size={15} color="#fff" /></button>
+          <button onClick={() => setOpen(false)} title="Minimize — keep this chat" style={hdrBtn()}><ChevronDown size={16} color="#fff" /></button>
+          <button onClick={() => { setOpen(false); reset(); }} title="Close — end chat" style={hdrBtn()}><X size={15} color="#fff" /></button>
         </div>
       </div>
 
