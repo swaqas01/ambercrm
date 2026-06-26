@@ -17,6 +17,7 @@ const ROLES = {
   agent:        { label: "Agent",         home: "agent" },
   marketing:    { label: "Marketing",     home: "admin" },
   accounts:     { label: "Accounts",      home: "admin" },
+  data_calling: { label: "Data Calling",  home: "calling" },
 };
 export function roleInfo(dbRole) { return ROLES[dbRole] || { label: "Agent", home: "agent" }; }
 
@@ -32,11 +33,12 @@ export function resolveRole(email, dbRole) {
 // Which sidebar screens each role may open. 'users' is Master-Admin only.
 const SCREEN_ACCESS = {
   master_admin: "ALL",
-  admin:        ["projects","hotdeals","admin","lead","assign","performance","deals","dealdetail","devices","breakdown","myprofile","agents","agentprofile","targets"],
-  sales_manager:["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","matching","score","deals","dealdetail","breakdown","myprofile"],
-  agent:        ["projects","hotdeals","agent","live","open","lead","deals","dealdetail","breakdown","myprofile"],
+  admin:        ["projects","hotdeals","admin","lead","assign","performance","deals","dealdetail","devices","breakdown","myprofile","agents","agentprofile","targets","calling"],
+  sales_manager:["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","matching","score","deals","dealdetail","breakdown","myprofile","calling"],
+  agent:        ["projects","hotdeals","agent","live","open","lead","deals","dealdetail","breakdown","myprofile","calling"],
   marketing:    ["projects","admin","live","open","lead","settings","myprofile"],
   accounts:     ["projects","admin","commission","lead","settings","myprofile"],
+  data_calling: ["calling","myprofile"],
 };
 export function allowedFor(role) { return SCREEN_ACCESS[role] || SCREEN_ACCESS.agent; }
 export function canOpen(role, screen) { const a = allowedFor(role); return a === "ALL" || a.includes(screen); }
@@ -92,4 +94,22 @@ export function stampContactedReliable(leadId, actorId) {
       headers: { apikey: KEY, Authorization: "Bearer " + _amberToken, "Content-Type": "application/json", Prefer: "return=minimal" },
       body: JSON.stringify({ last_contacted: today, last_contacted_at: nowIso, last_contacted_by: actorId }) }).catch(() => {});
   } catch (e) {}
+}
+
+
+// Reliable Data-Calling activity logging (same keepalive technique as logActivityReliable,
+// so a logged Call/WhatsApp survives the page navigating to the tel:/wa.me dialer).
+// RLS: row is written as the signed-in agent (agent_id must equal auth.uid()).
+export function logDataCallReliable(recordId, action, actorId, extra) {
+  if (!recordId || !actorId) return;
+  const row = { data_calling_id: recordId, agent_id: actorId, action, ...(extra || {}) };
+  try {
+    if (_amberToken) {
+      fetch(URL + "/rest/v1/data_calling_activity", { method: "POST", keepalive: true,
+        headers: { apikey: KEY, Authorization: "Bearer " + _amberToken, "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify(row) }).catch(() => {});
+      return;
+    }
+  } catch (e) {}
+  try { supabase.from("data_calling_activity").insert(row).then(() => {}, () => {}); } catch (e) {}
 }

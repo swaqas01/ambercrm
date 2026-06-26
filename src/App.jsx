@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Component } from "react";
-import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall, resolveRole, MASTER_ADMIN_EMAIL, logActivityReliable, stampContactedReliable } from "./supabase.js";
+import { supabase, roleInfo, allowedFor, canOpen, stampLogin, adminCall, resolveRole, MASTER_ADMIN_EMAIL, logActivityReliable, stampContactedReliable, logDataCallReliable } from "./supabase.js";
 import { MENTORS, mentorById, buildCrmContext, classifyInappropriate, isPureGreeting, categorize, logAi, fetchKnowledge, pickKnowledge } from "./mentors.js";
 import {
   BookOpen, Pencil, Trash2, Save, Check,
@@ -568,6 +568,7 @@ const NAV = [
   ["deals", "Deals", Coins],
   ["projects", "Projects", Building2],
   ["hotdeals", "Hot Resale Deals", Flame],
+  ["calling", "Data Calling", Phone],
   ["ailogs", "Ask Amber Logs", Sparkle],
   ["kb", "AI Knowledge Base", BookOpen],
   ["aisources", "AI Sources & Web", Globe],
@@ -581,6 +582,12 @@ function screenLabel(screen, user) {
   if (screen === "agent") return isAgent ? "My Dashboard" : "Agent Dashboard";
   const n = NAV.find(([k]) => k === screen);
   return n ? n[1] : "";
+}
+
+// Landing screen for a role (data_calling agents land on the calling worklist).
+function homeScreen(role) {
+  const h = roleInfo(role).home;
+  return h === "agent" ? "agent" : h === "calling" ? "calling" : "admin";
 }
 
 /* ================================= SHELL ================================= */
@@ -647,7 +654,7 @@ export default function App() {
             const expired = !!(prof.password_expires_at && new Date(prof.password_expires_at).getTime() < Date.now());
             setUser({ name: prof.full_name || session.user.email, email: session.user.email, role,
               roleLabel: ri.label, id: session.user.id, avatar_url: prof.avatar_url || null, mustChangePw: !!prof.force_password_change || !!prof.first_login || expired });
-            let initial = ri.home === "agent" ? "agent" : "admin";
+            let initial = homeScreen(role);
             try { const saved = sessionStorage.getItem("amber_screen"); if (saved && saved !== "lead" && saved !== "dealdetail" && canOpen(role, saved)) initial = saved; } catch (e) {}
             setScreen(initial);
             stampLogin(session.user.id);
@@ -703,7 +710,7 @@ export default function App() {
     const masterHidden = user && user.role === "master_admin" && (screen === "assign" || screen === "pipeline");
     if (user && (!canOpen(user.role, screen) || masterHidden)) {
       try { console.warn("[access-denied] blocked screen access", { email: user.email, role: user.role, screen, at: new Date().toISOString() }); } catch (e) {}
-      setScreen(masterHidden ? "live" : (roleInfo(user.role).home === "agent" ? "agent" : "admin"));
+      setScreen(masterHidden ? "live" : homeScreen(user.role));
     }
   }, [user, screen]);
   // Remember the current top-level screen so a refresh returns here (detail screens need an id, so skip them).
@@ -717,6 +724,7 @@ export default function App() {
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
     hotdeals: <HotDeals user={user} go={go} />,
+    calling: <DataCalling user={user} go={go} narrow={narrow} />,
     aisources: <AiSources user={user} />,
   };
   const authView = recovery || !authChecked || !user || (user && user.mustChangePw);
@@ -803,7 +811,7 @@ export default function App() {
         </header>
         <div style={{ padding: narrow ? "16px 14px 70px" : "24px 26px 80px", maxWidth: 1200 }}>
           <ScreenBoundary key={screen}>
-            {SCREENS[screen] || <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>This section isn't available. <button onClick={() => go(roleInfo(user.role).home === "agent" ? "agent" : "admin")} style={{ ...miniBtn(), marginLeft: 8 }}>Go to dashboard</button></div>}
+            {SCREENS[screen] || <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>This section isn't available. <button onClick={() => go(homeScreen(user.role))} style={{ ...miniBtn(), marginLeft: 8 }}>Go to dashboard</button></div>}
           </ScreenBoundary>
         </div>
         <AskAmber narrow={narrow} user={user} openLead={openLead} />
@@ -4756,6 +4764,312 @@ function FileAdder({ onUrl, onUpload, busy }) {
         <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="…or paste a file link (URL)" style={{ ...pInp, flex: "1 1 180px" }} />
         <button onClick={() => { onUrl(kind, name, url, internal); setName(""); setUrl(""); }} disabled={!name.trim() || !url.trim()} style={{ padding: "9px 14px", borderRadius: 8, border: "none", background: T.btnBg, color: T.btnFg, cursor: "pointer", fontWeight: 700, fontFamily: UI, fontSize: 12.5, opacity: (!name.trim() || !url.trim()) ? .5 : 1 }}>Add link</button>
       </div>
+    </div>
+  );
+}
+
+/* ============================ DATA CALLING ============================ */
+// Owner/property cold-calling for listing acquisition. Agents work their assigned
+// records (data_calling_agent_view = RLS-scoped to auth.uid()), reveal the owner's
+// number (reveal_data_contact), place LOGGED Call/WhatsApp (keepalive insert to
+// data_calling_activity, survives the dialer), and save a disposition via the
+// data_calling_set_disposition RPC (agents can't write the base table directly).
+const DC_OUTCOMES = [["no_answer","No answer"],["answered","Answered"],["interested","Interested"],["callback","Call back"],["not_interested","Not interested"],["wrong_number","Wrong number"],["dnc","Do not call"]];
+const dcOutcomeLabel = (c) => { const o = DC_OUTCOMES.find(([k]) => k === c); return o ? o[1] : (c || "—"); };
+const dcAed = (n) => (n != null && n !== "" && Number(n) > 0) ? "AED " + Number(n).toLocaleString() : "—";
+const dcArea = (n) => (n != null && n !== "" && Number(n) > 0) ? Number(n).toLocaleString() + " sqft" : null;
+
+function DcDisposition({ r, user, onSaved }) {
+  const [outcome, setOutcome] = useState(r.status || "");
+  const [sell, setSell] = useState(!!r.wants_to_sell);
+  const [list, setList] = useState(!!r.wants_to_list);
+  const [listed, setListed] = useState(!!r.listed_with_us);
+  const [comment, setComment] = useState("");
+  const [follow, setFollow] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const save = async () => {
+    setBusy(true); setMsg("");
+    const { data, error } = await supabase.rpc("data_calling_set_disposition", {
+      p_record_id: r.id, p_status: outcome || null,
+      p_wants_to_sell: sell, p_wants_to_list: list, p_listed_with_us: listed,
+      p_sale_status: null, p_comment: comment || null,
+      p_follow_up_at: follow ? new Date(follow).toISOString() : null });
+    setBusy(false);
+    if (error || (data && data.error)) {
+      setMsg(data && data.error === "forbidden" ? "This record isn't assigned to you." : "Couldn't save — please try again."); return;
+    }
+    setComment("");
+    onSaved && onSaved();
+  };
+  const cbox = (val, set, label) => (
+    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, color: T.ink, cursor: "pointer", padding: "5px 10px", border: `1px solid ${val ? T.gold : T.hair}`, borderRadius: 8, background: val ? T.goldTint : T.paper }}>
+      <input type="checkbox" checked={val} onChange={(e) => set(e.target.checked)} /> {label}
+    </label>
+  );
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${T.hair}` }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <select value={outcome} onChange={(e) => setOutcome(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 180px" }}>
+          <option value="">Call outcome…</option>
+          {DC_OUTCOMES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <input type="datetime-local" value={follow} onChange={(e) => setFollow(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 210px" }} title="Follow-up reminder (optional)" />
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        {cbox(sell, setSell, "Wants to sell")}
+        {cbox(list, setList, "Wants to list")}
+        {cbox(listed, setListed, "Listed with us")}
+      </div>
+      <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add a note about this call…" rows={2} style={{ ...pInp, resize: "vertical", marginBottom: 10 }} />
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <button onClick={save} disabled={busy} style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1, display: "inline-flex", alignItems: "center", gap: 7 }}><Check size={15} /> {busy ? "Saving…" : "Save disposition"}</button>
+        {msg && <span style={{ fontSize: 12.5, color: T.bad }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+function DcTeam({ user }) {
+  const [days, setDays] = useState(30);
+  const [stats, setStats] = useState(null);
+  const [proj, setProj] = useState(null);
+  const [agents, setAgents] = useState([]);
+  const [aProj, setAProj] = useState(""); const [aAgent, setAAgent] = useState(""); const [aCount, setACount] = useState(50);
+  const [aMsg, setAMsg] = useState(""); const [aBusy, setABusy] = useState(false);
+  const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
+  const load = async () => {
+    setStats(null);
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const { data } = await supabase.rpc("data_calling_manager_stats", { p_since: since });
+    setStats(data || []);
+    const { data: pj } = await supabase.rpc("data_calling_unassigned_by_project");
+    setProj(pj || []);
+    try { const { data: dir } = await supabase.rpc("user_directory"); setAgents(dir || []); } catch (e) {}
+  };
+  useEffect(() => { load(); }, [days]);
+  const doAssign = async () => {
+    if (!aProj || !aAgent) { setAMsg("Pick a project and an agent."); return; }
+    setABusy(true); setAMsg("");
+    const { data, error } = await supabase.rpc("data_calling_assign_by_project", { p_project: aProj, p_agent: aAgent, p_count: Math.max(1, parseInt(aCount, 10) || 0) });
+    setABusy(false);
+    if (error || (data && data.error)) { setAMsg("Couldn't assign — admins only."); return; }
+    setAMsg("Assigned " + (data.assigned || 0) + " record(s).");
+    load();
+  };
+  const th = { textAlign: "left", padding: "9px 10px", fontSize: 11, color: T.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".03em", borderBottom: `1px solid ${T.hair}` };
+  const td = { padding: "9px 10px", fontSize: 13, color: T.ink, borderBottom: `1px solid ${T.hairSoft}` };
+  return (
+    <div>
+      <div style={{ ...card, padding: 14, marginBottom: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12.5, color: T.muted }}>Period</span>
+        {[[7, "7 days"], [30, "30 days"], [90, "90 days"]].map(([d, l]) => (
+          <button key={d} onClick={() => setDays(d)} style={{ ...miniBtn(), background: days === d ? T.goldTint : T.paper, borderColor: days === d ? T.gold : T.hair }}>{l}</button>
+        ))}
+        <button onClick={load} style={{ ...miniBtn(), marginLeft: "auto" }}><RefreshCw size={14} /> Refresh</button>
+      </div>
+      <div style={{ ...card, padding: 0, overflow: "hidden", marginBottom: 16 }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+            <thead><tr>
+              <th style={th}>Agent</th><th style={th}>Assigned</th><th style={th}>Calls</th><th style={th}>WhatsApp</th>
+              <th style={th}>Logged</th><th style={th}>Reached</th><th style={th}>Reach %</th><th style={th}>Conversions</th>
+            </tr></thead>
+            <tbody>
+              {stats == null && <tr><td style={td} colSpan={8}>Loading…</td></tr>}
+              {stats && stats.length === 0 && <tr><td style={{ ...td, color: T.muted }} colSpan={8}>No call activity in this period.</td></tr>}
+              {stats && stats.map((a) => {
+                const reach = a.dispositions > 0 ? Math.round((a.reached / a.dispositions) * 100) : 0;
+                return (<tr key={a.agent_id}>
+                  <td style={{ ...td, fontWeight: 600 }}>{a.agent_name || "—"}</td>
+                  <td style={td}>{a.assigned}</td><td style={td}>{a.calls}</td><td style={td}>{a.whatsapp}</td>
+                  <td style={td}>{a.dispositions}</td><td style={td}>{a.reached}</td>
+                  <td style={td}>{reach}%</td>
+                  <td style={{ ...td, fontWeight: 700, color: a.conversions > 0 ? T.ok : T.ink }}>{a.conversions}</td>
+                </tr>);
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "1fr 1fr" : "1fr", gap: 14 }}>
+        <div style={{ ...card, padding: 16 }}>
+          <div style={{ fontWeight: 700, color: T.ink, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}><Building2 size={16} color={T.gold} /> Coverage by project</div>
+          <div style={{ maxHeight: 280, overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={th}>Project</th><th style={th}>Total</th><th style={th}>Assigned</th><th style={th}>Unassigned</th></tr></thead>
+              <tbody>
+                {proj == null && <tr><td style={td} colSpan={4}>Loading…</td></tr>}
+                {proj && proj.length === 0 && <tr><td style={{ ...td, color: T.muted }} colSpan={4}>No data uploaded yet.</td></tr>}
+                {proj && proj.map((p) => (<tr key={p.project_name}>
+                  <td style={{ ...td, fontWeight: 600 }}>{p.project_name}</td><td style={td}>{p.total}</td>
+                  <td style={td}>{p.assigned}</td>
+                  <td style={{ ...td, fontWeight: 700, color: p.unassigned > 0 ? T.gold : T.muted }}>{p.unassigned}</td>
+                </tr>))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {isAdmin && (
+          <div style={{ ...card, padding: 16 }}>
+            <div style={{ fontWeight: 700, color: T.ink, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}><Users size={16} color={T.gold} /> Assign records to an agent</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <select value={aProj} onChange={(e) => setAProj(e.target.value)} style={pInp}>
+                <option value="">Choose project…</option>
+                {(proj || []).filter((p) => p.unassigned > 0).map((p) => <option key={p.project_name} value={p.project_name}>{p.project_name} ({p.unassigned} free)</option>)}
+              </select>
+              <select value={aAgent} onChange={(e) => setAAgent(e.target.value)} style={pInp}>
+                <option value="">Choose agent…</option>
+                {agents.map((g) => <option key={g.id} value={g.id}>{g.full_name || g.email}</option>)}
+              </select>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <span style={{ fontSize: 12.5, color: T.muted }}>How many</span>
+                <input type="number" min={1} value={aCount} onChange={(e) => setACount(e.target.value)} style={{ ...pInp, width: 100 }} />
+                <button onClick={doAssign} disabled={aBusy} style={{ marginLeft: "auto", padding: "9px 16px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, cursor: aBusy ? "default" : "pointer", opacity: aBusy ? .6 : 1 }}>{aBusy ? "Assigning…" : "Assign"}</button>
+              </div>
+              {aMsg && <div style={{ fontSize: 12.5, color: T.muted }}>{aMsg}</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DataCalling({ user, go, narrow }) {
+  const role = user && user.role;
+  const isManager = role === "master_admin" || role === "admin" || role === "sales_manager";
+  const [tab, setTab] = useState("worklist");
+  const [rows, setRows] = useState(null);
+  const [q, setQ] = useState("");
+  const [projF, setProjF] = useState("");
+  const [revealed, setRevealed] = useState({});
+  const [openId, setOpenId] = useState(null);
+  const load = async () => {
+    setRows(null);
+    const { data, error } = await supabase.from("data_calling_agent_view").select("*").order("project_name", { ascending: true });
+    setRows(error ? [] : (data || []));
+  };
+  useEffect(() => { if (tab === "worklist") load(); }, [tab]);
+  const reveal = async (r) => {
+    try {
+      const { data, error } = await supabase.rpc("reveal_data_contact", { p_record_id: r.id });
+      if (error) return;
+      const row = Array.isArray(data) ? data[0] : data;
+      if (row) { setRevealed((v) => ({ ...v, [r.id]: row })); logDataCallReliable(r.id, "reveal", user.id); }
+    } catch (e) {}
+  };
+  const all = rows || [];
+  const projects = [...new Set(all.map((r) => r.project_name).filter(Boolean))].sort();
+  const ql = q.trim().toLowerCase();
+  const filtered = all.filter((r) =>
+    (!projF || r.project_name === projF) &&
+    (!ql || ((r.owner_name || "") + " " + (r.unit_number || "") + " " + (r.project_name || "") + " " + (r.project_location || "")).toLowerCase().includes(ql)));
+  const groups = {};
+  filtered.forEach((r) => { const k = r.project_name || "Other"; (groups[k] = groups[k] || []).push(r); });
+  const groupKeys = Object.keys(groups).sort();
+
+  const badge = (txt, on) => on ? <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: T.goldTint, color: T.gold, border: `1px solid ${T.goldEdge}` }}>{txt}</span> : null;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+        <div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 10 }}><Phone size={22} color={T.gold} /> Data Calling</div>
+          <div style={{ color: T.muted, fontSize: 13, marginTop: 4 }}>Call property owners in your assigned projects and record who wants to sell or list with Amber. Every call and WhatsApp is logged automatically.</div>
+        </div>
+        {isManager && (
+          <div style={{ display: "flex", gap: 6, background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 10, padding: 4 }}>
+            <button onClick={() => setTab("worklist")} style={{ ...miniBtn(), border: "none", background: tab === "worklist" ? T.goldTint : "transparent" }}>My calls</button>
+            <button onClick={() => setTab("team")} style={{ ...miniBtn(), border: "none", background: tab === "team" ? T.goldTint : "transparent" }}>Team</button>
+          </div>
+        )}
+      </div>
+
+      {tab === "team" && isManager ? <DcTeam user={user} /> : (
+        <div>
+          <div style={{ ...card, padding: 14, marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ position: "relative", flex: "1 1 220px" }}>
+              <Search size={15} color={T.faint} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)" }} />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search owner, unit, project…" style={{ ...pInp, paddingLeft: 33 }} />
+            </div>
+            <select value={projF} onChange={(e) => setProjF(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 200px" }}>
+              <option value="">All projects</option>{projects.map((p) => <option key={p}>{p}</option>)}
+            </select>
+            <button onClick={load} style={miniBtn()}><RefreshCw size={14} /> Refresh</button>
+            <span style={{ fontSize: 12.5, color: T.muted, marginLeft: "auto" }}>{filtered.length} record{filtered.length === 1 ? "" : "s"}</span>
+          </div>
+
+          {rows == null && <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>Loading your worklist…</div>}
+          {rows && filtered.length === 0 && (
+            <div style={{ ...card, padding: 36, textAlign: "center", color: T.muted }}>
+              <Phone size={26} color={T.faint} style={{ marginBottom: 8 }} />
+              <div style={{ fontWeight: 600, color: T.ink }}>No records assigned to you yet</div>
+              <div style={{ fontSize: 13, marginTop: 4 }}>{isManager ? "Use the Team tab to assign owners to agents." : "Your manager will assign you owners to call."}</div>
+            </div>
+          )}
+
+          {rows && groupKeys.map((gk) => (
+            <div key={gk} style={{ marginBottom: 18 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 2px 10px" }}>
+                <Building2 size={15} color={T.gold} />
+                <span style={{ fontWeight: 800, color: T.ink, fontSize: 14 }}>{gk}</span>
+                {groups[gk][0] && groups[gk][0].project_location && <span style={{ fontSize: 12, color: T.muted, display: "inline-flex", alignItems: "center", gap: 3 }}><MapPin size={12} /> {groups[gk][0].project_location}</span>}
+                <span style={{ fontSize: 12, color: T.muted }}>· {groups[gk].length}</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {groups[gk].map((r) => {
+                  const rv = revealed[r.id];
+                  const phone = rv && rv.owner_phone;
+                  const isOpen = openId === r.id;
+                  const ar = dcArea(r.built_up_area);
+                  return (
+                    <div key={r.id} style={{ ...card, padding: 14 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                        <div style={{ minWidth: 200, flex: "1 1 260px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontWeight: 700, color: T.ink, fontSize: 15 }}>{r.owner_name || "Unknown owner"}</span>
+                            {r.unit_number && <span style={{ fontSize: 12, color: T.muted }}>Unit {r.unit_number}</span>}
+                            {r.status && <span style={{ fontSize: 11, color: T.muted, padding: "2px 8px", border: `1px solid ${T.hair}`, borderRadius: 999 }}>{dcOutcomeLabel(r.status)}</span>}
+                          </div>
+                          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                            {r.property_type && <span>{r.property_type}</span>}
+                            {ar && <span>{ar}</span>}
+                            {Number(r.selling_price) > 0 && <span>Ask {dcAed(r.selling_price)}</span>}
+                          </div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                            {badge("Wants to sell", r.wants_to_sell)}
+                            {badge("Wants to list", r.wants_to_list)}
+                            {badge("Listed with us", r.listed_with_us)}
+                          </div>
+                          {r.last_comment && <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 8, fontStyle: "italic" }}>“{r.last_comment}”</div>}
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "stretch", minWidth: 190 }}>
+                          {!rv ? (
+                            <button onClick={() => reveal(r)} style={{ padding: "9px 14px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontWeight: 700, fontFamily: UI, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+                              <Eye size={15} /> Reveal number
+                            </button>
+                          ) : (
+                            <div style={{ display: "flex", gap: 8 }}>
+                              <a href={telHref(phone)} onClick={() => logDataCallReliable(r.id, "call", user.id)} style={{ flex: 1, padding: "9px 12px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, textDecoration: "none", textAlign: "center", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><Phone size={15} /> Call</a>
+                              <a href={waHref(phone)} target="_blank" rel="noreferrer" onClick={() => logDataCallReliable(r.id, "whatsapp", user.id)} style={{ flex: 1, padding: "9px 12px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontWeight: 700, fontFamily: UI, textDecoration: "none", textAlign: "center", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><MessageCircle size={15} /> WA</a>
+                            </div>
+                          )}
+                          {rv && rv.owner_phone && <div style={{ fontSize: 12.5, color: T.inkSoft, textAlign: "center" }}>{rv.owner_phone}</div>}
+                          <button onClick={() => setOpenId(isOpen ? null : r.id)} style={{ ...miniBtn(), justifyContent: "center" }}>{isOpen ? "Close" : "Log outcome"}</button>
+                        </div>
+                      </div>
+                      {isOpen && <DcDisposition r={r} user={user} onSaved={() => { setOpenId(null); load(); }} />}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
