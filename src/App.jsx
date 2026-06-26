@@ -7594,10 +7594,30 @@ function AskAmber({ narrow, user, openLead }) {
     setMentor(m);
     setMsgs([{ role: "assistant", text: m.greeting }]);
     setLeadInfo(leadCtx && leadCtx.client_name ? { name: leadCtx.client_name } : null);
+    // Load this agent's saved conversation with THIS mentor (RLS keeps it private to them).
+    try {
+      const { data: hist } = await supabase.from("ai_messages")
+        .select("role, content, sources").eq("mentor_id", m.id)
+        .order("created_at", { ascending: true }).limit(200);
+      if (Array.isArray(hist) && hist.length)
+        setMsgs([{ role: "assistant", text: m.greeting }, ...hist.map((h) => ({ role: h.role, text: h.content, sources: h.sources || undefined }))]);
+    } catch (e) { /* best-effort; fall back to the greeting only */ }
     setCtx(await buildCrmContext(user, leadCtx)); // fetch permitted CRM context once per session
     fetchKnowledge(user).then(setKb).catch(() => setKb([])); // verified company knowledge
   };
   const reset = () => { setMentor(null); setMsgs([]); setInput(""); setLeadInfo(null); };
+  // Persist one chat message for this agent + mentor (fires async, best-effort; RLS ties each row to auth.uid()). Powers per-agent memory.
+  const persist = (role, text, sources) => {
+    if (!mentor || !text) return;
+    (async () => { try { await supabase.from("ai_messages").insert({ mentor_id: mentor.id, role, content: String(text).slice(0, 8000), sources: sources && sources.length ? sources : null }); } catch (e) {} })();
+  };
+  // Start a brand-new conversation with the current mentor (clears their saved thread for this agent only).
+  const newChat = async () => {
+    if (!mentor) { reset(); return; }
+    if (!window.confirm("Start a new chat with " + mentor.name + "? This clears your saved conversation with this mentor.")) return;
+    try { await supabase.from("ai_messages").delete().eq("mentor_id", mentor.id); } catch (e) {}
+    setMsgs([{ role: "assistant", text: mentor.greeting }]); setInput("");
+  };
   useEffect(() => {
     const onOpen = async (e) => {
       const d = e && e.detail;
@@ -7664,12 +7684,14 @@ function AskAmber({ narrow, user, openLead }) {
     const text = (q != null ? q : input).trim();
     if (!text || busy || !mentor) return;
     setInput("");
+    persist("user", text);
     // Pure courtesy/greeting → friendly in-persona reply, no model call, never flagged or refused.
     if (isPureGreeting(text)) {
       const courtesy = { ambreen_ai: "Doing great — now tell me which client we're converting today? Send me a lead, objection, project or follow-up and I'll help you handle it.",
         saad_ai: "I'm ready. Share the lead, project or client situation and I'll give you the best next move.",
         ibrahim_ai: "All good — let's make your day productive. Which lead or project are we working on?" }[mentor.id] || "Ready to help — send me a lead, client, project or follow-up.";
       setMsgs((m) => [...m, { role: "user", text }, { role: "assistant", text: courtesy }]);
+      persist("assistant", courtesy);
       logAi({ user, mentor, question: text, responseSum: courtesy, fullResponse: courtesy, category: "greeting", status: "success" });
       return;
     }
@@ -7680,6 +7702,7 @@ function AskAmber({ narrow, user, openLead }) {
         saad_ai: "That's outside what I'm here for. Bring me a lead, client, deal, project or CRM question and I'll give you the move.",
         ibrahim_ai: "Let's keep it work-related — easy. Send me a client, WhatsApp reply, lead or follow-up and I'll help you sort it." }[mentor.id];
       setMsgs((m) => [...m, { role: "user", text }, { role: "assistant", text: refusal }]);
+      persist("assistant", refusal);
       logAi({ user, mentor, question: text, responseSum: "[refused: " + cat + "]", status: "refused", flagCategory: cat });
       return;
     }
@@ -7691,6 +7714,7 @@ function AskAmber({ narrow, user, openLead }) {
       try {
         const out = await runLeadQuery(li, user);
         setMsgs((m) => [...m, { role: "assistant", text: out.heading, leads: out.leads }]);
+        persist("assistant", out.heading);
         logAi({ user, mentor, question: text, responseSum: out.heading + " (" + out.leads.length + " leads)", category: "follow_up", status: "success" });
       } catch (e) {
         setMsgs((m) => [...m, { role: "assistant", text: "I couldn't pull your leads just now. Please try again." }]);
@@ -7721,6 +7745,7 @@ function AskAmber({ narrow, user, openLead }) {
           : [];
         const sources = [...kbSources, ...webDomains.slice(0, 4)];
         setMsgs((m) => [...m, { role: "assistant", text: reply || "Please try again.", sources }]);
+        persist("assistant", reply || "Please try again.", sources);
         logAi({ user, mentor, question: text, responseSum: reply, fullResponse: reply, category: categorize(text), model: data.model, status: "success", tokensIn: data.usage && data.usage.input_tokens, tokensOut: data.usage && data.usage.output_tokens });
         if (data.web_enabled) { try { supabase.from("ai_web_log").insert({ user_id: user.id, user_name: user.name, user_role: user.role, query: String(text).slice(0, 500), used: webUsed, domains: data.web_domains || 0 }); } catch (e) {} }
       }
@@ -7866,7 +7891,7 @@ function AskAmber({ narrow, user, openLead }) {
           </div>
         )}
         <div className={narrow ? "amber-chat-foot" : undefined} style={{ display: "flex", gap: 8, padding: 11, borderTop: `1px solid ${T.hair}`, background: T.paper }}>
-          <button onClick={reset} title="New chat" style={{ ...miniBtn(), padding: "0 11px" }}>New</button>
+          <button onClick={newChat} title="New chat — clears this mentor's saved thread" style={{ ...miniBtn(), padding: "0 11px" }}>New</button>
           <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }}
             placeholder={"Ask " + mentor.name.replace(" AI", "") + "…"} style={{ flex: 1, border: `1px solid ${T.hair}`, borderRadius: 11, padding: "10px 12px",
               fontSize: 12.8, fontFamily: UI, outline: "none", color: T.ink, background: T.bone }} />
