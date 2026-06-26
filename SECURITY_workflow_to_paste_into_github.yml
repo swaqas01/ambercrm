@@ -1,0 +1,51 @@
+# Amber Homes CRM — Continuous Security Scan
+# ----------------------------------------------------------------------
+# Runs the attacker-simulating security scanner:
+#   • on every push to main        (catches a bad change before it matters)
+#   • on every pull request         (catches it before it even merges)
+#   • every day at 02:00 UTC        (catches drift / a dashboard setting flipped)
+#   • on demand                     (Actions tab → Run workflow)
+#
+# The scanner uses only the PUBLIC anon key, so no secrets are required.
+# A failing scan turns this check red and (if you enable branch protection)
+# can block the merge/deploy.
+#
+# TO INSTALL: in GitHub → your repo → Add file → Create new file →
+# name it exactly  .github/workflows/security.yml  → paste this → commit.
+
+name: Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (so the bundle can be scanned for leaked keys)
+        run: npm run build
+
+      - name: Run security scanner
+        run: node scripts/security-check.mjs
+        env:
+          # These are public-by-design; override here only if they ever change.
+          SUPABASE_URL: ${{ vars.SUPABASE_URL || 'https://fkeniejcitwlqfatkopi.supabase.co' }}
+          ANON_KEY: ${{ vars.ANON_KEY || 'sb_publishable_3M0eOBeRvTuC8yjMWWcEqg_BPZfYyKJ' }}
+          PRODUCTION_URL: ${{ vars.PRODUCTION_URL || 'https://crm.amberhomes.ai' }}
