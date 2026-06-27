@@ -117,6 +117,63 @@ const THEME_CSS = `
     --shadow:0 1px 2px rgba(0,0,0,.3), 0 6px 18px rgba(0,0,0,.25);
     --shadowLg:0 2px 4px rgba(0,0,0,.4), 0 16px 40px rgba(0,0,0,.45);
   }
+  /* ===== Added themes: Lime / Tidal / Ember (base + accent, day + night). Default = no [data-accent] override = unchanged CRM design. ===== */
+  [data-accent="lime"] {
+    --ink:#16180F; --inkSoft:#3F4632; --muted:#6E7857; --faint:#A6AE92;
+    --bone:#F5F8EC; --paper:#FFFFFF; --hair:#E3E8D3; --hairSoft:#EDF1E0;
+    --gold:#46700F; --goldBright:#5C9015; --goldSoft:#E9F4D2; --goldEdge:#D0E1A9; --goldTint:#F4F9E7; --wm:rgba(70,112,15,.06);
+    --ok:#10B981; --okSoft:#D1FAE5; --warn:#F59E0B; --warnSoft:#FEF3C7; --bad:#EF4444; --badSoft:#FEE2E2; --info:#0EA5E9; --infoSoft:#E0F2FE;
+    --hero:#16180F; --side:#FFFFFF; --btnBg:#16180F; --btnFg:#FFFFFF;
+    --shadow:0 1px 2px rgba(22,24,15,.04), 0 6px 18px rgba(22,24,15,.06); --shadowLg:0 2px 4px rgba(22,24,15,.06), 0 16px 40px rgba(22,24,15,.10);
+    --sideText:#5B6B47; --sideActiveText:#3A5E08; --sideActiveBg:#E9F4D2; --sideBorder:#E3E8D3; --sideBrand:#16180F;
+  }
+  [data-amber="dark"][data-accent="lime"] {
+    --ink:#FFFFFF; --inkSoft:#C9C9CE; --muted:#9A9AA0; --faint:#5E5E64;
+    --bone:#0B0B0D; --paper:#151517; --hair:#262629; --hairSoft:#1D1D20;
+    --gold:#C5F82A; --goldBright:#D4FF55; --goldSoft:rgba(197,248,42,.13); --goldEdge:rgba(197,248,42,.32); --goldTint:#15180A; --wm:rgba(197,248,42,.07);
+    --ok:#22C55E; --okSoft:#0E2A18; --warn:#F5A524; --warnSoft:#33270C; --bad:#FF5C49; --badSoft:#331613; --info:#38BDF8; --infoSoft:#0C2A3A;
+    --hero:#1D1D20; --side:#0B0B0D; --btnBg:#C5F82A; --btnFg:#0B0B0D;
+    --shadow:0 2px 8px rgba(0,0,0,.5); --shadowLg:0 10px 34px rgba(0,0,0,.6);
+    --sideText:#9A9AA0; --sideActiveText:#0B0B0D; --sideActiveBg:#C5F82A; --sideBorder:#262629; --sideBrand:#C5F82A;
+  }
+  [data-accent="tidal"] {
+    --ink:#11151C; --inkSoft:#3A4453; --muted:#647183; --faint:#9AA6B6;
+    --bone:#EEF2F7; --paper:#FFFFFF; --hair:#DBE2EC; --hairSoft:#E8EDF4;
+    --gold:#8C631A; --goldBright:#B5832A; --goldSoft:#F3E8CF; --goldEdge:#E3CFA3; --goldTint:#FAF5EA; --wm:rgba(140,99,26,.06);
+    --ok:#0EA672; --okSoft:#D1F5E6; --warn:#F59E0B; --warnSoft:#FEF3C7; --bad:#EF4444; --badSoft:#FEE2E2; --info:#0EA5E9; --infoSoft:#E0F2FE;
+    --hero:#11151C; --side:#FFFFFF; --btnBg:#11151C; --btnFg:#FFFFFF;
+    --shadow:0 1px 2px rgba(17,21,28,.05), 0 6px 18px rgba(17,21,28,.07); --shadowLg:0 2px 4px rgba(17,21,28,.06), 0 16px 40px rgba(17,21,28,.10);
+    --sideText:#566273; --sideActiveText:#6F5113; --sideActiveBg:#F3E8CF; --sideBorder:#DBE2EC; --sideBrand:#11151C;
+  }
+  [data-amber="dark"][data-accent="tidal"] {
+    --ink:#EEF2F8; --inkSoft:#C2CCDA; --muted:#94A0B2; --faint:#5A6478;
+    --bone:#0F1117; --paper:#181B22; --hair:#2C313C; --hairSoft:#222630;
+    --gold:#E7BC66; --goldBright:#F2CE86; --goldSoft:rgba(231,188,102,.14); --goldEdge:rgba(231,188,102,.34); --goldTint:#1A1B16; --wm:rgba(231,188,102,.07);
+    --ok:#34D27B; --okSoft:#0E2A1E; --warn:#F5A524; --warnSoft:#33270C; --bad:#FF5C49; --badSoft:#331613; --info:#38BDF8; --infoSoft:#0C2A3A;
+    --hero:#222630; --side:#0B0F17; --btnBg:#E7BC66; --btnFg:#0C0F16;
+    --shadow:0 2px 8px rgba(0,0,0,.5); --shadowLg:0 10px 34px rgba(0,0,0,.6);
+    --sideText:#94A0B2; --sideActiveText:#0C0F16; --sideActiveBg:#E7BC66; --sideBorder:#2C313C; --sideBrand:#E7BC66;
+    background:linear-gradient(155deg,#14161B 0%,#0F1722 50%,#0A1422 100%) !important;
+  }
+  [data-accent="ember"] {
+    --ink:#1E140C; --inkSoft:#4A3A2C; --muted:#7E6A55; --faint:#B0A08C;
+    --bone:#FBF5EC; --paper:#FFFFFF; --hair:#EBE0D2; --hairSoft:#F3EBDF;
+    --gold:#B5470E; --goldBright:#D2560F; --goldSoft:#FBE5D2; --goldEdge:#F0CBA8; --goldTint:#FCF1E7; --wm:rgba(181,71,14,.06);
+    --ok:#10B981; --okSoft:#D1FAE5; --warn:#F59E0B; --warnSoft:#FEF3C7; --bad:#EF4444; --badSoft:#FEE2E2; --info:#0EA5E9; --infoSoft:#E0F2FE;
+    --hero:#1E140C; --side:#FFFFFF; --btnBg:#1E140C; --btnFg:#FFFFFF;
+    --shadow:0 1px 2px rgba(30,20,12,.05), 0 6px 18px rgba(30,20,12,.07); --shadowLg:0 2px 4px rgba(30,20,12,.06), 0 16px 40px rgba(30,20,12,.10);
+    --sideText:#6E5B47; --sideActiveText:#9A3D0A; --sideActiveBg:#FBE5D2; --sideBorder:#EBE0D2; --sideBrand:#1E140C;
+  }
+  [data-amber="dark"][data-accent="ember"] {
+    --ink:#FBF3E4; --inkSoft:#D8C6AE; --muted:#B9A488; --faint:#7A6650;
+    --bone:#0A0705; --paper:#1A120C; --hair:#3A2A1C; --hairSoft:#251A12;
+    --gold:#F4E3C1; --goldBright:#FBEFD6; --goldSoft:rgba(244,227,193,.12); --goldEdge:rgba(244,227,193,.30); --goldTint:#1C140B; --wm:rgba(232,99,26,.10);
+    --ok:#22C55E; --okSoft:#0E2A18; --warn:#F5A524; --warnSoft:#33270C; --bad:#FF5C49; --badSoft:#331613; --info:#38BDF8; --infoSoft:#0C2A3A;
+    --hero:#251A12; --side:#0A0705; --btnBg:#F4E3C1; --btnFg:#1A0E06;
+    --shadow:0 2px 8px rgba(0,0,0,.55); --shadowLg:0 10px 34px rgba(0,0,0,.65);
+    --sideText:#B9A488; --sideActiveText:#1A0E06; --sideActiveBg:#F4E3C1; --sideBorder:#3A2A1C; --sideBrand:#F4E3C1;
+    background:linear-gradient(165deg,#0A0705 0%,#1C0D04 45%,#7A2E08 100%) !important;
+  }
 `;
 const DISPLAY = "'Lato', system-ui, -apple-system, sans-serif";
 const UI = "'Lato', system-ui, -apple-system, sans-serif";
@@ -668,8 +725,11 @@ export default function App() {
   useEffect(() => { if (user) registerDevice(); }, [user]);   // record device + honor remote/cap sign-out
   const signOut = async () => { clearTrustToken(); try { await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ action: "logout" }) }); } catch (e) {} await supabase.auth.signOut(); setUser(null); };
   const [accent, setAccent] = useState("gold");
-  const ACCENTS = [["gold", "Violet", "#7C5CFA"], ["emerald", "Emerald", "#1F6B52"],
-    ["sapphire", "Sapphire", "#2C4E78"], ["burgundy", "Burgundy", "#7C2D3E"]];
+  const ACCENTS = [["gold", "Default", "#7C5CFA"], ["lime", "Lime", "#C5F82A"],
+    ["tidal", "Tidal", "#E7BC66"], ["ember", "Ember", "#E8631A"]];
+  // Per-user color theme persistence (localStorage, same approach as the day/night toggle - no DB/RLS change).
+  useEffect(() => { if (user && user.id) { try { setAccent(localStorage.getItem("amber_accent_" + user.id) || "gold"); } catch (e) {} } }, [user && user.id]);
+  useEffect(() => { if (user && user.id) { try { localStorage.setItem("amber_accent_" + user.id, accent); } catch (e) {} } }, [accent, user && user.id]);
   const [narrow, setNarrow] = useState(typeof window !== "undefined" && window.innerWidth < 900);
   useEffect(() => {
     const f = () => setNarrow(window.innerWidth < 900);
@@ -9494,6 +9554,13 @@ function ProfileMenu({ user, dark, setDark, accent, setAccent, ACCENTS, signOut 
         <button onClick={() => setDark(false)} style={{ display: "flex", alignItems: "center", gap: 6, border: `1px solid ${!dark ? T.gold : T.hair}`, background: !dark ? T.goldSoft : T.paper, color: !dark ? T.gold : T.ink, borderRadius: 9, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: UI }}><Sun size={13} /> Day</button>
         <button onClick={() => setDark(true)} style={{ display: "flex", alignItems: "center", gap: 6, border: `1px solid ${dark ? T.gold : T.hair}`, background: dark ? T.goldSoft : T.paper, color: dark ? T.gold : T.ink, borderRadius: 9, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: UI }}><Moon size={13} /> Night</button>
       </div>
+      <div style={{ marginTop: 14, fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Color theme</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+        {ACCENTS.map(([key, label, dot]) => { const on = accent === key; return (
+          <button key={key} onClick={() => setAccent(key)} style={{ display: "flex", alignItems: "center", gap: 8, border: `1px solid ${on ? T.gold : T.hair}`, background: on ? T.goldSoft : T.paper, color: on ? T.gold : T.ink, borderRadius: 9, padding: "9px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>
+            <span style={{ width: 15, height: 15, borderRadius: 5, background: dot, border: `1px solid ${T.hair}`, flexShrink: 0 }} />{label}{on && <Check size={13} style={{ marginLeft: "auto" }} />}
+          </button>); })}
+      </div>
       <button onClick={() => setModal("password")} style={{ ...miniBtn(), width: "100%", justifyContent: "center", marginTop: 14 }}>
         <Lock size={13} /> Change password</button>
       <div style={{ fontSize: 11, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>
@@ -9505,6 +9572,13 @@ function ProfileMenu({ user, dark, setDark, accent, setAccent, ACCENTS, signOut 
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={() => setDark(false)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: `1px solid ${!dark ? T.gold : T.hair}`, background: !dark ? T.goldSoft : T.paper, color: !dark ? T.gold : T.ink, borderRadius: 10, padding: "10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}><Sun size={14} /> Day</button>
           <button onClick={() => setDark(true)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: `1px solid ${dark ? T.gold : T.hair}`, background: dark ? T.goldSoft : T.paper, color: dark ? T.gold : T.ink, borderRadius: 10, padding: "10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}><Moon size={14} /> Night</button>
+        </div>
+        <div style={{ fontSize: 12.5, margin: "14px 0 8px", color: T.muted }}>Color theme</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {ACCENTS.map(([key, label, dot]) => { const on = accent === key; return (
+            <button key={key} onClick={() => setAccent(key)} style={{ display: "flex", alignItems: "center", gap: 8, border: `1px solid ${on ? T.gold : T.hair}`, background: on ? T.goldSoft : T.paper, color: on ? T.gold : T.ink, borderRadius: 10, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: UI }}>
+              <span style={{ width: 16, height: 16, borderRadius: 5, background: dot, border: `1px solid ${T.hair}`, flexShrink: 0 }} />{label}{on && <Check size={14} style={{ marginLeft: "auto" }} />}
+            </button>); })}
         </div>
       </SettingsBlock>
       <SettingsBlock title="Install on your phone">
