@@ -2686,6 +2686,9 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
   const [openModal, setOpenModal] = useState(false);        // "Mark as Open" reason dialog
   const [openReason, setOpenReason] = useState("");
   const [openBusy, setOpenBusy] = useState(false);
+  const [lockModal, setLockModal] = useState(false);   // manual lock reason dialog
+  const [lockReason, setLockReason] = useState("");
+  const [lockBusy, setLockBusy] = useState(false);
   const [newComment, setNewComment] = useState("");
   const [sched, setSched] = useState(false);
   const [schedDate, setSchedDate] = useState("");
@@ -2824,6 +2827,27 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
     setOpenBusy(false);
     if (error || (data && data.error)) { setOpenModal(false); setErr2(data && data.error === "locked_status" ? "This lead's status doesn't allow releasing it to Open Leads." : (data && data.error === "disabled" ? "Marking leads open is currently disabled by your admin." : "Couldn't mark this lead as open. Please try again.")); return; }
     setOpenModal(false); go("live");
+  };
+  const doLock = async () => {
+    if (!lockReason) return;
+    setLockBusy(true);
+    const { data, error } = await supabase.rpc("lock_lead", { p_lead_id: lead.id, p_reason: lockReason });
+    setLockBusy(false);
+    if (error || (data && data.error)) {
+      setLockModal(false);
+      setErr2(data && data.error === "forbidden" ? "You can only lock a lead that's assigned to you."
+        : (data && data.error === "is_open" ? "This lead is in the Open pool, so it can't be locked."
+        : (data && data.error === "bad_reason" ? "Please choose a valid reason." : "Couldn't lock this lead. Please try again.")));
+      return;
+    }
+    setLockModal(false); loadAll();
+  };
+  const doUnlock = async () => {
+    setLockBusy(true);
+    const { data, error } = await supabase.rpc("unlock_lead", { p_lead_id: lead.id });
+    setLockBusy(false);
+    if (error || (data && data.error)) { setErr2("Couldn't unlock this lead. Please try again."); return; }
+    loadAll();
   };
   const doAssignSelf = async () => {
     setOpenBusy(true);
@@ -3070,6 +3094,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
             <span style={{ fontSize: 11.5, fontWeight: 700, color: T.goldBright }}>{leadIdFmt}</span>
             <span style={{ fontSize: 10.5, fontWeight: 700, background: "rgba(255,255,255,.14)", color: "#fff", borderRadius: 6, padding: "2px 8px" }}>{statusText}</span>
+            {lead.locked && <span title={"Locked: " + (lead.lock_reason || "")} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 700, background: "rgba(212,175,92,.22)", color: T.goldBright, borderRadius: 6, padding: "2px 8px" }}><Lock size={11} /> Locked</span>}
             {(lead.temperature === "Hot" || lead.temperature === "Very Hot") && <span style={{ fontSize: 10.5, fontWeight: 700, background: "rgba(225,90,80,.25)", color: "#ffd9d5", borderRadius: 6, padding: "2px 8px" }}>{lead.temperature}</span>}
             {(() => { const ls = leadScore(lead); return <span title="Lead score (0-100)" style={{ fontSize: 10.5, fontWeight: 700, background: "rgba(212,175,92,.22)", color: T.goldBright, borderRadius: 6, padding: "2px 8px" }}>★ {ls.score} · {ls.band}</span>; })()}
           </div>
@@ -3095,12 +3120,33 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
       {user && user.role === "agent" && lead.is_open && <Btn icon={UserPlus} label="Assign to Me" tone="ok" onClick={doAssignSelf} />}
       <Btn icon={Calendar} label="Schedule Follow-Up" onClick={() => openSchedule(null)} />
       {canReassign && <Btn icon={UserPlus} label="Change Agent" tone="gold" onClick={() => { setReTo(lead.assigned_agent || ""); setReReason(""); setErr2(""); setReOpen(true); }} />}
-      {user && user.role === "agent" && isAssignedAgent && !lead.is_open && lead.status !== "Closed Won" && <Btn icon={Unlock} label="Mark as Open" tone="gold" onClick={() => { setOpenReason(""); setErr2(""); setOpenModal(true); }} />}
+      {(isAssignedAgent || isAdmin) && !lead.is_open && !lead.locked && !leadClosed && <Btn icon={Lock} label="Lock lead" tone="gold" onClick={() => { setLockReason(""); setErr2(""); setLockModal(true); }} />}
+      {user && user.role === "agent" && isAssignedAgent && !lead.is_open && !lead.locked && lead.status !== "Closed Won" && <Btn icon={Unlock} label="Mark as Open" tone="gold" onClick={() => { setOpenReason(""); setErr2(""); setOpenModal(true); }} />}
       {canEdit && <Btn icon={editing ? X : Pencil} label={editing ? "Cancel" : "Edit details"} tone="gold" onClick={() => editing ? setEditing(false) : startEdit()} />}
       {canEdit && !leadClosed && <Btn icon={Coins} label={draftRow ? "Edit Draft" : "Close deal"} tone="ok" onClick={() => setShowDeal(true)} />}
     </div>
     {revealMsg && <div style={{ ...card, padding: "10px 14px", marginTop: 10, borderColor: T.warnSoft, background: T.warnSoft, color: T.warn, fontSize: 12.5, fontWeight: 600 }}>{revealMsg}</div>}
     {leadClosed && <div style={{ ...card, padding: "11px 14px", marginTop: 10, borderColor: T.okSoft, background: T.okSoft, color: T.ok, fontSize: 12.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}><Lock size={14} /> {lead.status === "Closed Won" ? "Closed Won" : "Closed \u2014 pending approval"} · locked to {lead.assigned_agent_name || "the closing agent"}. Only a Master Admin can reassign.</div>}
+    {lead.locked && !leadClosed && <div style={{ ...card, padding: "11px 14px", marginTop: 10, borderColor: T.goldEdge, background: "rgba(212,175,92,.10)", color: T.gold, fontSize: 12.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Lock size={14} /> Locked · {lead.lock_reason}{lead.locked_at ? " · " + new Date(lead.locked_at).toLocaleDateString() : ""}</span>
+      {(isAssignedAgent || isAdmin) && <button onClick={doUnlock} disabled={lockBusy} style={{ ...miniBtn() }}>{lockBusy ? "..." : "Unlock"}</button>}
+    </div>}
+
+    {lockModal && <Modal title="Lock this lead" onClose={() => setLockModal(false)}>
+      <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>Locking keeps this lead assigned to you and out of the Open Leads pool while you work toward closing. Choose a reason; it's recorded in the lead history.</div>
+      <label style={{ display: "block", marginBottom: 14 }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>Reason</span>
+        <select value={lockReason} onChange={(e) => setLockReason(e.target.value)} style={inp}>
+          <option value="">Select a reason...</option>
+          {["EOI in Process", "Closed in the past", "Final Stage of closing"].map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+      </label>
+      {err2 && <div style={{ fontSize: 12, color: T.bad, marginBottom: 10 }}>{err2}</div>}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={() => setLockModal(false)} style={{ ...miniBtn() }}>Cancel</button>
+        <button onClick={doLock} disabled={!lockReason || lockBusy} style={{ ...miniBtn(), borderColor: T.gold, color: lockReason ? T.gold : T.faint, fontWeight: 700 }}>{lockBusy ? "Locking..." : "Lock lead"}</button>
+      </div>
+    </Modal>}
 
     {openModal && <Modal title="Mark lead as Open" onClose={() => setOpenModal(false)}>
       <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>This releases the lead into the Open Leads pool for another agent to pick up. You'll no longer be assigned to it, and this is recorded in the lead history.</div>
