@@ -778,7 +778,7 @@ export default function App() {
     if (user && screen !== "lead" && screen !== "dealdetail" && screen !== "agentprofile") { try { sessionStorage.setItem("amber_screen", screen); } catch (e) {} }
   }, [user, screen]);
   const SCREENS = {
-    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} openAgent={openAgent} />, admin: <AdminDash go={go} user={user} openLead={openLead} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />, devices: <DevicesSecurity user={user} />, breakdown: <BreakdownCalculator user={user} narrow={narrow} />,
+    live: <LiveLeads user={user} filter={filter} go={go} openLead={openLead} />, users: <UsersAdmin user={user} openAgent={openAgent} />, admin: <AdminDash go={go} user={user} openLead={openLead} />, agent: <AgentDash go={go} user={user} openLead={openLead} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, lead: <LeadDetail leadId={detailId} user={user} go={go} openLead={openLead} from={leadFrom} siblings={leadSiblings} />, open: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="open" heading="Open Leads" sub="Leads currently in the open pool — released by an agent or never assigned. Select one or many and assign them to an active agent. Use the Agent filter to switch between the open pool, unassigned, a specific agent, or everyone." />, kb: <KnowledgeBase user={user} />, projects: <Projects user={user} go={go} />, ailogs: <AiLogs user={user} go={go} />, deals: <Deals user={user} go={go} openDeal={openDeal} openLead={openLead} />, dealdetail: <DealDetail dealId={dealDetailId} user={user} go={go} />, devices: <DevicesSecurity user={user} />, breakdown: <BreakdownCalculator user={user} narrow={narrow} />,
     myprofile: <AgentProfile user={user} agentId={user && user.id} self go={go} openLead={openLead} openAgent={openAgent} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, agentprofile: <AgentProfile user={user} agentId={agentDetailId} go={go} openLead={openLead} openAgent={openAgent} />, agents: <AgentsRoster user={user} go={go} openAgent={openAgent} />, targets: <TargetsAdmin user={user} go={go} openAgent={openAgent} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <AgentPerformance user={user} go={go} openAgent={openAgent} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
@@ -1476,9 +1476,32 @@ function TargetDetailsModal({ agentId, agentName, action, period, title, target,
     </div>
   </Modal>;
 }
-function MyTargets({ userId, acts, openLead }) {
+function CommissionTargetCard({ title, icon, earned, target, editable, onEdit }) {
+  const has = target != null && Number(target) > 0;
+  const pct = has ? Math.round((Number(earned) || 0) / Number(target) * 100) : 0;
+  const color = !has ? T.faint : pct >= 100 ? T.ok : pct < 60 ? T.warn : T.gold;
+  const aedC = (n) => "AED " + Math.round(Number(n) || 0).toLocaleString("en-US");
+  return (
+    <div style={{ ...card, padding: "20px 18px 18px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 11 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".07em", textTransform: "uppercase", color: T.muted, display: "flex", alignItems: "center", gap: 7 }}>{icon}{title}</div>
+      <TargetRing pct={Math.min(100, pct)} color={color} size={148} />
+      <div style={{ fontFamily: DISPLAY, fontSize: 19, fontWeight: 800, color: T.ink }}>{aedC(earned)} <span style={{ fontSize: 13, fontWeight: 600, color: T.muted }}>/ {has ? aedC(target) : "\u2014"}</span></div>
+      <div style={{ fontSize: 11.5, color: has ? (pct >= 100 ? T.ok : T.muted) : T.muted, fontWeight: 600, minHeight: 16 }}>{has ? (pct >= 100 ? "Target achieved \ud83c\udf89" : aedC(Number(target) - (Number(earned) || 0)) + " to go") : (editable ? "Tap to set your monthly goal" : "No target set yet")}</div>
+      {editable && <button onClick={onEdit} style={{ ...miniBtn(), fontSize: 11.5, padding: "5px 16px" }}>{has ? "Edit target" : "Set target"}</button>}
+    </div>
+  );
+}
+function MyTargets({ userId, acts, openLead, selfId }) {
   const [targets, setTargets] = useState(null);
   const [details, setDetails] = useState(null);
+  const [companyTarget, setCompanyTarget] = useState(null);
+  const [personalTarget, setPersonalTarget] = useState(null);
+  const [monthComm, setMonthComm] = useState(0);
+  const [editPersonal, setEditPersonal] = useState(false);
+  const [personalInput, setPersonalInput] = useState("");
+  const [savingPersonal, setSavingPersonal] = useState(false);
+  const canEditPersonal = !!(userId && selfId && userId === selfId);
+  const cInp = { width: "100%", border: `1px solid ${T.hair}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, fontFamily: UI, color: T.ink, background: T.paper, boxSizing: "border-box" };
   useEffect(() => { let alive = true; if (!userId) { return; }
     (async () => {
       const [df, ov] = await Promise.all([
@@ -1486,13 +1509,31 @@ function MyTargets({ userId, acts, openLead }) {
         supabase.from("agent_targets").select("*").eq("agent_id", userId).maybeSingle(),
       ]);
       if (alive) setTargets(resolveTargets(df.data, ov.data));
+      try { const ct = await supabase.from("agent_commission_targets").select("monthly_commission_target").eq("agent_id", userId).maybeSingle(); if (alive && ct && !ct.error) setCompanyTarget(ct.data ? ct.data.monthly_commission_target : null); } catch (e) {}
+      try { const pt = await supabase.from("agent_personal_targets").select("monthly_commission_target").eq("agent_id", userId).maybeSingle(); if (alive && pt && !pt.error) { const v = pt.data ? pt.data.monthly_commission_target : null; setPersonalTarget(v); setPersonalInput(v == null ? "" : String(v)); } } catch (e) {}
+      try { const dl = await supabase.from("deals").select("agent_commission,status,decided_at,created_at").eq("agent_id", userId).eq("status", "approved").limit(2000); if (alive && dl && !dl.error) setMonthComm((dl.data || []).filter((d) => tgtInPeriod(d.decided_at || d.created_at, "month")).reduce((s, d) => s + (Number(d.agent_commission) || 0), 0)); } catch (e) {}
     })();
     return () => { alive = false; };
   }, [userId]);
+  const savePersonal = async () => {
+    setSavingPersonal(true);
+    const n = personalInput === "" ? null : Math.max(0, parseFloat(String(personalInput).replace(/[^0-9.]/g, "")) || 0);
+    const { error } = await supabase.from("agent_personal_targets").upsert({ agent_id: userId, monthly_commission_target: n, updated_at: new Date().toISOString() }, { onConflict: "agent_id" });
+    setSavingPersonal(false);
+    if (!error) { setPersonalTarget(n); setEditPersonal(false); } else { alert("Couldn't save your personal target. Please try again."); }
+  };
   if (!targets) return null;
   const cards = [["Daily Calls", "call", "today", "calls"], ["Daily WhatsApp", "whatsapp", "today", "msgs"], ["Weekly Calls", "call", "week", "calls"], ["Weekly WhatsApp", "whatsapp", "week", "msgs"], ["Monthly Calls", "call", "month", "calls"], ["Monthly WhatsApp", "whatsapp", "month", "msgs"]];
   return (
     <div style={{ marginTop: 14 }}>
+      <div style={{ ...card, padding: "15px 18px 18px", marginBottom: 14 }}>
+        <div style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 9 }}><Wallet size={19} color={T.gold} /> Commission Targets <span style={{ fontSize: 11, fontWeight: 600, color: T.muted }}>· this month</span></div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 14, marginTop: 14 }}>
+          <CommissionTargetCard title="Company Target" icon={<Building2 size={13} color={T.muted} />} earned={monthComm} target={companyTarget} editable={false} />
+          <CommissionTargetCard title="My Personal Target" icon={<Target size={13} color={T.muted} />} earned={monthComm} target={personalTarget} editable={canEditPersonal} onEdit={() => { setPersonalInput(personalTarget == null ? "" : String(personalTarget)); setEditPersonal(true); }} />
+        </div>
+        <div style={{ fontSize: 10.5, color: T.faint, marginTop: 10 }}>Company target is set by your manager. Progress reflects approved/closed deals only — not drafts or pending approvals.</div>
+      </div>
       <div style={{ ...card, padding: "15px 18px 18px" }}>
         <div style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 9 }}><Target size={19} color={T.gold} /> My Targets</div>
         {targets.paused
@@ -1501,6 +1542,15 @@ function MyTargets({ userId, acts, openLead }) {
               {cards.map((cc) => <TargetCard key={cc[0]} title={cc[0]} done={tgtCount(acts, cc[1], cc[2])} target={targets[cc[1]][cc[2]]} unit={cc[3]} onDetails={() => setDetails({ action: cc[1], period: cc[2], title: cc[0], target: targets[cc[1]][cc[2]] })} />)}
             </div>}
       </div>
+      {editPersonal && <Modal title="My Personal Commission Target" onClose={() => setEditPersonal(false)}>
+        <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>Set your own monthly commission goal in AED. Only you can change this; your manager sets the separate company target.</div>
+        <label style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: T.muted, display: "block", marginBottom: 6 }}>Monthly personal target (AED)</label>
+        <input type="number" min="0" value={personalInput} onChange={(e) => setPersonalInput(e.target.value)} placeholder="e.g. 200000" style={cInp} />
+        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <button onClick={savePersonal} disabled={savingPersonal} style={{ border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 13, padding: "10px 22px", borderRadius: 10, cursor: savingPersonal ? "default" : "pointer", fontFamily: UI, opacity: savingPersonal ? 0.7 : 1 }}>{savingPersonal ? "Saving\u2026" : "Save target"}</button>
+          <button onClick={() => setEditPersonal(false)} style={{ ...miniBtn() }}>Cancel</button>
+        </div>
+      </Modal>}
       {details && <TargetDetailsModal agentId={userId} action={details.action} period={details.period} title={details.title} target={details.target} openLead={openLead} onClose={() => setDetails(null)} />}
     </div>
   );
@@ -1508,7 +1558,7 @@ function MyTargets({ userId, acts, openLead }) {
 
 function TargetsAdmin({ user, go, openAgent }) {
   const isMaster = !!(user && user.role === "master_admin");
-  const canView = isMaster || !!(user && user.role === "admin");
+  const canView = isMaster || !!(user && (user.role === "admin" || user.role === "sales_manager"));
   const [defs, setDefs] = useState(null);
   const [defEdit, setDefEdit] = useState(null);
   const [overrides, setOverrides] = useState({});
@@ -1520,6 +1570,9 @@ function TargetsAdmin({ user, go, openAgent }) {
   const [edit, setEdit] = useState(null);
   const [period, setPeriod] = useState("today");
   const [q, setQ] = useState("");
+  const [commTargets, setCommTargets] = useState({});
+  const [commEdit, setCommEdit] = useState(null);
+  const [savingComm, setSavingComm] = useState(false);
   const lbl = brLbl(), inp = brInp();
 
   useEffect(() => {
@@ -1538,6 +1591,7 @@ function TargetsAdmin({ user, go, openAgent }) {
       setDefs(d); setDefEdit(d);
       const map = {}; (ov.data || []).forEach((r) => { map[r.agent_id] = r; });
       setOverrides(map); setProfs((pp.data || []).filter((p) => p.active !== false)); setActs(aa.data || []);
+      try { const ctr = await supabase.from("agent_commission_targets").select("*"); if (!ctr.error) { const cm = {}; (ctr.data || []).forEach((r) => { cm[r.agent_id] = r; }); setCommTargets(cm); } } catch (e) {}
       setLoading(false);
     })();
     return () => { alive = false; };
@@ -1564,6 +1618,15 @@ function TargetsAdmin({ user, go, openAgent }) {
   const resetAgent = async (agentId) => {
     const { error } = await supabase.from("agent_targets").delete().eq("agent_id", agentId);
     if (!error) setOverrides((m) => { const c = { ...m }; delete c[agentId]; return c; });
+  };
+  const saveComm = async () => {
+    if (!commEdit) return;
+    setSavingComm(true);
+    const n = (commEdit.val === "" || commEdit.val == null) ? null : Math.max(0, parseFloat(String(commEdit.val).replace(/[^0-9.]/g, "")) || 0);
+    const { error } = await supabase.from("agent_commission_targets").upsert({ agent_id: commEdit.agent.id, monthly_commission_target: n, set_by: user.id, updated_at: new Date().toISOString() }, { onConflict: "agent_id" });
+    setSavingComm(false);
+    if (error) { alert("Couldn't save the commission target. Please try again."); return; }
+    setCommTargets((m) => ({ ...m, [commEdit.agent.id]: { agent_id: commEdit.agent.id, monthly_commission_target: n } })); setCommEdit(null);
   };
 
   if (!canView) return <div style={{ ...card, padding: 22, maxWidth: 520, margin: "8px auto" }}><div style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 800, color: T.ink }}>Access denied</div><div style={{ fontSize: 13, color: T.muted, marginTop: 6 }}>Targets are managed by the Master Admin.</div></div>;
@@ -1621,13 +1684,14 @@ function TargetsAdmin({ user, go, openAgent }) {
             <div key={r.p.id} style={{ display: "grid", gridTemplateColumns: "1.6fr 1.3fr 1.3fr 0.9fr auto", gap: 8, padding: "11px 14px", borderBottom: "1px solid " + T.hairSoft, alignItems: "center" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
                 <ApAvatar url={r.p.avatar_url} name={r.p.full_name} size={32} />
-                <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.p.full_name || "—"}</div><div style={{ fontSize: 10.5, color: T.faint }}>{roleLabel(r.p.role)}{r.custom ? " · custom" : ""}{r.paused ? " · paused" : ""}</div></div>
+                <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.p.full_name || "—"}</div><div style={{ fontSize: 10.5, color: T.faint }}>{roleLabel(r.p.role)}{r.custom ? " · custom" : ""}{r.paused ? " · paused" : ""}{commTargets[r.p.id] && commTargets[r.p.id].monthly_commission_target != null ? " · 🎯 AED " + Math.round(Number(commTargets[r.p.id].monthly_commission_target)).toLocaleString() + "/mo" : ""}</div></div>
               </div>
               <div style={{ fontSize: 12.5, color: T.ink }}><b style={{ fontFamily: DISPLAY, fontSize: 15 }}>{r.calls}</b> / {r.cT == null ? "—" : r.cT} <span style={{ fontSize: 11, color: cs.badgeFg, fontWeight: 700 }}>{cs.has ? cs.pct + "%" : ""}</span></div>
               <div style={{ fontSize: 12.5, color: T.ink }}><b style={{ fontFamily: DISPLAY, fontSize: 15 }}>{r.wa}</b> / {r.wT == null ? "—" : r.wT} <span style={{ fontSize: 11, color: ws.badgeFg, fontWeight: 700 }}>{ws.has ? ws.pct + "%" : ""}</span></div>
               <div><span style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: worst.badgeBg, color: worst.badgeFg }}>{worst.label}</span></div>
               <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                 {openAgent && <button onClick={() => openAgent(r.p.id)} style={{ ...miniBtn(), padding: "5px 10px", fontSize: 11 }}>View</button>}
+                <button onClick={() => setCommEdit({ agent: r.p, val: (commTargets[r.p.id] && commTargets[r.p.id].monthly_commission_target != null) ? String(commTargets[r.p.id].monthly_commission_target) : "" })} title="Set monthly commission target (AED)" style={{ ...miniBtn(), padding: "5px 9px", fontSize: 11, borderColor: T.gold, color: T.gold }}><Wallet size={12} /></button>
                 {isMaster && <button onClick={() => setEdit({ agent: r.p, form: { ...(overrides[r.p.id] || {}), is_active: overrides[r.p.id] ? overrides[r.p.id].is_active !== false : true } })} style={{ ...miniBtn(), padding: "5px 10px", fontSize: 11, borderColor: T.gold, color: T.gold }}>Edit</button>}
                 {isMaster && r.custom && <button onClick={() => resetAgent(r.p.id)} title="Reset to default" style={{ ...miniBtn(), padding: "5px 9px", fontSize: 11 }}><RotateCcw size={12} /></button>}
               </div>
@@ -1636,7 +1700,16 @@ function TargetsAdmin({ user, go, openAgent }) {
         })}
         {rows.length === 0 && <div style={{ padding: 20, color: T.muted, fontSize: 13, textAlign: "center" }}>No agents match.</div>}
       </div>
-      <div style={{ fontSize: 10.5, color: T.faint, marginTop: 8 }}>Counts come from real call / WhatsApp action logs (Dubai time). Blank target = uses the company default. Only the Master Admin can change targets.</div>
+      <div style={{ fontSize: 10.5, color: T.faint, marginTop: 8 }}>Counts come from real call / WhatsApp action logs (Dubai time). Blank target = uses the company default. Only the Master Admin can change call/WhatsApp targets; managers can set the commission target.</div>
+      {commEdit && <Modal title={"Commission target \u00b7 " + (commEdit.agent.full_name || "Agent")} onClose={() => setCommEdit(null)}>
+        <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>Monthly company commission target (AED) for this agent. Shown on their dashboard as the Company Target ring; progress counts approved deals only.</div>
+        <label style={lbl}>Monthly commission target (AED)</label>
+        <input type="number" min="0" value={commEdit.val} onChange={(e) => setCommEdit((s) => ({ ...s, val: e.target.value }))} placeholder="e.g. 300000" style={inp} />
+        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <button onClick={saveComm} disabled={savingComm} style={{ border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 13, padding: "10px 22px", borderRadius: 10, cursor: savingComm ? "default" : "pointer", fontFamily: UI, opacity: savingComm ? 0.7 : 1 }}>{savingComm ? "Saving\u2026" : "Save target"}</button>
+          <button onClick={() => setCommEdit(null)} style={{ ...miniBtn() }}>Cancel</button>
+        </div>
+      </Modal>}
 
       {edit && <Modal title={"Targets · " + (edit.agent.full_name || "Agent")} onClose={() => setEdit(null)}>
         <div style={{ fontSize: 12, color: T.muted, marginTop: -4, marginBottom: 12 }}>Leave a field blank to use the company default ({defs.daily_call_target}/{defs.weekly_call_target}/{defs.monthly_call_target} calls, {defs.daily_whatsapp_target}/{defs.weekly_whatsapp_target}/{defs.monthly_whatsapp_target} WhatsApp).</div>
@@ -2421,7 +2494,7 @@ function AgentDash({ go, user, openLead, onAvatar }) {
         <div style={{ fontSize: 10.5, color: T.faint, padding: "0 18px 14px" }}>All figures are your own real CRM activity. "Leads Assigned" counts leads created in the period; commission reflects approved deals only.</div>
       </div>
 
-      <MyTargets userId={user && user.id} acts={acts} openLead={openLead} />
+      <MyTargets userId={user && user.id} selfId={user && user.id} acts={acts} openLead={openLead} />
 
       {/* streak + plan my day */}
       <div style={{ display: "flex", gap: 12, marginTop: 14, flexWrap: "wrap" }}>
@@ -2637,7 +2710,16 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
   const [doneBusy, setDoneBusy] = useState(false); const [doneErr, setDoneErr] = useState("");
   const me = user;
   const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
-  const canReassign = isAdmin;
+  const isMaster = user && user.role === "master_admin";
+  const leadClosed = !!(lead && (lead.closed_locked || lead.status === "Closed Won" || lead.status === "Closed Won Pending Approval"));
+  const canReassign = isMaster || (isAdmin && !leadClosed);
+  const [draftRow, setDraftRow] = useState(null);
+  useEffect(() => { let alive = true; (async () => {
+    if (!lead || !lead.id || !me || !me.id) { setDraftRow(null); return; }
+    let res = await supabase.from("deals").select("*").eq("lead_id", lead.id).eq("agent_id", me.id).eq("status", "draft").eq("deleted", false).eq("archived", false).order("updated_at", { ascending: false }).limit(1);
+    if (res.error) res = await supabase.from("deals").select("*").eq("lead_id", lead.id).eq("agent_id", me.id).eq("status", "draft").eq("deleted", false).order("updated_at", { ascending: false }).limit(1);
+    if (alive) setDraftRow(res && res.data && res.data[0] ? res.data[0] : null);
+  })(); return () => { alive = false; }; }, [lead && lead.id, me && me.id]);
 
   // Field groups (data-driven so view + edit stay in sync).
   const GROUPS = {
@@ -2810,7 +2892,8 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
       original_agent: lead.original_agent || lead.assigned_agent || newId || null };
     const newName = makeOpen ? "Open Leads pool" : (newId ? (agentNameFor(newId) || "agent") : "Unassigned");
     const { error } = await supabase.from("leads").update(upd).eq("id", lead.id);
-    if (error) { setErr2("Unable to reassign this lead. Please try again."); return; }
+    if (error) { setErr2(/closed_locked/.test(error.message || "") ? "This lead is closed \u2014 only a Master Admin can reassign it." : "Unable to reassign this lead. Please try again."); return; }
+    if (makeOpen) { try { await supabase.from("leads").update({ closed_locked: false }).eq("id", lead.id); } catch (e) {} }
     await supabase.from("lead_ownership_history").insert({ lead_id: lead.id, from_agent: lead.assigned_agent || null, to_agent: newId, reason: reReason || null, changed_by: me.id });
     await supabase.from("lead_activity").insert({ lead_id: lead.id, actor_id: me.id, action: makeOpen ? "make_open" : "reassign", detail: { from: agentDisplay, to: newName, reason: reReason || null } });
     await supabase.from("admin_audit").insert({ action: "lead_reassigned", performed_by: me.id, affected_user: newId, old_value: { agent: agentDisplay }, new_value: { agent: newName }, detail: lead.client_name });
@@ -2925,7 +3008,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
   const ACT_LABEL = { view_number: "Viewed number", reveal_phone: "Viewed number", call: "Called", whatsapp: "WhatsApp", schedule: "Scheduled follow-up",
     comment: "Commented", lead_created: "Lead created", lead_created_ai: "Lead created (AI)", status_change: "Status changed", assign: "Assigned",
     reassign: "Reassigned", make_open: "Moved to Open Leads", field_change: "Updated", lead_edited: "Edited details", make_open_bulk: "Moved to open", view: "Viewed",
-    followup_scheduled: "Scheduled follow-up", followup_rescheduled: "Rescheduled follow-up", followup_completed: "Completed follow-up" };
+    followup_scheduled: "Scheduled follow-up", followup_rescheduled: "Rescheduled follow-up", followup_completed: "Completed follow-up", deal_closed: "Deal closed" };
   const when = (t) => { const d = (Date.now() - new Date(t)) / 6e4; if (d < 1) return "just now"; if (d < 60) return Math.round(d) + "m ago"; if (d < 1440) return Math.round(d / 60) + "h ago"; return new Date(t).toLocaleDateString(); };
   const fmtDue = (iso) => { try { return new Date(iso).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (e) { return iso; } };
   const actText = (t) => {
@@ -3014,9 +3097,10 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
       {canReassign && <Btn icon={UserPlus} label="Change Agent" tone="gold" onClick={() => { setReTo(lead.assigned_agent || ""); setReReason(""); setErr2(""); setReOpen(true); }} />}
       {user && user.role === "agent" && isAssignedAgent && !lead.is_open && lead.status !== "Closed Won" && <Btn icon={Unlock} label="Mark as Open" tone="gold" onClick={() => { setOpenReason(""); setErr2(""); setOpenModal(true); }} />}
       {canEdit && <Btn icon={editing ? X : Pencil} label={editing ? "Cancel" : "Edit details"} tone="gold" onClick={() => editing ? setEditing(false) : startEdit()} />}
-      {canEdit && lead.status !== "Closed Won" && <Btn icon={Coins} label="Close deal" tone="ok" onClick={() => setShowDeal(true)} />}
+      {canEdit && !leadClosed && <Btn icon={Coins} label={draftRow ? "Edit Draft" : "Close deal"} tone="ok" onClick={() => setShowDeal(true)} />}
     </div>
     {revealMsg && <div style={{ ...card, padding: "10px 14px", marginTop: 10, borderColor: T.warnSoft, background: T.warnSoft, color: T.warn, fontSize: 12.5, fontWeight: 600 }}>{revealMsg}</div>}
+    {leadClosed && <div style={{ ...card, padding: "11px 14px", marginTop: 10, borderColor: T.okSoft, background: T.okSoft, color: T.ok, fontSize: 12.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}><Lock size={14} /> {lead.status === "Closed Won" ? "Closed Won" : "Closed \u2014 pending approval"} · locked to {lead.assigned_agent_name || "the closing agent"}. Only a Master Admin can reassign.</div>}
 
     {openModal && <Modal title="Mark lead as Open" onClose={() => setOpenModal(false)}>
       <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>This releases the lead into the Open Leads pool for another agent to pick up. You'll no longer be assigned to it, and this is recorded in the lead history.</div>
@@ -3033,7 +3117,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
       </div>
     </Modal>}
 
-    {showDeal && <DealSubmit lead={lead} user={user} onClose={() => setShowDeal(false)} onDone={() => { setShowDeal(false); go("deals"); }} />}
+    {showDeal && <DealSubmit lead={lead} user={user} existing={draftRow || undefined} onClose={() => setShowDeal(false)} onDone={() => { setShowDeal(false); go("deals"); }} />}
 
     {editing && <div style={{ ...card, padding: "12px 16px", marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: T.goldSoft, borderColor: T.goldEdge }}>
       <span style={{ fontSize: 12.5, color: T.ink, fontWeight: 600 }}>Editing mode — {canEditAll ? "you can edit all fields" : "you can edit your lead's details"}. Changes are logged.</span>
@@ -3602,7 +3686,7 @@ function AgentPerformance({ user, go, openAgent }) {
 
   return (
     <div style={{ maxWidth: 1180, margin: "0 auto" }}>
-      <SectionTitle right={isMaster ? <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><button onClick={() => setQuotaOpen(true)} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Reveal quotas</button><button onClick={() => go("targets")} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Manage targets</button></span> : null}>Agent Performance</SectionTitle>
+      <SectionTitle right={(isMaster || (user && (user.role === "admin" || user.role === "sales_manager"))) ? <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{isMaster && <button onClick={() => setQuotaOpen(true)} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Reveal quotas</button>}<button onClick={() => go("targets")} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Manage targets</button></span> : null}>Agent Performance</SectionTitle>
 
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 13, alignItems: "center" }}>
         {AP_PERIODS.map(([p, l]) => {
@@ -5572,6 +5656,15 @@ function DealSubmit({ lead, user, existing, onClose, onDone }) {
   })(); }, []);
   useEffect(() => { if (dealId) loadDocs(dealId); }, [dealId]);
   const loadDocs = async (id) => { const { data } = await supabase.from("deal_documents").select("*").eq("deal_id", id).order("created_at", { ascending: true }); setDocs(data || []); };
+  const rowToForm = (e) => ({ deal_type: e.deal_type || "Sales", transaction_side: e.transaction_side || "", area: e.area || "", project: e.project || "", developer: e.developer || "", property_type: e.property_type || "", unit_no: e.unit_no || "", bedrooms: e.bedrooms || "", property_value: e.property_value || "", ready_offplan: e.ready_offplan || "", commission_pct: e.commission_pct || "2", vat_applies: !!e.vat_amount, external_split: e.external_split || "", referral_fee: e.referral_fee || "", other_deductions: e.other_deductions || "", sole_agent: e.sole_agent !== false, participants: e.participants || [] });
+  useEffect(() => { let alive = true; (async () => {
+    if (existing || dealId) return;
+    if (!lead || !lead.id || !user || !user.id) return;
+    let res = await supabase.from("deals").select("*").eq("lead_id", lead.id).eq("agent_id", user.id).eq("status", "draft").eq("deleted", false).eq("archived", false).order("updated_at", { ascending: false }).limit(1);
+    if (res.error) res = await supabase.from("deals").select("*").eq("lead_id", lead.id).eq("agent_id", user.id).eq("status", "draft").eq("deleted", false).order("updated_at", { ascending: false }).limit(1);
+    const d = res && res.data && res.data[0];
+    if (alive && d) { setDealId(d.id); setF(rowToForm(d)); }
+  })(); return () => { alive = false; }; }, []);
 
   const agentPct = f.deal_type === "Rental" ? profilePct.rental : profilePct.sales;
   const c = calcDeal(f, agentPct);
@@ -5589,8 +5682,15 @@ function DealSubmit({ lead, user, existing, onClose, onDone }) {
 
   const ensureDraft = async () => {
     if (dealId) { await supabase.from("deals").update(buildRow("draft")).eq("id", dealId); return dealId; }
+    let pre = await supabase.from("deals").select("id").eq("lead_id", lead.id).eq("agent_id", user.id).eq("status", "draft").eq("deleted", false).eq("archived", false).order("updated_at", { ascending: false }).limit(1);
+    if (pre.error) pre = await supabase.from("deals").select("id").eq("lead_id", lead.id).eq("agent_id", user.id).eq("status", "draft").eq("deleted", false).order("updated_at", { ascending: false }).limit(1);
+    if (pre.data && pre.data[0]) { const eid = pre.data[0].id; setDealId(eid); await supabase.from("deals").update(buildRow("draft")).eq("id", eid); return eid; }
     const { data, error } = await supabase.from("deals").insert(buildRow("draft")).select("id").single();
-    if (error) throw error;
+    if (error) {
+      let again = await supabase.from("deals").select("id").eq("lead_id", lead.id).eq("agent_id", user.id).eq("status", "draft").eq("deleted", false).order("updated_at", { ascending: false }).limit(1);
+      if (again.data && again.data[0]) { const aid = again.data[0].id; setDealId(aid); await supabase.from("deals").update(buildRow("draft")).eq("id", aid); return aid; }
+      throw error;
+    }
     setDealId(data.id);
     await supabase.from("deal_activity").insert({ deal_id: data.id, actor_id: user.id, action: "deal_created", detail: {} });
     await supabase.from("admin_audit").insert({ action: "deal_draft_created", performed_by: user.id, detail: lead.client_name });
@@ -5651,6 +5751,15 @@ function DealSubmit({ lead, user, existing, onClose, onDone }) {
       await supabase.from("deal_activity").insert({ deal_id: id, actor_id: user.id, action: "submitted", detail: { value: numv(f.property_value) } });
       await supabase.from("notifications").insert({ user_id: null, kind: "deal", title: "New deal submitted for approval", body: `${user.name} submitted a ${f.deal_type} deal for ${lead.client_name} (${aed(f.property_value)}).`, link_screen: "deals" });
       await supabase.from("admin_audit").insert({ action: "deal_submitted", performed_by: user.id, new_value: { value: numv(f.property_value), type: f.deal_type }, detail: lead.client_name });
+      if (lead && lead.id) {
+        const nowIso = new Date().toISOString();
+        try { await supabase.from("leads").update({ status: "Closed Won Pending Approval" }).eq("id", lead.id); } catch (e) {}
+        try { await supabase.from("leads").update({ is_open: false, closed_locked: true, closed_by: user.id, closed_at: nowIso, closed_deal_id: id }).eq("id", lead.id); } catch (e) {}
+        const agentName = (user && (user.name || user.full_name)) || "Agent";
+        const whenStr = new Date().toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+        try { await supabase.from("lead_comments").insert({ lead_id: lead.id, author_id: user.id, body: "Deal closed by " + agentName + " on " + whenStr + "." }); } catch (e) {}
+        try { await supabase.from("lead_activity").insert({ lead_id: lead.id, actor_id: user.id, action: "deal_closed", detail: { by: agentName, at: nowIso } }); } catch (e) {}
+      }
       onDone && onDone();
     } catch (e) { setErr("Submit failed: " + (e.message || "")); }
     finally { setBusy(false); }
@@ -5786,10 +5895,10 @@ function DealSubmit({ lead, user, existing, onClose, onDone }) {
         <div style={{ display: "flex", gap: 10, justifyContent: "space-between", marginTop: 16, flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 8 }}>
             {step > 1 && <button onClick={() => goStep(step - 1)} style={{ padding: "10px 16px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, cursor: "pointer", fontWeight: 600, fontFamily: UI }}>Back</button>}
-            {dealId && <button onClick={async () => { try { await ensureDraft(); onDone && onDone(); } catch (e) { setErr("Could not save draft."); } }} style={{ padding: "10px 14px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.muted, cursor: "pointer", fontWeight: 600, fontFamily: UI, fontSize: 12.5 }}>Save draft</button>}
+            {<button onClick={async () => { setBusy(true); try { await ensureDraft(); onDone && onDone(); } catch (e) { setErr("Could not save draft."); } finally { setBusy(false); } }} style={{ padding: "10px 14px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.muted, cursor: "pointer", fontWeight: 600, fontFamily: UI, fontSize: 12.5 }}>Save Draft</button>}
           </div>
           {step < 5 ? <button onClick={() => goStep(step + 1)} disabled={busy} style={{ padding: "10px 20px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, cursor: "pointer", fontWeight: 700, fontFamily: UI, opacity: busy ? .6 : 1 }}>{busy ? "…" : "Next"}</button>
-            : <button onClick={submit} disabled={busy} style={{ padding: "10px 22px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, cursor: "pointer", fontWeight: 700, fontFamily: UI, display: "flex", alignItems: "center", gap: 7, opacity: busy ? .6 : 1 }}><Check size={15} /> {busy ? "Submitting…" : "Submit for approval"}</button>}
+            : <button onClick={submit} disabled={busy} style={{ padding: "10px 22px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, cursor: "pointer", fontWeight: 700, fontFamily: UI, display: "flex", alignItems: "center", gap: 7, opacity: busy ? .6 : 1 }}><Check size={15} /> {busy ? "Submitting…" : "Submit for Approval"}</button>}
         </div>
       </div>
     </div>
@@ -5849,6 +5958,7 @@ function DealDetail({ dealId, user, go }) {
     await supabase.from("admin_audit").insert({ action: "deal_" + (status === "needs_correction" ? "correction_requested" : status), performed_by: user.id, affected_user: deal.agent_id, new_value: { status }, detail: deal.client_name });
     if (status === "approved" && deal.lead_id) {
       await supabase.from("leads").update({ status: "Closed Won", is_open: false }).eq("id", deal.lead_id);
+      try { await supabase.from("leads").update({ closed_locked: true, closed_by: deal.agent_id, closed_at: new Date().toISOString(), closed_deal_id: deal.id }).eq("id", deal.lead_id); } catch (e) {}
       await supabase.from("lead_activity").insert({ lead_id: deal.lead_id, actor_id: user.id, action: "status_change", detail: { to: "Closed Won", via: "deal " + dealNoFmt(deal) } });
     }
     const titles = { approved: "Deal approved", rejected: "Deal rejected", needs_correction: "Deal needs correction" };
@@ -5988,7 +6098,7 @@ function CommissionSettings({ user }) {
   </div>;
 }
 
-function Deals({ user, go, openDeal }) {
+function Deals({ user, go, openDeal, openLead }) {
   const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
   const [deals, setDeals] = useState(null);
   const [tab, setTab] = useState("approvals"); // admin: approvals | commissions
@@ -6020,6 +6130,7 @@ function Deals({ user, go, openDeal }) {
       <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, marginBottom: 4 }}>My Closed Deals</div>
       <div style={{ color: T.muted, fontSize: 13, marginBottom: 16 }}>Deals you've submitted and their approval status. Estimated commission becomes final once Admin approves.</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10, marginBottom: 16 }}>
+        <Kpi label="Drafts" value={group("draft").length} />
         <Kpi label="Pending" value={group("pending").length} tone="warn" />
         <Kpi label="Approved" value={group("approved").length} tone="ok" />
         <Kpi label="Needs correction" value={group("needs_correction").length} tone={group("needs_correction").length ? "bad" : null} />
@@ -6028,7 +6139,7 @@ function Deals({ user, go, openDeal }) {
       {deals === null ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading…</div>
         : mine.length === 0 ? <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>No deals yet. Open one of your leads and tap <b>Close deal</b> to submit one.</div>
         : <div style={{ display: "grid", gap: 10 }}>
-          {mine.map((d) => { const sm = dealStatusMeta(d.status); return <div key={d.id} onClick={() => openDeal(d.id)} style={{ ...card, padding: 14, cursor: "pointer" }}>
+          {mine.map((d) => { const sm = dealStatusMeta(d.status); return <div key={d.id} onClick={() => (d.status === "draft" && d.lead_id && openLead) ? openLead(d.lead_id) : openDeal(d.id)} style={{ ...card, padding: 14, cursor: "pointer" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
               <div><span style={{ fontWeight: 700 }}>{d.client_name}</span> <span style={{ color: T.gold, fontSize: 11, fontWeight: 700 }}>{dealNoFmt(d)}</span>
                 <div style={{ fontSize: 11.5, color: T.muted, marginTop: 2 }}>{[d.deal_type, d.project, d.area].filter(Boolean).join(" · ")} · {when(d.created_at)}</div></div>
@@ -6038,6 +6149,7 @@ function Deals({ user, go, openDeal }) {
               <div><span style={{ color: T.faint }}>Value </span><b>{aed(d.property_value)}</b></div>
               <div><span style={{ color: T.faint }}>{d.status === "approved" ? "Approved comm. " : "Est. commission "}</span><b>{d.agent_commission == null ? "—" : aed(d.agent_commission)}</b></div>
             </div>
+            {d.status === "draft" && <div style={{ marginTop: 10, fontSize: 11.5, color: T.gold, fontWeight: 700 }}>Draft — tap to edit & submit →</div>}
             {d.status === "needs_correction" && d.correction_note && <div style={{ marginTop: 10, background: T.warnSoft, color: T.warn, borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>Correction needed: {d.correction_note}</div>}
             {d.status === "rejected" && d.correction_note && <div style={{ marginTop: 10, background: T.badSoft, color: T.bad, borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>Reason: {d.correction_note}</div>}
           </div>; })}
