@@ -5155,72 +5155,98 @@ function DcTeam({ user }) {
 
 function DcUpload({ user }) {
   const [rows, setRows] = useState(null);
+  const [cols, setCols] = useState(null);
   const [fileName, setFileName] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [result, setResult] = useState(null);
 
-  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const ALIASES = {
-    project_name: ["projectname", "project", "building", "tower", "development", "community", "projectbuilding"],
-    project_location: ["projectlocation", "location", "area", "address", "communitylocation"],
-    unit_number: ["unitnumber", "unit", "unitno", "apartment", "apt", "villa", "flat", "unitnumberno"],
-    owner_name: ["ownername", "owner", "name", "client", "customer", "fullname", "clientname"],
-    owner_phone: ["ownerphone", "phone", "mobile", "contact", "number", "phonenumber", "mobileno", "mobilenumber", "tel", "contactnumber"],
-    owner_email: ["owneremail", "email", "emailaddress", "mail", "emailid"],
+  // A header cell maps to the FIRST field whose test passes (most specific first).
+  const FIELD_RULES = [
+    ["owner_email",      (h) => /email|mail/.test(h)],
+    ["owner_phone",      (h) => /phone|mobile|whatsapp|contact|telephone|^tel$/.test(h)],
+    ["project_name",     (h) => /project|building|tower|develop/.test(h)],
+    ["unit_number",      (h) => /unit|plot|apartment|villa|flat|^code$|unitcode/.test(h)],
+    ["project_location", (h) => /location|area|community|city|address|emirate|district|island/.test(h)],
+    ["owner_name",       (h) => /name|client|owner|customer/.test(h)],
+  ];
+  const fieldForHeader = (raw) => {
+    const h = String(raw == null ? "" : raw).toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!h) return null;
+    for (const [f, t] of FIELD_RULES) if (t(h)) return f;
+    return null;
   };
-  const mapRow = (o) => {
-    const out = { project_name: "", project_location: "", unit_number: "", owner_name: "", owner_phone: "", owner_email: "" };
-    const entries = Object.entries(o);
-    for (const key of Object.keys(out)) {
-      for (const [h, v] of entries) {
-        if (ALIASES[key].includes(norm(h))) { out[key] = v == null ? "" : String(v).trim(); break; }
-      }
+  const scoreHeader = (cells) => {
+    const map = {}; let n = 0;
+    (cells || []).forEach((c, i) => { const f = fieldForHeader(c); if (f && !(f in map)) { map[f] = i; n++; } });
+    return { map, n, ok: ("project_name" in map) && ("owner_name" in map) };
+  };
+  const toCrmPhone = (raw) => { const d = normIntl(raw); return d ? "+" + d : ""; };   // CRM standard = E.164 with +, same as leads
+  const rowsFromAOA = (aoa) => {
+    if (!aoa || !aoa.length) return [];
+    let best = { n: -1 }, idx = -1;                 // auto-locate the header row (skip title/banner rows above it)
+    for (let i = 0; i < Math.min(20, aoa.length); i++) { const sc = scoreHeader(aoa[i]); if (sc.ok && sc.n > best.n) { best = sc; idx = i; } }
+    if (idx < 0) return [];
+    const out = [];
+    for (let r = idx + 1; r < aoa.length; r++) {
+      const row = aoa[r] || []; const o = { project_name: "", project_location: "", unit_number: "", owner_name: "", owner_phone: "", owner_email: "" };
+      for (const f in best.map) { const v = row[best.map[f]]; o[f] = v == null ? "" : String(v).trim(); }
+      o.owner_phone = toCrmPhone(o.owner_phone);
+      o.owner_email = o.owner_email ? o.owner_email.toLowerCase() : "";
+      // skip blank rows and repeated header rows (e.g. section dividers)
+      if (o.project_name && o.owner_name && fieldForHeader(o.owner_name) !== "owner_name") out.push(o);
     }
     return out;
   };
-  const parseCsv = (text) => {
-    const lines = text.split(/\r?\n/).filter((l) => l.trim());
-    if (!lines.length) return [];
+  const csvToAOA = (text) => {
     const split = (l) => { const out = []; let cur = "", inq = false;
       for (let i = 0; i < l.length; i++) { const ch = l[i];
         if (ch === '"') inq = !inq; else if (ch === "," && !inq) { out.push(cur); cur = ""; } else cur += ch; }
       out.push(cur); return out.map((x) => x.trim().replace(/^"|"$/g, "")); };
-    const hdr = split(lines[0]);
-    return lines.slice(1).map((l) => { const c = split(l); const o = {}; hdr.forEach((h, i) => { o[h] = c[i]; }); return o; });
+    return text.split(/\r?\n/).filter((l) => l.trim()).map(split);
   };
 
   const onFile = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    setErr(""); setRows(null); setResult(null); setFileName(file.name);
+    setErr(""); setRows(null); setCols(null); setResult(null); setFileName(file.name);
     const name = file.name.toLowerCase();
     try {
-      let records;
+      let all = [];
       if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".xlsm")) {
         const XLSX = await import("xlsx");
         const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-        records = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+        for (const sn of wb.SheetNames) {                       // scan ALL sheets
+          const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false, defval: "" });
+          all = all.concat(rowsFromAOA(aoa));
+        }
       } else if (name.endsWith(".csv") || name.endsWith(".txt")) {
-        records = parseCsv(await file.text());
+        all = rowsFromAOA(csvToAOA(await file.text()));
       } else { setErr("Unsupported file. Upload a .xlsx or .csv file."); return; }
-      const mapped = records.map(mapRow).filter((r) => r.project_name && r.owner_name);
-      if (!mapped.length) { setErr("No valid rows found. Each row needs at least a Project and an Owner name. Download the template below to see the columns."); return; }
-      setRows(mapped);
-    } catch (x) { setErr("Couldn't read that file. Use a .xlsx or .csv export with a header row in the first line."); }
+      if (!all.length) { setErr("Couldn't find owner rows. The sheet needs a header row with at least a Project and a Client/Owner name column (it can have title rows above it)."); return; }
+      const present = {}; ["project_name", "project_location", "unit_number", "owner_name", "owner_phone", "owner_email"].forEach((f) => { present[f] = all.some((r) => r[f]); });
+      setRows(all); setCols(present);
+    } catch (x) { setErr("Couldn't read that file. Use a .xlsx or .csv export with a header row."); }
   };
 
   const run = async () => {
     if (!rows || !rows.length) return;
-    setBusy(true); setErr(""); setResult(null);
-    const { data, error } = await supabase.rpc("upload_data_calling", { p_rows: rows, p_source_file: fileName || null });
-    setBusy(false);
-    if (error) { setErr(/admin only/i.test(error.message || "") ? "Only admins can upload data." : "Upload failed — please try again."); return; }
-    const r = Array.isArray(data) ? data[0] : data;
-    setResult(r || { received: rows.length, inserted: 0, skipped: 0 });
+    setBusy(true); setErr(""); setResult(null); setProgress(0);
+    let received = 0, inserted = 0, skipped = 0;
+    const CHUNK = 500;                                          // batch large files
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const batch = rows.slice(i, i + CHUNK);
+      const { data, error } = await supabase.rpc("upload_data_calling", { p_rows: batch, p_source_file: fileName || null });
+      if (error) { setBusy(false); setErr(/admin only/i.test(error.message || "") ? "Only admins can upload data." : "Upload failed after " + inserted + " added — please try again."); return; }
+      const r = Array.isArray(data) ? data[0] : data;
+      received += (r && r.received) || batch.length; inserted += (r && r.inserted) || 0; skipped += (r && r.skipped) || 0;
+      setProgress(Math.min(i + CHUNK, rows.length));
+    }
+    setBusy(false); setResult({ received, inserted, skipped });
   };
 
   const downloadTemplate = () => {
-    const csv = "project_name,project_location,unit_number,owner_name,owner_phone,owner_email\nMarina Heights,Dubai Marina,1203,Ahmed Khan,+9715XXXXXXXX,owner@example.com\n";
+    const csv = "Location,Project Name,Unit Code,Client Name,Booking: Account Email,Booking: Account Phone\nDubai Islands,Bay Villas,DIB-P1-TH-0001,Owner Full Name,owner@example.com,9715XXXXXXXX\n";
     try {
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
       const a = document.createElement("a"); a.href = url; a.download = "data_calling_template.csv"; a.click();
@@ -5228,12 +5254,14 @@ function DcUpload({ user }) {
     } catch (e) {}
   };
 
+  const FIELD_LABELS = { project_name: "Project", project_location: "Location", unit_number: "Unit", owner_name: "Owner name", owner_phone: "Phone", owner_email: "Email" };
+
   return (
     <div>
       <div style={{ ...card, padding: 16, marginBottom: 14 }}>
         <div style={{ fontWeight: 700, color: T.ink, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}><Upload size={16} color={T.gold} /> Upload owner data</div>
         <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.6, marginBottom: 12 }}>
-          Upload an <b>Excel (.xlsx)</b> or <b>.csv</b> file with a header row. Columns are auto-detected: <b>Project</b>, <b>Location</b>, <b>Unit</b>, <b>Owner name</b>, <b>Phone</b>, <b>Email</b>. Each row needs at least a Project and an Owner name. Duplicates are skipped automatically. After uploading, assign records to agents from the <b>Team</b> tab.
+          Upload an <b>Excel (.xlsx)</b> or <b>.csv</b> file. Columns are detected automatically by name (Project / Building, Location / Area, Unit / Code, Client / Owner name, Phone / Mobile, Email), the header row is found even if there are title rows above it, and all sheets are scanned. Phone numbers are auto-formatted to the CRM standard (+country code). Each row needs at least a Project and an Owner name; duplicates are skipped.
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <input type="file" accept=".xlsx,.xls,.xlsm,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={onFile} style={{ fontSize: 13 }} />
@@ -5245,8 +5273,16 @@ function DcUpload({ user }) {
 
       {rows && !result && (
         <div style={{ ...card, padding: 16, marginBottom: 12 }}>
-          <div style={{ fontSize: 13, marginBottom: 10 }}>Ready to upload <b>{rows.length}</b> row{rows.length === 1 ? "" : "s"}{fileName ? " from " + fileName : ""}. First: <b>{rows[0].owner_name}</b> · {rows[0].project_name}{rows[0].unit_number ? " · Unit " + rows[0].unit_number : ""}</div>
-          <button onClick={run} disabled={busy} style={{ padding: "10px 20px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1, display: "inline-flex", alignItems: "center", gap: 7 }}>{busy ? "Uploading…" : <><Upload size={15} /> Upload {rows.length} records</>}</button>
+          <div style={{ fontSize: 13, marginBottom: 8 }}>Detected <b>{rows.length}</b> row{rows.length === 1 ? "" : "s"}{fileName ? " in " + fileName : ""}.</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+            {Object.keys(FIELD_LABELS).map((f) => (
+              <span key={f} style={{ fontSize: 11.5, fontWeight: 600, padding: "3px 9px", borderRadius: 999, border: `1px solid ${cols && cols[f] ? T.goldEdge : T.hair}`, background: cols && cols[f] ? T.goldTint : T.paper, color: cols && cols[f] ? T.gold : T.faint }}>
+                {cols && cols[f] ? "✓ " : "– "}{FIELD_LABELS[f]}
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12 }}>First: <b>{rows[0].owner_name}</b> · {rows[0].project_name}{rows[0].unit_number ? " · " + rows[0].unit_number : ""}{rows[0].owner_phone ? " · " + rows[0].owner_phone : ""}</div>
+          <button onClick={run} disabled={busy} style={{ padding: "10px 20px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1, display: "inline-flex", alignItems: "center", gap: 7 }}>{busy ? ("Uploading… " + progress + "/" + rows.length) : <><Upload size={15} /> Upload {rows.length} records</>}</button>
         </div>
       )}
 
@@ -5254,9 +5290,9 @@ function DcUpload({ user }) {
         <div style={{ ...card, padding: 16 }}>
           <div style={{ fontWeight: 700, color: T.ink, marginBottom: 6 }}>Upload complete</div>
           <div style={{ fontSize: 13.5, color: T.ok, fontWeight: 700 }}>{result.inserted} added</div>
-          <div style={{ fontSize: 13, color: T.warn }}>{result.skipped} skipped (already in the system)</div>
-          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>{result.received} rows read{fileName ? " from " + fileName : ""}.</div>
-          <button onClick={() => { setRows(null); setResult(null); setFileName(""); setErr(""); }} style={{ ...miniBtn(), marginTop: 12 }}>Upload another file</button>
+          <div style={{ fontSize: 13, color: T.warn }}>{result.skipped} skipped (duplicates already in the system)</div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>{result.received} rows processed{fileName ? " from " + fileName : ""}.</div>
+          <button onClick={() => { setRows(null); setResult(null); setCols(null); setFileName(""); setErr(""); }} style={{ ...miniBtn(), marginTop: 12 }}>Upload another file</button>
         </div>
       )}
     </div>
