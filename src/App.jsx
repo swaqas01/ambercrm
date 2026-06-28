@@ -2092,6 +2092,7 @@ function AgentDash({ go, user, openLead, onAvatar }) {
   const [deals, setDeals] = useState([]);
   const [fups, setFups] = useState([]);
   const [period, setPeriod] = useState("month");
+  const [cf, setCf] = useState(""); const [ct, setCt] = useState("");
   const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url || null);
   const [upBusy, setUpBusy] = useState(false);
   const [upErr, setUpErr] = useState("");
@@ -2285,19 +2286,23 @@ function AgentDash({ go, user, openLead, onAvatar }) {
   const dStr = (iso) => { try { return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); } catch (e) { return ""; } };
   const dNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Dubai" }));
   const ymd = (dt) => dt.toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
-  const PERIODS = [["today", "Today"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["half", "6 Months"], ["year", "Year"]];
+  const PERIODS = [["today", "Today"], ["week", "Week"], ["lastweek", "Last week"], ["month", "Month"], ["quarter", "Quarter"], ["half", "6 Months"], ["year", "Year"]];
+  const monBack = (dt, n) => { const x = new Date(dt); const off = (x.getDay() + 6) % 7; x.setDate(x.getDate() - off - n); return x; };
   const periodStart = (() => {
     const d = new Date(dNow);
+    if (period === "custom") return cf || ymd(d);
     if (period === "today") return ymd(d);
     if (period === "week") { d.setDate(d.getDate() - 6); return ymd(d); }
+    if (period === "lastweek") return ymd(monBack(dNow, 7));
     if (period === "month") return ymd(new Date(dNow.getFullYear(), dNow.getMonth(), 1));
     if (period === "quarter") return ymd(new Date(dNow.getFullYear(), Math.floor(dNow.getMonth() / 3) * 3, 1));
     if (period === "half") { d.setDate(d.getDate() - 181); return ymd(d); }
     if (period === "year") return ymd(new Date(dNow.getFullYear(), 0, 1));
     return ymd(d);
   })();
-  const inPeriod = (iso) => { const s = dStr(iso); return s && s >= periodStart && s <= today; };
-  const periodLabel = (PERIODS.find((p) => p[0] === period) || ["", ""])[1];
+  const periodEnd = period === "custom" ? (ct || today) : period === "lastweek" ? ymd(monBack(dNow, 1)) : today;
+  const inPeriod = (iso) => { const s = dStr(iso); return s && s >= periodStart && s <= periodEnd; };
+  const periodLabel = period === "custom" ? ((cf && ct) ? (cf + " → " + ct) : "custom range") : (PERIODS.find((p) => p[0] === period) || ["", ""])[1];
 
   const actsIn = acts.filter((a) => inPeriod(a.created_at));
   const callsN = actsIn.filter((a) => a.action === "call").length;
@@ -2359,11 +2364,18 @@ function AgentDash({ go, user, openLead, onAvatar }) {
       <div style={{ ...card, padding: 0, marginTop: 14, overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "15px 18px 0", flexWrap: "wrap" }}>
           <div style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 9 }}><BarChart3 size={19} color={T.gold} /> My Performance</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             {PERIODS.map(([k, lbl]) => (
               <button key={k} onClick={() => setPeriod(k)} style={{ padding: "6px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: UI,
                 border: "1px solid " + (period === k ? T.btnBg : T.hair), background: period === k ? T.btnBg : T.paper, color: period === k ? T.btnFg : T.muted }}>{lbl}</button>
             ))}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 7px 3px 9px", borderRadius: 999, border: "1px solid " + (period === "custom" ? T.btnBg : T.hair), background: period === "custom" ? T.goldSoft : T.paper }}>
+              <Calendar size={13} color={period === "custom" ? T.gold : T.muted} />
+              <input type="date" value={cf} max={ct || undefined} onChange={(e) => setCf(e.target.value)} title="From" style={{ border: "none", background: "transparent", color: T.ink, fontSize: 11.5, fontFamily: UI, cursor: "pointer" }} />
+              <span style={{ color: T.faint, fontSize: 11 }}>→</span>
+              <input type="date" value={ct} min={cf || undefined} onChange={(e) => setCt(e.target.value)} title="To" style={{ border: "none", background: "transparent", color: T.ink, fontSize: 11.5, fontFamily: UI, cursor: "pointer" }} />
+              <button onClick={() => { if (cf && ct && cf <= ct) setPeriod("custom"); }} disabled={!(cf && ct && cf <= ct)} style={{ padding: "5px 10px", borderRadius: 999, border: "none", background: (cf && ct && cf <= ct) ? T.btnBg : T.hair, color: (cf && ct && cf <= ct) ? T.btnFg : T.muted, fontSize: 11.5, fontWeight: 700, fontFamily: UI, cursor: (cf && ct && cf <= ct) ? "pointer" : "default" }}>Apply</button>
+            </span>
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, padding: 18 }}>
@@ -3282,17 +3294,22 @@ function Pipeline({ go, openLead }) {
 // ===== Central Agent Performance — all agents in one page, real logs only =====
 // Calls / WhatsApp / Reveals (counted separately), deals closed + commission (approved deals only),
 // call & WhatsApp target progress, and live attendance — switchable across Today/Week/Month/Quarter/Year (Dubai time).
-function apPeriodStart(period) {
+function apShiftDate(ds, days) { const d = new Date(ds + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); }
+function apPeriodStart(period, range) {
   const t = tgtTodayStr(); const Y = Number(t.slice(0, 4)); const M = Number(t.slice(5, 7));
+  if (period === "custom") return (((range && range.from) || t)) + "T00:00:00+04:00";
   if (period === "today") return t + "T00:00:00+04:00";
+  if (period === "lastweek") return apShiftDate(tgtMondayStr(), -7) + "T00:00:00+04:00";
   if (period === "week") return tgtMondayStr() + "T00:00:00+04:00";
   if (period === "quarter") { const qm = Math.floor((M - 1) / 3) * 3 + 1; return Y + "-" + String(qm).padStart(2, "0") + "-01T00:00:00+04:00"; }
   if (period === "year") return Y + "-01-01T00:00:00+04:00";
   return t.slice(0, 7) + "-01T00:00:00+04:00"; // month
 }
-function apInPeriod(ts, period) {
+function apInPeriod(ts, period, range) {
   const ds = tgtDubaiDate(ts); if (!ds) return false; const t = tgtTodayStr();
+  if (period === "custom") return !!(range && range.from && range.to) && ds >= range.from && ds <= range.to;
   if (period === "today") return ds === t;
+  if (period === "lastweek") { const lm = apShiftDate(tgtMondayStr(), -7), ls = apShiftDate(tgtMondayStr(), -1); return ds >= lm && ds <= ls; }
   if (period === "week") return ds >= tgtMondayStr() && ds <= t;
   if (period === "month") return ds.slice(0, 7) === t.slice(0, 7);
   if (period === "quarter") { const q = Math.floor((Number(t.slice(5, 7)) - 1) / 3); const dq = Math.floor((Number(ds.slice(5, 7)) - 1) / 3); return ds.slice(0, 4) === t.slice(0, 4) && dq === q; }
@@ -3310,8 +3327,8 @@ async function apFetchSince(table, columns, dateCol, sinceIso) {
   }
   return out;
 }
-const AP_PERIODS = [["today", "Today"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]];
-const AP_PERIOD_LABEL = { today: "today", week: "this week", month: "this month", quarter: "this quarter", year: "this year" };
+const AP_PERIODS = [["today", "Today"], ["week", "Week"], ["lastweek", "Last week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]];
+const AP_PERIOD_LABEL = { today: "today", week: "this week", lastweek: "last week", month: "this month", quarter: "this quarter", year: "this year" };
 function ApMiniBar({ done, target, color }) {
   if (target == null || target <= 0) return <div style={{ fontSize: 10.5, color: T.faint }}>—</div>;
   const pct = Math.max(0, Math.min(100, Math.round((done / target) * 100)));
@@ -3473,6 +3490,7 @@ function AgentPerformance({ user, go, openAgent }) {
   const canView = !!(user && (user.role === "master_admin" || user.role === "admin"));
   const canSeeCommission = isMaster;
   const [period, setPeriod] = useState("today");
+  const [cf, setCf] = useState(""); const [ct, setCt] = useState("");
   const [sort, setSort] = useState("calls");
   const [q, setQ] = useState("");
   const [roleF, setRoleF] = useState("all");
@@ -3486,7 +3504,7 @@ function AgentPerformance({ user, go, openAgent }) {
     (async () => {
       setState((s) => ({ ...s, loading: true, err: "" }));
       try {
-        const since = apPeriodStart(period);
+        const since = apPeriodStart(period, { from: cf, to: ct });
         const [profR, actR, devR, defR, ovR, dealR] = await Promise.all([
           supabase.from("profiles").select("id,full_name,role,active,last_login,avatar_url").limit(2000),
           apFetchSince("lead_activity", "actor_id,action,created_at", "created_at", since),
@@ -3501,7 +3519,7 @@ function AgentPerformance({ user, go, openAgent }) {
         const devs = devR.data || [];
         const defs = (defR && defR.data) || TARGET_DEFAULTS;
         const ovById = {}; ((ovR && ovR.data) || []).forEach((o) => { ovById[o.agent_id] = o; });
-        const deals = ((dealR && dealR.data) || []).filter((d) => !d.deleted && apInPeriod(d.decided_at, period));
+        const deals = ((dealR && dealR.data) || []).filter((d) => !d.deleted && apInPeriod(d.decided_at, period, { from: cf, to: ct }));
         const isRev = (a) => a === "view_number" || a === "reveal_phone";
         const byActor = {}; acts.forEach((a) => { (byActor[a.actor_id] = byActor[a.actor_id] || []).push(a); });
         const devByUser = {}; devs.forEach((d) => { (devByUser[d.user_id] = devByUser[d.user_id] || []).push(d); });
@@ -3509,7 +3527,7 @@ function AgentPerformance({ user, go, openAgent }) {
         const now = Date.now();
         const tkey = period === "today" ? "today" : period === "week" ? "week" : period === "month" ? "month" : null;
         const rows = profs.map((p) => {
-          const ta = (byActor[p.id] || []).filter((a) => apInPeriod(a.created_at, period));
+          const ta = (byActor[p.id] || []).filter((a) => apInPeriod(a.created_at, period, { from: cf, to: ct }));
           const calls = ta.filter((a) => a.action === "call").length;
           const wa = ta.filter((a) => a.action === "whatsapp").length;
           const reveals = ta.filter((a) => isRev(a.action)).length;
@@ -3533,7 +3551,7 @@ function AgentPerformance({ user, go, openAgent }) {
       } catch (e) { if (alive) setState({ loading: false, rows: [], err: (e && e.message) || "Could not load performance." }); }
     })();
     return () => { alive = false; };
-  }, [period, canView]);
+  }, [period, cf, ct, canView]);
 
   if (!canView) return <div style={{ ...card, padding: 22, maxWidth: 560, margin: "8px auto" }}>
     <div style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 800, color: T.ink }}>Access restricted</div>
@@ -3563,7 +3581,7 @@ function AgentPerformance({ user, go, openAgent }) {
   const tot = (k) => rows.reduce((s, r) => s + r[k], 0);
   const T_active = rows.filter((r) => r.activeNow).length;
   const T_behind = (period === "today" || period === "week" || period === "month") ? rows.filter((r) => r.behind).length : null;
-  const plabel = AP_PERIOD_LABEL[period];
+  const plabel = period === "custom" ? ((cf && ct) ? (cf + " → " + ct) : "custom range") : AP_PERIOD_LABEL[period];
 
   const SumCard = ({ label, value, tone, icon }) => (
     <div style={{ ...card, padding: "13px 15px", minWidth: 0 }}>
@@ -3586,11 +3604,18 @@ function AgentPerformance({ user, go, openAgent }) {
     <div style={{ maxWidth: 1180, margin: "0 auto" }}>
       <SectionTitle right={isMaster ? <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><button onClick={() => setQuotaOpen(true)} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Reveal quotas</button><button onClick={() => go("targets")} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Manage targets</button></span> : null}>Agent Performance</SectionTitle>
 
-      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 13 }}>
+      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 13, alignItems: "center" }}>
         {AP_PERIODS.map(([p, l]) => {
           const on = period === p;
           return <button key={p} onClick={() => setPeriod(p)} style={{ padding: "7px 15px", borderRadius: 9, border: "1px solid " + (on ? T.gold : T.hair), background: on ? T.gold : T.paper, color: on ? "#fff" : T.muted, fontSize: 12.5, fontWeight: 700, fontFamily: UI, cursor: "pointer" }}>{l}</button>;
         })}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px 4px 10px", borderRadius: 9, border: "1px solid " + (period === "custom" ? T.gold : T.hair), background: period === "custom" ? T.goldSoft : T.paper }}>
+          <Calendar size={14} color={period === "custom" ? T.gold : T.muted} />
+          <input type="date" value={cf} max={ct || undefined} onChange={(e) => setCf(e.target.value)} title="From date" style={{ border: "none", background: "transparent", color: T.ink, fontSize: 12, fontFamily: UI, cursor: "pointer" }} />
+          <span style={{ color: T.faint, fontSize: 12 }}>→</span>
+          <input type="date" value={ct} min={cf || undefined} onChange={(e) => setCt(e.target.value)} title="To date" style={{ border: "none", background: "transparent", color: T.ink, fontSize: 12, fontFamily: UI, cursor: "pointer" }} />
+          <button onClick={() => { if (cf && ct && cf <= ct) setPeriod("custom"); }} disabled={!(cf && ct && cf <= ct)} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: (cf && ct && cf <= ct) ? T.gold : T.hair, color: (cf && ct && cf <= ct) ? "#fff" : T.muted, fontSize: 12, fontWeight: 700, fontFamily: UI, cursor: (cf && ct && cf <= ct) ? "pointer" : "default" }}>Apply</button>
+        </span>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(138px,1fr))", gap: 11, marginBottom: 15 }}>
