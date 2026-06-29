@@ -6060,6 +6060,16 @@ function DealDetail({ dealId, user, go }) {
     setOv(null); load(); setBusy(false);
   };
 
+  const delDeal = async () => {
+    const reason = window.prompt("Are you sure you want to delete this deal? This action will be recorded. Enter a reason (required):", "");
+    if (reason === null) return;
+    if (!reason.trim()) { setErr("A reason is required to delete this deal."); return; }
+    setBusy(true);
+    const { error } = await supabase.rpc("delete_deal", { p_deal_id: deal.id, p_reason: reason });
+    if (error) { setErr(error.message || "Could not delete this deal."); setBusy(false); return; }
+    go("deals");
+  };
+
   const Money = ({ k, v, strong }) => <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${T.hairSoft}`, fontSize: 13 }}>
     <span style={{ color: T.muted }}>{k}</span><span style={{ fontWeight: strong ? 800 : 600, color: strong ? T.gold : T.ink }}>{v}</span></div>;
   const canDecide = isAdmin && ["submitted", "pending_review", "needs_correction"].includes(deal.status);
@@ -6132,6 +6142,12 @@ function DealDetail({ dealId, user, go }) {
       </div> : <div style={{ fontSize: 12, color: T.muted, marginTop: 10 }}>This deal is {sm[1].toLowerCase()}. {deal.status === "approved" ? "Accounts status: " + (deal.accounts_status || "—") + "." : ""}</div>}
     </div></>}
 
+    {isAdmin && <div style={{ ...card, padding: 16, marginTop: 14, borderColor: T.badSoft }}>
+      <SectionMini>Danger zone</SectionMini>
+      <div style={{ fontSize: 12, color: T.muted, margin: "6px 0 10px" }}>Deleting soft-deletes this deal (kept for audit), removes it from lists and commission, and records who deleted it and why.</div>
+      <button onClick={delDeal} disabled={busy} style={{ background: T.badSoft, color: T.bad, border: "1px solid " + T.bad, borderRadius: 9, padding: "10px 16px", fontWeight: 700, cursor: "pointer", fontFamily: UI }}>Delete deal</button>
+    </div>}
+
     <SectionTitle>Activity timeline</SectionTitle>
     <div style={{ ...card, padding: 16 }}>
       {acts.length === 0 ? <div style={{ color: T.muted, fontSize: 12.5 }}>No activity yet.</div> :
@@ -6180,6 +6196,32 @@ function CommissionSettings({ user }) {
   </div>;
 }
 
+function DeletedDeals() {
+  const [rows, setRows] = useState(null);
+  const [dir, setDir] = useState([]);
+  useEffect(() => { (async () => {
+    const { data } = await supabase.from("deal_deletions").select("*").order("created_at", { ascending: false }).limit(500);
+    setRows(data || []);
+    try { const { data: ag } = await supabase.rpc("user_directory"); setDir(ag || []); } catch (e) {}
+  })(); }, []);
+  const nm = (id) => { const a = dir.find((x) => x.id === id); return a ? a.full_name : (id ? "Unknown" : "System"); };
+  const whenF = (t) => new Date(t).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+  if (rows === null) return <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading deleted records…</div>;
+  if (rows.length === 0) return <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>No deleted deals.</div>;
+  return <div style={{ display: "grid", gap: 10 }}>
+    <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 2 }}>Soft-deleted deals, retained for audit.</div>
+    {rows.map((r) => <div key={r.id} style={{ ...card, padding: 14, borderColor: T.badSoft }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontWeight: 700 }}>Deal #{r.deal_no == null ? "—" : r.deal_no}</span>
+        <Chip tone="bad">Deleted</Chip>
+        <span style={{ fontSize: 11.5, color: T.muted }}>Previous status: {r.previous_status || "—"} · {r.delete_type || "—"}</span>
+      </div>
+      <div style={{ marginTop: 8, fontSize: 12, color: T.ink }}>Deleted by <b>{nm(r.deleted_by)}</b> ({roleLabel(r.deleted_by_role)}) · {whenF(r.created_at)}</div>
+      {r.reason && <div style={{ marginTop: 6, background: T.badSoft, color: T.bad, borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>Reason: {r.reason}</div>}
+    </div>)}
+  </div>;
+}
+
 function Deals({ user, go, openDeal, openLead }) {
   const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
   const [deals, setDeals] = useState(null);
@@ -6193,6 +6235,19 @@ function Deals({ user, go, openDeal, openLead }) {
     setDeals(error ? [] : (data || []));
   };
   useEffect(() => { load(); }, []);
+  const isMaster = user && user.role === "master_admin";
+  const delDeal = async (d, e) => {
+    if (e) e.stopPropagation();
+    let reason = null;
+    if (isAdmin) {
+      reason = window.prompt("Are you sure you want to delete this deal? This action will be recorded. Enter a reason (required):", "");
+      if (reason === null) return;
+      if (!reason.trim()) { window.alert("A reason is required to delete this deal."); return; }
+    } else if (!window.confirm("Are you sure you want to delete this deal? This action will be recorded.")) { return; }
+    const { error } = await supabase.rpc("delete_deal", { p_deal_id: d.id, p_reason: reason });
+    if (error) { window.alert(error.message || "Could not delete this deal."); return; }
+    load();
+  };
   const all = (deals || []).filter((d) => !d.deleted);
   const agents = [...new Set(all.map((d) => d.client_name && d.agent_id).filter(Boolean))];
   const when = (t) => new Date(t).toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", year: "2-digit" });
@@ -6234,6 +6289,7 @@ function Deals({ user, go, openDeal, openLead }) {
             {d.status === "draft" && <div style={{ marginTop: 10, fontSize: 11.5, color: T.gold, fontWeight: 700 }}>Draft — tap to edit & submit →</div>}
             {d.status === "needs_correction" && d.correction_note && <div style={{ marginTop: 10, background: T.warnSoft, color: T.warn, borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>Correction needed: {d.correction_note}</div>}
             {d.status === "rejected" && d.correction_note && <div style={{ marginTop: 10, background: T.badSoft, color: T.bad, borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>Reason: {d.correction_note}</div>}
+            {d.status === "draft" && <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}><button onClick={(e) => delDeal(d, e)} style={{ ...miniBtn(), padding: "5px 10px", fontSize: 11, borderColor: T.bad, color: T.bad }}>Delete draft</button></div>}
           </div>; })}
         </div>}
     </div>;
@@ -6244,8 +6300,9 @@ function Deals({ user, go, openDeal, openLead }) {
     <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
       <button onClick={() => setTab("approvals")} style={{ padding: "9px 16px", borderRadius: 9, border: `1px solid ${tab === "approvals" ? T.gold : T.hair}`, background: tab === "approvals" ? T.goldSoft : T.paper, color: tab === "approvals" ? T.gold : T.muted, fontWeight: 700, cursor: "pointer", fontFamily: UI, fontSize: 13 }}>Deal Approvals</button>
       <button onClick={() => setTab("commissions")} style={{ padding: "9px 16px", borderRadius: 9, border: `1px solid ${tab === "commissions" ? T.gold : T.hair}`, background: tab === "commissions" ? T.goldSoft : T.paper, color: tab === "commissions" ? T.gold : T.muted, fontWeight: 700, cursor: "pointer", fontFamily: UI, fontSize: 13 }}>Agent commissions</button>
+      {isMaster && <button onClick={() => setTab("deleted")} style={{ padding: "9px 16px", borderRadius: 9, border: "1px solid " + (tab === "deleted" ? T.gold : T.hair), background: tab === "deleted" ? T.goldSoft : T.paper, color: tab === "deleted" ? T.gold : T.muted, fontWeight: 700, cursor: "pointer", fontFamily: UI, fontSize: 13 }}>Deleted records</button>}
     </div>
-    {tab === "commissions" ? <CommissionSettings user={user} /> : <>
+    {tab === "deleted" ? <DeletedDeals /> : tab === "commissions" ? <CommissionSettings user={user} /> : <>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 14 }}>
         <Kpi label="Pending approval" value={all.filter((d) => ["submitted", "pending_review"].includes(d.status)).length} tone="warn" />
         <Kpi label="Approved" value={all.filter((d) => d.status === "approved").length} tone="ok" />
@@ -6272,6 +6329,7 @@ function Deals({ user, go, openDeal, openLead }) {
               <div><span style={{ color: T.faint }}>Submitted </span>{d.submitted_at ? when(d.submitted_at) : "—"}</div>
             </div>
             {["submitted", "pending_review"].includes(d.status) && <div style={{ marginTop: 8, fontSize: 11.5, color: T.gold, fontWeight: 700 }}>Tap to review & approve →</div>}
+            <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}><button onClick={(e) => delDeal(d, e)} style={{ ...miniBtn(), padding: "5px 10px", fontSize: 11, borderColor: T.bad, color: T.bad }}>Delete</button></div>
           </div>; })}
         </div>}
     </>}
