@@ -3,7 +3,7 @@
 // Mentor personas + work-only safety are enforced HERE (server-side), so they
 // hold even if the client is bypassed. Model is configurable via env.
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "https://fkeniejcitwlqfatkopi.supabase.co";
 const ANON_KEY     = process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_3M0eOBeRvTuC8yjMWWcEqg_BPZfYyKJ";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;   // server-side only — lets the AI proxy read locked config tables (app_settings/ai_sources) without anonymous DB access
