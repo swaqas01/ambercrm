@@ -414,6 +414,16 @@ function normIntl(phone) {
 function telHref(phone) { const d = normIntl(phone); return d ? "tel:+" + d : "tel:"; }
 function waHref(phone) { const d = normIntl(phone); return "https://wa.me/" + d; }
 
+// Deterministic shuffle: same (array, seed) always yields the same order, so the list is stable
+// across unrelated re-renders but reshuffles when the seed changes (used to rotate the Open pool).
+function seededShuffle(arr, seed) {
+  const a = arr.slice();
+  let s = ((seed >>> 0) * 2654435761) >>> 0 || 1;
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; }
+  return a;
+}
+
 /* ===================== SMART INTERNATIONAL PHONE INPUT ===================== */
 // Curated, broad country set (iso2 + name + dial). Search matches the whole set; the six pinned
 // markets surface first, the rest alphabetical. Flags are derived from the ISO code (no asset files).
@@ -2202,12 +2212,12 @@ function AgentDash({ go, user, openLead, onAvatar }) {
         supabase.from("deals").select("status, deal_type, property_value, gross_commission, net_commission, agent_commission, decided_at, created_at").eq("agent_id", uid).limit(1000),
       ]);
       if (lr.error) { setErr("Unable to load your dashboard. Please try again or contact admin."); setRows([]); return; }
-      const mine = (lr.data || []).filter((l) => l.assigned_agent === uid || l.current_owner === uid || l.created_by === uid);
+      const mine = (lr.data || []).filter((l) => !l.is_open && (l.assigned_agent === uid || l.current_owner === uid || l.created_by === uid));
       setRows(mine); setActs(ar.data || []); setDeals(dr.data || []);
       // follow-ups for me (RLS already scopes to leads I can see)
       const { data: fu } = await supabase.from("follow_ups")
         .select("id, lead_id, due_at, type, comment, priority, status, notified, lead:leads!follow_ups_lead_id_fkey(client_name, phone)")
-        .eq("status", "scheduled").order("due_at", { ascending: true });
+        .eq("agent_id", uid).eq("status", "scheduled").order("due_at", { ascending: true });
       const list = fu || [];
       setFups(list);
       // surface a notification once for each follow-up that has become due
@@ -8868,6 +8878,9 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const [allIds, setAllIds] = useState([]);   // all matching lead IDs (id-only, loaded in background) so Prev/Next can span pages
   const [jumpVal, setJumpVal] = useState("");
   const PAGE = pageSize;
+  // Open Leads pool: rotate the order so each Refresh surfaces a fresh set on top (fairness across agents).
+  const isOpenPool = initialAgentFilter === "open" || agentFilter === "open" || (filter && filter.type === "open");
+  const [shuffleKey, setShuffleKey] = useState(() => 1 + Math.floor(Math.random() * 1000000));
   const LEAD_COLS = "id,lead_code,client_name,phone,whatsapp,email,lead_type,project,area,budget,purpose,property_type,status,temperature,source,next_followup,last_contacted,is_open,assigned_agent,assigned_agent_name,current_owner,created_by,original_agent,created_at,created_on,deleted";
   const firstRun = useRef(true);
   useEffect(() => { const id = setTimeout(() => setDq(q), 350); return () => clearTimeout(id); }, [q]);              // debounce search 350ms
@@ -8887,7 +8900,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
     // permission scope
     if (isAgent) {
       if (initialAgentFilter === "open") query = query.eq("is_open", true);
-      else if (uid) query = query.or(`assigned_agent.eq.${uid},current_owner.eq.${uid},created_by.eq.${uid}`);
+      else if (uid) query = query.or(`assigned_agent.eq.${uid},current_owner.eq.${uid},created_by.eq.${uid}`).eq("is_open", false);
       else query = query.eq("id", "00000000-0000-0000-0000-000000000000");   // no session → match nothing
     } else if (isOpsAdmin) {
       query = query.or("is_open.eq.true,assigned_agent.is.null");            // ops-admin: unassigned + open only
@@ -9024,7 +9037,10 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
   const TABS = ["all", "New", "Hot", "Very Hot", "Warm", "Cold", "Follow-up due", "Overdue", "Closed Won", "Closed Lost"];
   const TAB_TONE = { Hot: T.bad, "Very Hot": T.bad, Warm: T.warn, Cold: T.muted, "Closed Won": T.ok, "Closed Lost": T.bad, Overdue: T.bad, "Follow-up due": T.gold, New: T.gold };
   const tabCount = (t) => tabCounts[t] ?? 0;
-  const filtered = leads || [];   // current server page — scope, filters, search, sort + pagination already applied in the DB
+  const _pageRows = leads || [];   // current server page — scope, filters, search, sort + pagination already applied in the DB
+  // On the Open pool with the default (newest) sort, rotate the visible order by shuffleKey so a fresh
+  // set surfaces on each Refresh. An explicit sort choice turns this off and is honoured as-is.
+  const filtered = (isOpenPool && sort === "newest") ? seededShuffle(_pageRows, shuffleKey || 1) : _pageRows;
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2800); };
   const selIds = Object.keys(selected).filter((k) => selected[k]);
   const toggleSel = (id) => setSelected((s) => ({ ...s, [id]: !s[id] }));
@@ -9113,7 +9129,7 @@ function LiveLeads({ user, filter, go, openLead, initialAgentFilter = null, head
         </>)}
       </div>
       <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={load} style={{ ...miniBtn() }}><RefreshCw size={13} /> Refresh</button>
+        <button onClick={() => { if (isOpenPool && sort === "newest") { setShuffleKey((k) => k + 1); const pages = Math.max(1, Math.ceil((total || 0) / PAGE)); if (pages > 1) { setPage((p) => { let n = Math.floor(Math.random() * pages); if (n === p) n = (n + 1) % pages; return n; }); } else { load(); } } else { load(); } }} style={{ ...miniBtn() }}><RefreshCw size={13} /> Refresh</button>
         {isMaster && <button onClick={() => setShowImport(true)} style={{ ...miniBtn() }}><Upload size={13} /> Import file</button>}
         <button onClick={() => setShowAdd(true)} style={{ background: T.btnBg, color: T.btnFg, border: "none",
           borderRadius: 9, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: UI,
