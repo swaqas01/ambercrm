@@ -4993,9 +4993,55 @@ const DC_OUTCOMES = [["no_answer","No answer"],["answered","Answered"],["interes
 const dcOutcomeLabel = (c) => { const o = DC_OUTCOMES.find(([k]) => k === c); return o ? o[1] : (c || "—"); };
 const dcAed = (n) => (n != null && n !== "" && Number(n) > 0) ? "AED " + Number(n).toLocaleString() : "—";
 const dcArea = (n) => (n != null && n !== "" && Number(n) > 0) ? Number(n).toLocaleString() + " sqft" : null;
+const DC_STATUS_LABELS = { new: "New", in_progress: "In progress", converted: "Converted", dead: "Closed" };
+const DC_OUTCOME_TO_STATUS = { no_answer: "in_progress", answered: "in_progress", interested: "in_progress", callback: "in_progress", not_interested: "in_progress", wrong_number: "dead", dnc: "dead" };
+const DC_OUTCOME_TO_SALE = { wrong_number: "Wrong Number", dnc: "Not Valid Owner", not_interested: "Not Selling" };
+const DC_ACTION_LABELS = { reveal: "revealed", call_click: "called", whatsapp_click: "WhatsApp", email_click: "emailed", comment: "note", status_change: "updated", follow_up_created: "follow-up", follow_up_completed: "follow-up done", assigned: "assigned", unassigned: "unassigned", converted: "converted" };
+const dcActionLabel = (a) => DC_ACTION_LABELS[a] || a;
+const dcMailHref = (e) => "mailto:" + (e || "");
+const dcTimeAgo = (iso) => {
+  if (!iso) return null;
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60); if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60); if (h < 24) return h + "h ago";
+  const d = Math.floor(h / 24); if (d < 30) return d + "d ago";
+  return new Date(iso).toLocaleDateString();
+};
+const dcFollowLabel = (iso) => {
+  if (!iso) return null;
+  const d = new Date(iso); const days = Math.round((d - new Date()) / 86400000);
+  const dateStr = d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  if (days < 0) return "Overdue · " + dateStr;
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  return dateStr;
+};
+const dcPrimaryBtn = { padding: "9px 16px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, cursor: "pointer" };
+
+function DcPill({ children, tone }) {
+  const tones = {
+    gold:  { fg: T.gold,  bd: T.goldEdge, bg: T.goldTint },
+    good:  { fg: T.ok,    bd: T.hair,     bg: T.paper },
+    warn:  { fg: T.warn,  bd: T.hair,     bg: T.paper },
+    muted: { fg: T.muted, bd: T.hair,     bg: T.paper },
+  };
+  const t = tones[tone] || tones.muted;
+  return <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: t.bg, color: t.fg, border: `1px solid ${t.bd}`, display: "inline-flex", alignItems: "center" }}>{children}</span>;
+}
+
+function DcStat({ n, label, tone }) {
+  const c = tone === "ok" ? T.ok : tone === "warn" ? T.warn : tone === "bad" ? T.bad : T.ink;
+  return (
+    <div style={{ border: `1px solid ${T.hairSoft}`, borderRadius: 10, padding: "8px 14px", minWidth: 92, textAlign: "center" }}>
+      <div style={{ fontSize: 20, fontWeight: 800, color: c }}>{n}</div>
+      <div style={{ fontSize: 11, color: T.muted, fontWeight: 600 }}>{label}</div>
+    </div>
+  );
+}
 
 function DcDisposition({ r, user, onSaved }) {
-  const [outcome, setOutcome] = useState(r.status || "");
+  const [outcome, setOutcome] = useState("");
   const [sell, setSell] = useState(!!r.wants_to_sell);
   const [list, setList] = useState(!!r.wants_to_list);
   const [listed, setListed] = useState(!!r.listed_with_us);
@@ -5005,17 +5051,18 @@ function DcDisposition({ r, user, onSaved }) {
   const [msg, setMsg] = useState("");
   const save = async () => {
     setBusy(true); setMsg("");
+    const status = outcome ? (DC_OUTCOME_TO_STATUS[outcome] || "in_progress") : null;
+    const sale = sell ? "Selling" : (DC_OUTCOME_TO_SALE[outcome] || null);
     const { data, error } = await supabase.rpc("data_calling_set_disposition", {
-      p_record_id: r.id, p_status: outcome || null,
+      p_record_id: r.id, p_status: status,
       p_wants_to_sell: sell, p_wants_to_list: list, p_listed_with_us: listed,
-      p_sale_status: null, p_comment: comment || null,
+      p_sale_status: sale, p_comment: comment || null,
       p_follow_up_at: follow ? new Date(follow).toISOString() : null });
     setBusy(false);
     if (error || (data && data.error)) {
-      setMsg(data && data.error === "forbidden" ? "This record isn't assigned to you." : "Couldn't save — please try again."); return;
+      setMsg(data && data.error === "forbidden" ? "You can't update this record." : "Couldn't save — please try again."); return;
     }
-    setComment("");
-    onSaved && onSaved();
+    setComment(""); onSaved && onSaved();
   };
   const cbox = (val, set, label) => (
     <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, color: T.ink, cursor: "pointer", padding: "5px 10px", border: `1px solid ${val ? T.gold : T.hair}`, borderRadius: 8, background: val ? T.goldTint : T.paper }}>
@@ -5038,117 +5085,161 @@ function DcDisposition({ r, user, onSaved }) {
       </div>
       <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add a note about this call…" rows={2} style={{ ...pInp, resize: "vertical", marginBottom: 10 }} />
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button onClick={save} disabled={busy} style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1, display: "inline-flex", alignItems: "center", gap: 7 }}><Check size={15} /> {busy ? "Saving…" : "Save disposition"}</button>
+        <button onClick={save} disabled={busy} style={{ ...dcPrimaryBtn, opacity: busy ? .6 : 1, display: "inline-flex", alignItems: "center", gap: 7 }}><Check size={15} /> {busy ? "Saving…" : "Save disposition"}</button>
         {msg && <span style={{ fontSize: 12.5, color: T.bad }}>{msg}</span>}
       </div>
     </div>
   );
 }
 
-function DcTeam({ user }) {
-  const [days, setDays] = useState(30);
-  const [stats, setStats] = useState(null);
-  const [proj, setProj] = useState(null);
-  const [agents, setAgents] = useState([]);
-  const [aProj, setAProj] = useState(""); const [aAgent, setAAgent] = useState(""); const [aCount, setACount] = useState(50);
-  const [aMsg, setAMsg] = useState(""); const [aBusy, setABusy] = useState(false);
-  const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
+function DcCard({ r, user, canManage, onChanged }) {
+  const [rv, setRv] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [revealing, setRevealing] = useState(false);
+  const reveal = async () => {
+    if (rv || revealing) return;
+    setRevealing(true);
+    try {
+      const { data, error } = await supabase.rpc("reveal_data_contact", { p_record_id: r.id });
+      if (!error) {
+        const row = Array.isArray(data) ? data[0] : data;
+        if (row) { setRv(row); logDataCallReliable(r.id, "reveal", user.id); }
+      }
+    } catch (e) {}
+    setRevealing(false);
+  };
+  const phone = rv && rv.owner_phone;
+  const email = rv && rv.owner_email;
+  const ar = dcArea(r.built_up_area);
+  const showAgent = r.assigned_agent_name && (canManage || (r.is_open_calling && !r.assigned_to_me));
+  const lastAct = dcTimeAgo(r.last_activity_at);
+  const follow = dcFollowLabel(r.next_follow_up_at);
+  const statusTone = r.status === "converted" ? "good" : r.status === "in_progress" ? "gold" : "muted";
+  return (
+    <div style={{ ...card, padding: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 200, flex: "1 1 260px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 700, color: T.ink, fontSize: 15 }}>{r.owner_name || "Unknown owner"}</span>
+            {r.unit_number && <span style={{ fontSize: 12, color: T.muted }}>Unit {r.unit_number}</span>}
+            <DcPill tone={statusTone}>{DC_STATUS_LABELS[r.status] || r.status || "New"}</DcPill>
+            {r.is_open_calling && <DcPill tone="gold"><Unlock size={10} style={{ marginRight: 3 }} />Open Calling</DcPill>}
+          </div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {r.project_location && <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><MapPin size={12} />{r.project_location}</span>}
+            {r.property_type && <span>{r.property_type}</span>}
+            {ar && <span>{ar}</span>}
+            {Number(r.selling_price) > 0 && <span>Ask {dcAed(r.selling_price)}</span>}
+          </div>
+          {(showAgent || lastAct || follow) && (
+            <div style={{ fontSize: 12, color: T.faint, marginTop: 6, display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {showAgent && <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><UserCircle size={12} />{r.assigned_agent_name}</span>}
+              {lastAct && <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Clock size={12} />{lastAct}{r.last_action ? " · " + dcActionLabel(r.last_action) : ""}</span>}
+              {follow && <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: /Overdue/.test(follow) ? T.bad : T.faint }}><Calendar size={12} />{follow}</span>}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+            {r.sale_status && <DcPill tone="muted">{r.sale_status}</DcPill>}
+            {r.wants_to_sell && <DcPill tone="gold">Wants to sell</DcPill>}
+            {r.wants_to_list && <DcPill tone="gold">Wants to list</DcPill>}
+            {r.listed_with_us && <DcPill tone="good">Listed with us</DcPill>}
+          </div>
+          {r.last_comment && <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 8, fontStyle: "italic" }}>“{r.last_comment}”</div>}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "stretch", minWidth: 190 }}>
+          {!rv ? (
+            <button onClick={reveal} disabled={revealing} style={{ padding: "9px 14px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontWeight: 700, fontFamily: UI, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+              <Eye size={15} /> {revealing ? "Revealing…" : "Reveal number"}
+            </button>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 8 }}>
+                <a href={telHref(phone)} onClick={() => logDataCallReliable(r.id, "call_click", user.id)} style={{ flex: 1, padding: "9px 12px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, textDecoration: "none", textAlign: "center", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><Phone size={15} /> Call</a>
+                <a href={waHref(phone)} target="_blank" rel="noreferrer" onClick={() => logDataCallReliable(r.id, "whatsapp_click", user.id)} style={{ flex: 1, padding: "9px 12px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontWeight: 700, fontFamily: UI, textDecoration: "none", textAlign: "center", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><MessageCircle size={15} /> WA</a>
+              </div>
+              {phone && <div style={{ fontSize: 12.5, color: T.inkSoft, textAlign: "center" }}>{phone}</div>}
+              {email && <a href={dcMailHref(email)} onClick={() => logDataCallReliable(r.id, "email_click", user.id)} style={{ fontSize: 12, color: T.gold, textAlign: "center", textDecoration: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5 }}><Mail size={12} /> {email}</a>}
+            </>
+          )}
+          <button onClick={() => setOpen(!open)} style={{ ...miniBtn(), justifyContent: "center" }}>{open ? "Close" : "Log outcome"}</button>
+        </div>
+      </div>
+      {open && <DcDisposition r={r} user={user} onSaved={() => { setOpen(false); onChanged && onChanged(); }} />}
+    </div>
+  );
+}
+
+function DcWorklist({ user, scope }) {
+  const [rows, setRows] = useState(null);
+  const [q, setQ] = useState("");
+  const [projF, setProjF] = useState("");
+  const [statusF, setStatusF] = useState("");
+  const canManage = user && (user.role === "master_admin" || user.role === "admin" || user.role === "sales_manager");
   const load = async () => {
-    setStats(null);
-    const since = new Date(Date.now() - days * 86400000).toISOString();
-    const { data } = await supabase.rpc("data_calling_manager_stats", { p_since: since });
-    setStats(data || []);
-    const { data: pj } = await supabase.rpc("data_calling_unassigned_by_project");
-    setProj(pj || []);
-    try { const { data: dir } = await supabase.rpc("user_directory"); setAgents(dir || []); } catch (e) {}
+    setRows(null);
+    let data, error;
+    if (scope === "all") {
+      ({ data, error } = await supabase.from("data_calling_admin_view").select("*").order("project_name", { ascending: true }));
+    } else {
+      ({ data, error } = await supabase.from("data_calling_agent_view").select("*").order("project_name", { ascending: true }));
+    }
+    let list = error ? [] : (data || []);
+    if (scope === "mine") list = list.filter((r) => r.assigned_to_me);
+    else if (scope === "open") list = list.filter((r) => r.is_open_calling);
+    setRows(list);
   };
-  useEffect(() => { load(); }, [days]);
-  const doAssign = async () => {
-    if (!aProj || !aAgent) { setAMsg("Pick a project and an agent."); return; }
-    setABusy(true); setAMsg("");
-    const { data, error } = await supabase.rpc("data_calling_assign_by_project", { p_project: aProj, p_agent: aAgent, p_count: Math.max(1, parseInt(aCount, 10) || 0) });
-    setABusy(false);
-    if (error || (data && data.error)) { setAMsg("Couldn't assign — admins only."); return; }
-    setAMsg("Assigned " + (data.assigned || 0) + " record(s).");
-    load();
-  };
-  const th = { textAlign: "left", padding: "9px 10px", fontSize: 11, color: T.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".03em", borderBottom: `1px solid ${T.hair}` };
-  const td = { padding: "9px 10px", fontSize: 13, color: T.ink, borderBottom: `1px solid ${T.hairSoft}` };
+  useEffect(() => { load(); }, [scope]);
+  const all = rows || [];
+  const projects = [...new Set(all.map((r) => r.project_name).filter(Boolean))].sort();
+  const ql = q.trim().toLowerCase();
+  const filtered = all.filter((r) =>
+    (!projF || r.project_name === projF) &&
+    (!statusF || r.status === statusF) &&
+    (!ql || ((r.owner_name || "") + " " + (r.unit_number || "") + " " + (r.project_name || "") + " " + (r.project_location || "")).toLowerCase().includes(ql)));
+  const groups = {};
+  filtered.forEach((r) => { const k = r.project_name || "Other"; (groups[k] = groups[k] || []).push(r); });
+  const groupKeys = Object.keys(groups).sort();
+  const emptyMsg = scope === "mine" ? "No records assigned to you yet" : scope === "open" ? "No projects are open for calling right now" : "No data uploaded yet";
+  const emptySub = scope === "mine" ? "Your manager will assign you owners to call." : scope === "open" ? "When an admin marks a project as Open Calling, its owners appear here for everyone." : "Upload owner data from the Upload tab.";
   return (
     <div>
-      <div style={{ ...card, padding: 14, marginBottom: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12.5, color: T.muted }}>Period</span>
-        {[[7, "7 days"], [30, "30 days"], [90, "90 days"]].map(([d, l]) => (
-          <button key={d} onClick={() => setDays(d)} style={{ ...miniBtn(), background: days === d ? T.goldTint : T.paper, borderColor: days === d ? T.gold : T.hair }}>{l}</button>
-        ))}
-        <button onClick={load} style={{ ...miniBtn(), marginLeft: "auto" }}><RefreshCw size={14} /> Refresh</button>
-      </div>
-      <div style={{ ...card, padding: 0, overflow: "hidden", marginBottom: 16 }}>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
-            <thead><tr>
-              <th style={th}>Agent</th><th style={th}>Assigned</th><th style={th}>Calls</th><th style={th}>WhatsApp</th>
-              <th style={th}>Logged</th><th style={th}>Reached</th><th style={th}>Reach %</th><th style={th}>Conversions</th>
-            </tr></thead>
-            <tbody>
-              {stats == null && <tr><td style={td} colSpan={8}>Loading…</td></tr>}
-              {stats && stats.length === 0 && <tr><td style={{ ...td, color: T.muted }} colSpan={8}>No call activity in this period.</td></tr>}
-              {stats && stats.map((a) => {
-                const reach = a.dispositions > 0 ? Math.round((a.reached / a.dispositions) * 100) : 0;
-                return (<tr key={a.agent_id}>
-                  <td style={{ ...td, fontWeight: 600 }}>{a.agent_name || "—"}</td>
-                  <td style={td}>{a.assigned}</td><td style={td}>{a.calls}</td><td style={td}>{a.whatsapp}</td>
-                  <td style={td}>{a.dispositions}</td><td style={td}>{a.reached}</td>
-                  <td style={td}>{reach}%</td>
-                  <td style={{ ...td, fontWeight: 700, color: a.conversions > 0 ? T.ok : T.ink }}>{a.conversions}</td>
-                </tr>);
-              })}
-            </tbody>
-          </table>
+      <div style={{ ...card, padding: 14, marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 220px" }}>
+          <Search size={15} color={T.faint} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)" }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search owner, unit, project…" style={{ ...pInp, paddingLeft: 33 }} />
         </div>
+        <select value={projF} onChange={(e) => setProjF(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 180px" }}>
+          <option value="">All projects</option>{projects.map((p) => <option key={p}>{p}</option>)}
+        </select>
+        <select value={statusF} onChange={(e) => setStatusF(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 150px" }}>
+          <option value="">Any status</option>
+          {Object.entries(DC_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <button onClick={load} style={miniBtn()}><RefreshCw size={14} /> Refresh</button>
+        <span style={{ fontSize: 12.5, color: T.muted, marginLeft: "auto" }}>{filtered.length} record{filtered.length === 1 ? "" : "s"}</span>
       </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "1fr 1fr" : "1fr", gap: 14 }}>
-        <div style={{ ...card, padding: 16 }}>
-          <div style={{ fontWeight: 700, color: T.ink, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}><Building2 size={16} color={T.gold} /> Coverage by project</div>
-          <div style={{ maxHeight: 280, overflowY: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr><th style={th}>Project</th><th style={th}>Total</th><th style={th}>Assigned</th><th style={th}>Unassigned</th></tr></thead>
-              <tbody>
-                {proj == null && <tr><td style={td} colSpan={4}>Loading…</td></tr>}
-                {proj && proj.length === 0 && <tr><td style={{ ...td, color: T.muted }} colSpan={4}>No data uploaded yet.</td></tr>}
-                {proj && proj.map((p) => (<tr key={p.project_name}>
-                  <td style={{ ...td, fontWeight: 600 }}>{p.project_name}</td><td style={td}>{p.total}</td>
-                  <td style={td}>{p.assigned}</td>
-                  <td style={{ ...td, fontWeight: 700, color: p.unassigned > 0 ? T.gold : T.muted }}>{p.unassigned}</td>
-                </tr>))}
-              </tbody>
-            </table>
+      {rows == null && <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>Loading…</div>}
+      {rows && filtered.length === 0 && (
+        <div style={{ ...card, padding: 36, textAlign: "center", color: T.muted }}>
+          <Phone size={26} color={T.faint} style={{ marginBottom: 8 }} />
+          <div style={{ fontWeight: 600, color: T.ink }}>{emptyMsg}</div>
+          <div style={{ fontSize: 13, marginTop: 4 }}>{emptySub}</div>
+        </div>
+      )}
+      {rows && groupKeys.map((gk) => (
+        <div key={gk} style={{ marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 2px 10px", flexWrap: "wrap" }}>
+            <Building2 size={15} color={T.gold} />
+            <span style={{ fontWeight: 800, color: T.ink, fontSize: 14 }}>{gk}</span>
+            {groups[gk][0] && groups[gk][0].project_location && <span style={{ fontSize: 12, color: T.muted, display: "inline-flex", alignItems: "center", gap: 3 }}><MapPin size={12} /> {groups[gk][0].project_location}</span>}
+            {groups[gk][0] && groups[gk][0].is_open_calling && <DcPill tone="gold"><Unlock size={10} style={{ marginRight: 3 }} />Open Calling</DcPill>}
+            <span style={{ fontSize: 12, color: T.muted }}>· {groups[gk].length}</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {groups[gk].map((r) => <DcCard key={r.id} r={r} user={user} canManage={canManage} onChanged={load} />)}
           </div>
         </div>
-
-        {isAdmin && (
-          <div style={{ ...card, padding: 16 }}>
-            <div style={{ fontWeight: 700, color: T.ink, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}><Users size={16} color={T.gold} /> Assign records to an agent</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <select value={aProj} onChange={(e) => setAProj(e.target.value)} style={pInp}>
-                <option value="">Choose project…</option>
-                {(proj || []).filter((p) => p.unassigned > 0).map((p) => <option key={p.project_name} value={p.project_name}>{p.project_name} ({p.unassigned} free)</option>)}
-              </select>
-              <select value={aAgent} onChange={(e) => setAAgent(e.target.value)} style={pInp}>
-                <option value="">Choose agent…</option>
-                {agents.map((g) => <option key={g.id} value={g.id}>{g.full_name || g.email}</option>)}
-              </select>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <span style={{ fontSize: 12.5, color: T.muted }}>How many</span>
-                <input type="number" min={1} value={aCount} onChange={(e) => setACount(e.target.value)} style={{ ...pInp, width: 100 }} />
-                <button onClick={doAssign} disabled={aBusy} style={{ marginLeft: "auto", padding: "9px 16px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, cursor: aBusy ? "default" : "pointer", opacity: aBusy ? .6 : 1 }}>{aBusy ? "Assigning…" : "Assign"}</button>
-              </div>
-              {aMsg && <div style={{ fontSize: 12.5, color: T.muted }}>{aMsg}</div>}
-            </div>
-          </div>
-        )}
-      </div>
+      ))}
     </div>
   );
 }
@@ -5162,7 +5253,6 @@ function DcUpload({ user }) {
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState(null);
 
-  // A header cell maps to the FIRST field whose test passes (most specific first).
   const FIELD_RULES = [
     ["owner_email",      (h) => /email|mail/.test(h)],
     ["owner_phone",      (h) => /phone|mobile|whatsapp|contact|telephone|^tel$/.test(h)],
@@ -5182,10 +5272,10 @@ function DcUpload({ user }) {
     (cells || []).forEach((c, i) => { const f = fieldForHeader(c); if (f && !(f in map)) { map[f] = i; n++; } });
     return { map, n, ok: ("project_name" in map) && ("owner_name" in map) };
   };
-  const toCrmPhone = (raw) => { const d = normIntl(raw); return d ? "+" + d : ""; };   // CRM standard = E.164 with +, same as leads
+  const toCrmPhone = (raw) => { const d = normIntl(raw); return d ? "+" + d : ""; };
   const rowsFromAOA = (aoa) => {
     if (!aoa || !aoa.length) return [];
-    let best = { n: -1 }, idx = -1;                 // auto-locate the header row (skip title/banner rows above it)
+    let best = { n: -1 }, idx = -1;
     for (let i = 0; i < Math.min(20, aoa.length); i++) { const sc = scoreHeader(aoa[i]); if (sc.ok && sc.n > best.n) { best = sc; idx = i; } }
     if (idx < 0) return [];
     const out = [];
@@ -5194,7 +5284,6 @@ function DcUpload({ user }) {
       for (const f in best.map) { const v = row[best.map[f]]; o[f] = v == null ? "" : String(v).trim(); }
       o.owner_phone = toCrmPhone(o.owner_phone);
       o.owner_email = o.owner_email ? o.owner_email.toLowerCase() : "";
-      // skip blank rows and repeated header rows (e.g. section dividers)
       if (o.project_name && o.owner_name && fieldForHeader(o.owner_name) !== "owner_name") out.push(o);
     }
     return out;
@@ -5216,7 +5305,7 @@ function DcUpload({ user }) {
       if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".xlsm")) {
         const XLSX = await import("xlsx");
         const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-        for (const sn of wb.SheetNames) {                       // scan ALL sheets
+        for (const sn of wb.SheetNames) {
           const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false, defval: "" });
           all = all.concat(rowsFromAOA(aoa));
         }
@@ -5232,17 +5321,27 @@ function DcUpload({ user }) {
   const run = async () => {
     if (!rows || !rows.length) return;
     setBusy(true); setErr(""); setResult(null); setProgress(0);
-    let received = 0, inserted = 0, skipped = 0;
-    const CHUNK = 500;                                          // batch large files
+    let received = 0, inserted = 0, dupFile = 0, dupDb = 0, invalid = 0, errors = [];
+    const CHUNK = 500;
     for (let i = 0; i < rows.length; i += CHUNK) {
       const batch = rows.slice(i, i + CHUNK);
       const { data, error } = await supabase.rpc("upload_data_calling", { p_rows: batch, p_source_file: fileName || null });
-      if (error) { setBusy(false); setErr(/admin only/i.test(error.message || "") ? "Only admins can upload data." : "Upload failed after " + inserted + " added — please try again."); return; }
+      if (error || (data && data.error)) {
+        setBusy(false);
+        setErr(((data && data.error) === "admin only" || /admin only/i.test((error && error.message) || "")) ? "Only admins can upload data." : "Upload failed after " + inserted + " added — please try again.");
+        return;
+      }
       const r = Array.isArray(data) ? data[0] : data;
-      received += (r && r.received) || batch.length; inserted += (r && r.inserted) || 0; skipped += (r && r.skipped) || 0;
+      received += (r && r.received) || batch.length;
+      inserted += (r && r.inserted) || 0;
+      dupFile  += (r && r.duplicate_in_file) || 0;
+      dupDb    += (r && r.duplicate_in_db) || 0;
+      invalid  += (r && r.skipped_invalid) || 0;
+      if (r && Array.isArray(r.errors)) errors = errors.concat(r.errors.map((x) => ({ ...x, row: (x.row || 0) + i })));
       setProgress(Math.min(i + CHUNK, rows.length));
     }
-    setBusy(false); setResult({ received, inserted, skipped });
+    setBusy(false);
+    setResult({ received, inserted, dupFile, dupDb, invalid, errors });
   };
 
   const downloadTemplate = () => {
@@ -5255,13 +5354,14 @@ function DcUpload({ user }) {
   };
 
   const FIELD_LABELS = { project_name: "Project", project_location: "Location", unit_number: "Unit", owner_name: "Owner name", owner_phone: "Phone", owner_email: "Email" };
+  const errShown = result ? result.errors.slice(0, 200) : [];
 
   return (
     <div>
       <div style={{ ...card, padding: 16, marginBottom: 14 }}>
         <div style={{ fontWeight: 700, color: T.ink, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}><Upload size={16} color={T.gold} /> Upload owner data</div>
         <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.6, marginBottom: 12 }}>
-          Upload an <b>Excel (.xlsx)</b> or <b>.csv</b> file. Columns are detected automatically by name (Project / Building, Location / Area, Unit / Code, Client / Owner name, Phone / Mobile, Email), the header row is found even if there are title rows above it, and all sheets are scanned. Phone numbers are auto-formatted to the CRM standard (+country code). Each row needs at least a Project and an Owner name; duplicates are skipped.
+          Upload an <b>Excel (.xlsx)</b> or <b>.csv</b> file. Columns are detected automatically by name (Project / Building, Location / Area, Unit / Code, Client / Owner name, Phone / Mobile, Email), the header row is found even if there are title rows above it, and all sheets are scanned. Phone numbers are auto-formatted to the CRM standard (+country code). Every valid row is imported; duplicates (same project + unit + phone, or project + owner + phone) and rows missing a project or owner are reported back with counts.
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <input type="file" accept=".xlsx,.xls,.xlsm,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={onFile} style={{ fontSize: 13 }} />
@@ -5282,161 +5382,320 @@ function DcUpload({ user }) {
             ))}
           </div>
           <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12 }}>First: <b>{rows[0].owner_name}</b> · {rows[0].project_name}{rows[0].unit_number ? " · " + rows[0].unit_number : ""}{rows[0].owner_phone ? " · " + rows[0].owner_phone : ""}</div>
-          <button onClick={run} disabled={busy} style={{ padding: "10px 20px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1, display: "inline-flex", alignItems: "center", gap: 7 }}>{busy ? ("Uploading… " + progress + "/" + rows.length) : <><Upload size={15} /> Upload {rows.length} records</>}</button>
+          <button onClick={run} disabled={busy} style={{ ...dcPrimaryBtn, opacity: busy ? .6 : 1, display: "inline-flex", alignItems: "center", gap: 7 }}>{busy ? ("Uploading… " + progress + "/" + rows.length) : <><Upload size={15} /> Upload {rows.length} records</>}</button>
         </div>
       )}
 
       {result && (
         <div style={{ ...card, padding: 16 }}>
-          <div style={{ fontWeight: 700, color: T.ink, marginBottom: 6 }}>Upload complete</div>
-          <div style={{ fontSize: 13.5, color: T.ok, fontWeight: 700 }}>{result.inserted} added</div>
-          <div style={{ fontSize: 13, color: T.warn }}>{result.skipped} skipped (duplicates already in the system)</div>
-          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 4 }}>{result.received} rows processed{fileName ? " from " + fileName : ""}.</div>
-          <button onClick={() => { setRows(null); setResult(null); setCols(null); setFileName(""); setErr(""); }} style={{ ...miniBtn(), marginTop: 12 }}>Upload another file</button>
+          <div style={{ fontWeight: 700, color: T.ink, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}><CheckCircle2 size={16} color={T.ok} /> Upload complete</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+            <DcStat n={result.inserted} label="Imported" tone="ok" />
+            <DcStat n={result.dupFile + result.dupDb} label="Duplicates" tone="warn" />
+            <DcStat n={result.invalid} label="Skipped" tone={result.invalid ? "bad" : "muted"} />
+            <DcStat n={result.received} label="Processed" tone="muted" />
+          </div>
+          <div style={{ fontSize: 12, color: T.muted, marginBottom: errShown.length ? 12 : 0 }}>
+            {result.dupFile} duplicate{result.dupFile === 1 ? "" : "s"} within the file · {result.dupDb} already in the system{fileName ? " · from " + fileName : ""}.
+          </div>
+          {errShown.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: T.bad, marginBottom: 6 }}>{result.errors.length} row{result.errors.length === 1 ? "" : "s"} skipped — fix and re-upload:</div>
+              <div style={{ maxHeight: 220, overflowY: "auto", border: `1px solid ${T.hair}`, borderRadius: 8 }}>
+                {errShown.map((e, idx) => (
+                  <div key={idx} style={{ display: "flex", gap: 10, padding: "6px 10px", borderBottom: idx < errShown.length - 1 ? `1px solid ${T.hairSoft}` : "none", fontSize: 12 }}>
+                    <span style={{ color: T.faint, minWidth: 52 }}>Row {e.row}</span>
+                    <span style={{ color: T.bad, minWidth: 150 }}>{e.reason}</span>
+                    <span style={{ color: T.muted }}>{[e.project, e.owner].filter(Boolean).join(" · ") || "—"}</span>
+                  </div>
+                ))}
+              </div>
+              {result.errors.length > errShown.length && <div style={{ fontSize: 11.5, color: T.faint, marginTop: 6 }}>Showing first {errShown.length} of {result.errors.length}.</div>}
+            </div>
+          )}
+          <button onClick={() => { setRows(null); setResult(null); setCols(null); setFileName(""); setErr(""); }} style={{ ...miniBtn(), marginTop: 14 }}>Upload another file</button>
         </div>
       )}
     </div>
   );
 }
 
-function DataCalling({ user, go, narrow }) {
-  const role = user && user.role;
-  const isManager = role === "master_admin" || role === "admin" || role === "sales_manager";
-  const canUpload = role === "admin" || role === "master_admin";
-  const TABS = [];
-  if (role !== "master_admin") TABS.push(["worklist", "My calls"]);   // master_admin has no personal worklist
-  if (isManager) TABS.push(["team", "Team"]);
-  if (canUpload) TABS.push(["upload", "Upload data"]);
-  const [tab, setTab] = useState(role === "master_admin" ? "team" : "worklist");
-  const [rows, setRows] = useState(null);
-  const [q, setQ] = useState("");
-  const [projF, setProjF] = useState("");
-  const [revealed, setRevealed] = useState({});
-  const [openId, setOpenId] = useState(null);
-  const load = async () => {
-    setRows(null);
-    const { data, error } = await supabase.from("data_calling_agent_view").select("*").order("project_name", { ascending: true });
-    setRows(error ? [] : (data || []));
-  };
-  useEffect(() => { if (tab === "worklist") load(); }, [tab]);
-  const reveal = async (r) => {
-    try {
-      const { data, error } = await supabase.rpc("reveal_data_contact", { p_record_id: r.id });
-      if (error) return;
-      const row = Array.isArray(data) ? data[0] : data;
-      if (row) { setRevealed((v) => ({ ...v, [r.id]: row })); logDataCallReliable(r.id, "reveal", user.id); }
-    } catch (e) {}
-  };
-  const all = rows || [];
-  const projects = [...new Set(all.map((r) => r.project_name).filter(Boolean))].sort();
-  const ql = q.trim().toLowerCase();
-  const filtered = all.filter((r) =>
-    (!projF || r.project_name === projF) &&
-    (!ql || ((r.owner_name || "") + " " + (r.unit_number || "") + " " + (r.project_name || "") + " " + (r.project_location || "")).toLowerCase().includes(ql)));
-  const groups = {};
-  filtered.forEach((r) => { const k = r.project_name || "Other"; (groups[k] = groups[k] || []).push(r); });
-  const groupKeys = Object.keys(groups).sort();
+function DcTeam({ user }) {
+  const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
+  const [days, setDays] = useState(30);
+  const [overview, setOverview] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [agents, setAgents] = useState([]);
+  const [recs, setRecs] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [fProj, setFProj] = useState("");
+  const [fLoc, setFLoc] = useState("");
+  const [fAssign, setFAssign] = useState("all");
+  const [sel, setSel] = useState({});
+  const [oneAgent, setOneAgent] = useState("");
+  const [multi, setMulti] = useState({});
+  const [pProj, setPProj] = useState(""); const [pAgent, setPAgent] = useState(""); const [pIncl, setPIncl] = useState(false);
 
-  const badge = (txt, on) => on ? <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: T.goldTint, color: T.gold, border: `1px solid ${T.goldEdge}` }}>{txt}</span> : null;
+  const loadStats = async () => {
+    setStats(null);
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    try { const { data } = await supabase.rpc("data_calling_manager_stats", { p_since: since }); setStats(data || []); } catch (e) { setStats([]); }
+  };
+  const loadCore = async () => {
+    try { const { data } = await supabase.rpc("data_calling_project_overview"); setOverview(data || []); } catch (e) { setOverview([]); }
+    try { const { data } = await supabase.rpc("user_directory"); setAgents(data || []); } catch (e) {}
+    if (isAdmin) {
+      const { data, error } = await supabase.from("data_calling_admin_view")
+        .select("id,project_name,project_location,owner_name,unit_number,status,assigned_agent_id,assigned_agent_name,is_open_calling")
+        .order("project_name", { ascending: true });
+      setRecs(error ? [] : (data || []));
+    }
+  };
+  useEffect(() => { loadCore(); }, []);
+  useEffect(() => { loadStats(); }, [days]);
+  const refreshAll = () => { loadCore(); loadStats(); setSel({}); };
+
+  const toggleOpen = async (project, next) => {
+    setBusy(true); setMsg("");
+    const { data, error } = await supabase.rpc("data_calling_set_open_calling", { p_project: project, p_open: next });
+    setBusy(false);
+    if (error || (data && data.error)) { setMsg("Couldn't change Open Calling — admins only."); return; }
+    loadCore();
+  };
+
+  const selIds = Object.keys(sel).filter((k) => sel[k]);
+  const multiIds = Object.keys(multi).filter((k) => multi[k]);
+
+  const assignOne = async () => {
+    if (!oneAgent || selIds.length === 0) { setMsg("Select records and an agent."); return; }
+    setBusy(true); setMsg("");
+    const { data, error } = await supabase.rpc("data_calling_assign_records", { p_ids: selIds, p_agent: oneAgent });
+    setBusy(false);
+    if (error || (data && data.error)) { setMsg("Couldn't assign — admins only."); return; }
+    setMsg("Assigned " + ((data && data.assigned) || selIds.length) + " record(s)."); setSel({}); refreshAll();
+  };
+  const assignBulk = async () => {
+    if (multiIds.length === 0 || selIds.length === 0) { setMsg("Select records and at least one agent to split across."); return; }
+    setBusy(true); setMsg("");
+    const { data, error } = await supabase.rpc("data_calling_bulk_assign", { p_ids: selIds, p_agents: multiIds });
+    setBusy(false);
+    if (error || (data && data.error)) { setMsg("Couldn't assign — admins only."); return; }
+    setMsg("Split " + ((data && data.assigned) || selIds.length) + " record(s) across " + multiIds.length + " agent(s)."); setSel({}); refreshAll();
+  };
+  const unassignSel = async () => {
+    if (selIds.length === 0) { setMsg("Select records to unassign."); return; }
+    setBusy(true); setMsg("");
+    const { data, error } = await supabase.rpc("data_calling_unassign", { p_ids: selIds });
+    setBusy(false);
+    if (error || (data && data.error)) { setMsg("Couldn't unassign — admins only."); return; }
+    setMsg("Unassigned " + ((data && data.unassigned) || 0) + " record(s)."); setSel({}); refreshAll();
+  };
+  const assignProject = async () => {
+    if (!pProj || !pAgent) { setMsg("Pick a project and an agent."); return; }
+    setBusy(true); setMsg("");
+    const { data, error } = await supabase.rpc("data_calling_assign_project", { p_project: pProj, p_agent: pAgent, p_include_assigned: pIncl });
+    setBusy(false);
+    if (error || (data && data.error)) { setMsg("Couldn't assign project — admins only."); return; }
+    setMsg("Assigned " + ((data && data.assigned) || 0) + " record(s) in " + pProj + "."); refreshAll();
+  };
+
+  const allRecs = recs || [];
+  const recProjects = [...new Set(allRecs.map((r) => r.project_name).filter(Boolean))].sort();
+  const locations = [...new Set(allRecs.map((r) => r.project_location).filter(Boolean))].sort();
+  const wbList = allRecs.filter((r) =>
+    (!fProj || r.project_name === fProj) &&
+    (!fLoc || r.project_location === fLoc) &&
+    (fAssign === "all" || (fAssign === "assigned" ? r.assigned_agent_id : !r.assigned_agent_id)));
+  const wbShown = wbList.slice(0, 500);
+  const allSelected = wbShown.length > 0 && wbShown.every((r) => sel[r.id]);
+  const toggleAll = () => {
+    const n = { ...sel };
+    if (allSelected) wbShown.forEach((r) => delete n[r.id]);
+    else wbShown.forEach((r) => { n[r.id] = true; });
+    setSel(n);
+  };
+
+  const th = { textAlign: "left", padding: "9px 10px", fontSize: 11, color: T.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".03em", borderBottom: `1px solid ${T.hair}` };
+  const td = { padding: "9px 10px", fontSize: 13, color: T.ink, borderBottom: `1px solid ${T.hairSoft}` };
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
-        <div>
-          <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 10 }}><Phone size={22} color={T.gold} /> Data Calling</div>
-          <div style={{ color: T.muted, fontSize: 13, marginTop: 4 }}>Call property owners in your assigned projects and record who wants to sell or list with Amber. Every call and WhatsApp is logged automatically.</div>
-        </div>
-        {TABS.length > 1 && (
-          <div style={{ display: "flex", gap: 6, background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 10, padding: 4 }}>
-            {TABS.map(([k, lbl]) => (
-              <button key={k} onClick={() => setTab(k)} style={{ ...miniBtn(), border: "none", background: tab === k ? T.goldTint : "transparent" }}>{lbl}</button>
-            ))}
-          </div>
-        )}
+      <div style={{ ...card, padding: 14, marginBottom: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12.5, color: T.muted }}>Period</span>
+        {[[7, "7 days"], [30, "30 days"], [90, "90 days"]].map(([d, l]) => (
+          <button key={d} onClick={() => setDays(d)} style={{ ...miniBtn(), background: days === d ? T.goldTint : T.paper, borderColor: days === d ? T.gold : T.hair }}>{l}</button>
+        ))}
+        <button onClick={refreshAll} style={{ ...miniBtn(), marginLeft: "auto" }}><RefreshCw size={14} /> Refresh</button>
       </div>
 
-      {tab === "team" && isManager ? <DcTeam user={user} /> : tab === "upload" && canUpload ? <DcUpload user={user} /> : (
-        <div>
-          <div style={{ ...card, padding: 14, marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ position: "relative", flex: "1 1 220px" }}>
-              <Search size={15} color={T.faint} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)" }} />
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search owner, unit, project…" style={{ ...pInp, paddingLeft: 33 }} />
-            </div>
-            <select value={projF} onChange={(e) => setProjF(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 200px" }}>
-              <option value="">All projects</option>{projects.map((p) => <option key={p}>{p}</option>)}
+      {msg && <div style={{ ...card, padding: 10, marginBottom: 12, fontSize: 12.5, color: T.ink }}>{msg}</div>}
+
+      <div style={{ ...card, padding: 16, marginBottom: 14 }}>
+        <div style={{ fontWeight: 700, color: T.ink, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}><Building2 size={16} color={T.gold} /> Coverage by project</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+            <thead><tr>
+              <th style={th}>Project</th><th style={th}>Total</th><th style={th}>Assigned</th><th style={th}>Unassigned</th>
+              <th style={th}>Contacted</th><th style={th}>Pending</th><th style={th}>Open Calling</th>
+            </tr></thead>
+            <tbody>
+              {overview == null && <tr><td style={td} colSpan={7}>Loading…</td></tr>}
+              {overview && overview.length === 0 && <tr><td style={{ ...td, color: T.muted }} colSpan={7}>No data uploaded yet.</td></tr>}
+              {overview && overview.map((p) => (
+                <tr key={p.project_name}>
+                  <td style={{ ...td, fontWeight: 600 }}>{p.project_name}</td>
+                  <td style={td}>{p.total}</td>
+                  <td style={td}>{p.assigned}</td>
+                  <td style={{ ...td, fontWeight: 700, color: p.unassigned > 0 ? T.gold : T.muted }}>{p.unassigned}</td>
+                  <td style={td}>{p.contacted}</td>
+                  <td style={td}>{p.pending}</td>
+                  <td style={td}>
+                    {isAdmin ? (
+                      <button onClick={() => toggleOpen(p.project_name, !p.open_calling)} disabled={busy} title={p.open_calling ? "Open to all agents — click to make private" : "Private — click to open to all agents"}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 999, cursor: "pointer", fontFamily: UI, fontWeight: 700, fontSize: 11.5,
+                          border: `1px solid ${p.open_calling ? T.gold : T.hair}`, background: p.open_calling ? T.goldTint : T.paper, color: p.open_calling ? T.gold : T.muted }}>
+                        {p.open_calling ? <Unlock size={12} /> : <Lock size={12} />}{p.open_calling ? "On" : "Off"}
+                      </button>
+                    ) : (p.open_calling ? <DcPill tone="gold">On</DcPill> : <span style={{ color: T.faint, fontSize: 12 }}>Off</span>)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {isAdmin && (
+        <div style={{ ...card, padding: 16, marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, color: T.ink, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}><Users size={16} color={T.gold} /> Assign records</div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", paddingBottom: 12, marginBottom: 12, borderBottom: `1px dashed ${T.hair}` }}>
+            <span style={{ fontSize: 12.5, color: T.muted, fontWeight: 700 }}>Whole project</span>
+            <select value={pProj} onChange={(e) => setPProj(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 200px" }}>
+              <option value="">Choose project…</option>
+              {(overview || []).map((p) => <option key={p.project_name} value={p.project_name}>{p.project_name} ({p.unassigned} free)</option>)}
             </select>
-            <button onClick={load} style={miniBtn()}><RefreshCw size={14} /> Refresh</button>
-            <span style={{ fontSize: 12.5, color: T.muted, marginLeft: "auto" }}>{filtered.length} record{filtered.length === 1 ? "" : "s"}</span>
+            <span style={{ fontSize: 12.5, color: T.muted }}>→</span>
+            <select value={pAgent} onChange={(e) => setPAgent(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 180px" }}>
+              <option value="">Choose agent…</option>{agents.map((g) => <option key={g.id} value={g.id}>{g.full_name || g.email}</option>)}
+            </select>
+            <label style={{ fontSize: 12, color: T.muted, display: "inline-flex", alignItems: "center", gap: 5 }}><input type="checkbox" checked={pIncl} onChange={(e) => setPIncl(e.target.checked)} /> reassign already-assigned</label>
+            <button onClick={assignProject} disabled={busy} style={{ ...dcPrimaryBtn, opacity: busy ? .6 : 1 }}>Assign project</button>
           </div>
 
-          {rows == null && <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>Loading your worklist…</div>}
-          {rows && filtered.length === 0 && (
-            <div style={{ ...card, padding: 36, textAlign: "center", color: T.muted }}>
-              <Phone size={26} color={T.faint} style={{ marginBottom: 8 }} />
-              <div style={{ fontWeight: 600, color: T.ink }}>No records assigned to you yet</div>
-              <div style={{ fontSize: 13, marginTop: 4 }}>{isManager ? "Use the Team tab to assign owners to agents." : "Your manager will assign you owners to call."}</div>
-            </div>
-          )}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+            <select value={fProj} onChange={(e) => setFProj(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 180px" }}>
+              <option value="">All projects</option>{recProjects.map((p) => <option key={p}>{p}</option>)}
+            </select>
+            <select value={fLoc} onChange={(e) => setFLoc(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 160px" }}>
+              <option value="">All locations</option>{locations.map((l) => <option key={l}>{l}</option>)}
+            </select>
+            <select value={fAssign} onChange={(e) => setFAssign(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 150px" }}>
+              <option value="all">All</option><option value="assigned">Assigned</option><option value="unassigned">Unassigned</option>
+            </select>
+            <span style={{ fontSize: 12, color: T.muted, marginLeft: "auto" }}>{selIds.length} selected · {wbList.length} shown</span>
+          </div>
 
-          {rows && groupKeys.map((gk) => (
-            <div key={gk} style={{ marginBottom: 18 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 2px 10px" }}>
-                <Building2 size={15} color={T.gold} />
-                <span style={{ fontWeight: 800, color: T.ink, fontSize: 14 }}>{gk}</span>
-                {groups[gk][0] && groups[gk][0].project_location && <span style={{ fontSize: 12, color: T.muted, display: "inline-flex", alignItems: "center", gap: 3 }}><MapPin size={12} /> {groups[gk][0].project_location}</span>}
-                <span style={{ fontSize: 12, color: T.muted }}>· {groups[gk].length}</span>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {groups[gk].map((r) => {
-                  const rv = revealed[r.id];
-                  const phone = rv && rv.owner_phone;
-                  const isOpen = openId === r.id;
-                  const ar = dcArea(r.built_up_area);
-                  return (
-                    <div key={r.id} style={{ ...card, padding: 14 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                        <div style={{ minWidth: 200, flex: "1 1 260px" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                            <span style={{ fontWeight: 700, color: T.ink, fontSize: 15 }}>{r.owner_name || "Unknown owner"}</span>
-                            {r.unit_number && <span style={{ fontSize: 12, color: T.muted }}>Unit {r.unit_number}</span>}
-                            {r.status && <span style={{ fontSize: 11, color: T.muted, padding: "2px 8px", border: `1px solid ${T.hair}`, borderRadius: 999 }}>{dcOutcomeLabel(r.status)}</span>}
-                          </div>
-                          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5, display: "flex", gap: 12, flexWrap: "wrap" }}>
-                            {r.property_type && <span>{r.property_type}</span>}
-                            {ar && <span>{ar}</span>}
-                            {Number(r.selling_price) > 0 && <span>Ask {dcAed(r.selling_price)}</span>}
-                          </div>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-                            {badge("Wants to sell", r.wants_to_sell)}
-                            {badge("Wants to list", r.wants_to_list)}
-                            {badge("Listed with us", r.listed_with_us)}
-                          </div>
-                          {r.last_comment && <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 8, fontStyle: "italic" }}>“{r.last_comment}”</div>}
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "stretch", minWidth: 190 }}>
-                          {!rv ? (
-                            <button onClick={() => reveal(r)} style={{ padding: "9px 14px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontWeight: 700, fontFamily: UI, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
-                              <Eye size={15} /> Reveal number
-                            </button>
-                          ) : (
-                            <div style={{ display: "flex", gap: 8 }}>
-                              <a href={telHref(phone)} onClick={() => logDataCallReliable(r.id, "call", user.id)} style={{ flex: 1, padding: "9px 12px", borderRadius: 9, border: "none", background: T.btnBg, color: T.btnFg, fontWeight: 700, fontFamily: UI, textDecoration: "none", textAlign: "center", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><Phone size={15} /> Call</a>
-                              <a href={waHref(phone)} target="_blank" rel="noreferrer" onClick={() => logDataCallReliable(r.id, "whatsapp", user.id)} style={{ flex: 1, padding: "9px 12px", borderRadius: 9, border: `1px solid ${T.hair}`, background: T.paper, color: T.ink, fontWeight: 700, fontFamily: UI, textDecoration: "none", textAlign: "center", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><MessageCircle size={15} /> WA</a>
-                            </div>
-                          )}
-                          {rv && rv.owner_phone && <div style={{ fontSize: 12.5, color: T.inkSoft, textAlign: "center" }}>{rv.owner_phone}</div>}
-                          <button onClick={() => setOpenId(isOpen ? null : r.id)} style={{ ...miniBtn(), justifyContent: "center" }}>{isOpen ? "Close" : "Log outcome"}</button>
-                        </div>
-                      </div>
-                      {isOpen && <DcDisposition r={r} user={user} onSaved={() => { setOpenId(null); load(); }} />}
-                    </div>
-                  );
-                })}
-              </div>
+          <div style={{ border: `1px solid ${T.hair}`, borderRadius: 8, maxHeight: 300, overflowY: "auto", marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", borderBottom: `1px solid ${T.hair}`, position: "sticky", top: 0, background: T.paper }}>
+              <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+              <span style={{ fontSize: 11.5, color: T.muted, fontWeight: 700 }}>Select all shown</span>
             </div>
+            {recs == null && <div style={{ padding: 14, color: T.muted, fontSize: 12.5 }}>Loading…</div>}
+            {recs && wbShown.length === 0 && <div style={{ padding: 14, color: T.muted, fontSize: 12.5 }}>No records match these filters.</div>}
+            {wbShown.map((r) => (
+              <label key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", borderBottom: `1px solid ${T.hairSoft}`, cursor: "pointer", fontSize: 12.5 }}>
+                <input type="checkbox" checked={!!sel[r.id]} onChange={(e) => setSel((s) => ({ ...s, [r.id]: e.target.checked }))} />
+                <span style={{ fontWeight: 600, color: T.ink, minWidth: 120 }}>{r.owner_name}</span>
+                <span style={{ color: T.muted, minWidth: 110 }}>{r.project_name}{r.unit_number ? " · " + r.unit_number : ""}</span>
+                <span style={{ color: T.faint, marginLeft: "auto" }}>{r.assigned_agent_name ? "→ " + r.assigned_agent_name : "unassigned"}</span>
+              </label>
+            ))}
+            {wbList.length > wbShown.length && <div style={{ padding: "8px 10px", fontSize: 11.5, color: T.faint }}>Showing first {wbShown.length} — narrow the filters to see the rest.</div>}
+          </div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+            <select value={oneAgent} onChange={(e) => setOneAgent(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 190px" }}>
+              <option value="">Assign selected to…</option>{agents.map((g) => <option key={g.id} value={g.id}>{g.full_name || g.email}</option>)}
+            </select>
+            <button onClick={assignOne} disabled={busy} style={{ ...dcPrimaryBtn, opacity: busy ? .6 : 1 }}>Assign selected</button>
+            <button onClick={unassignSel} disabled={busy} style={{ ...miniBtn(), color: T.bad }}>Unassign selected</button>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12.5, color: T.muted, fontWeight: 700, marginBottom: 6 }}>Or split the selected records evenly across several agents</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              {agents.map((g) => {
+                const on = !!multi[g.id];
+                return <button key={g.id} onClick={() => setMulti((m) => ({ ...m, [g.id]: !on }))} style={{ fontSize: 12, fontWeight: 600, padding: "5px 11px", borderRadius: 999, cursor: "pointer", fontFamily: UI, border: `1px solid ${on ? T.gold : T.hair}`, background: on ? T.goldTint : T.paper, color: on ? T.gold : T.muted }}>{g.full_name || g.email}</button>;
+              })}
+            </div>
+            <button onClick={assignBulk} disabled={busy} style={{ ...dcPrimaryBtn, opacity: busy ? .6 : 1 }}>Split across {multiIds.length || 0} agent{multiIds.length === 1 ? "" : "s"}</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+        <div style={{ fontWeight: 700, color: T.ink, padding: "14px 16px 0", display: "flex", alignItems: "center", gap: 8 }}><BarChart3 size={16} color={T.gold} /> Team performance</div>
+        <div style={{ overflowX: "auto", padding: "10px 4px 4px" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+            <thead><tr>
+              <th style={th}>Agent</th><th style={th}>Assigned</th><th style={th}>Calls</th><th style={th}>WhatsApp</th>
+              <th style={th}>Updates</th><th style={th}>Reached</th><th style={th}>Reach %</th><th style={th}>Conversions</th>
+            </tr></thead>
+            <tbody>
+              {stats == null && <tr><td style={td} colSpan={8}>Loading…</td></tr>}
+              {stats && stats.length === 0 && <tr><td style={{ ...td, color: T.muted }} colSpan={8}>No call activity in this period.</td></tr>}
+              {stats && stats.map((a) => {
+                const reach = a.dispositions > 0 ? Math.round((a.reached / a.dispositions) * 100) : 0;
+                return (<tr key={a.agent_id}>
+                  <td style={{ ...td, fontWeight: 600 }}>{a.agent_name || "—"}</td>
+                  <td style={td}>{a.assigned}</td><td style={td}>{a.calls}</td><td style={td}>{a.whatsapp}</td>
+                  <td style={td}>{a.dispositions}</td><td style={td}>{a.reached}</td><td style={td}>{reach}%</td>
+                  <td style={{ ...td, fontWeight: 700, color: a.conversions > 0 ? T.ok : T.ink }}>{a.conversions}</td>
+                </tr>);
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DataCalling({ user }) {
+  const role = user && user.role;
+  const isAdmin = role === "master_admin" || role === "admin";
+  const canManage = isAdmin || role === "sales_manager";
+  const TABS = [];
+  if (canManage) TABS.push(["all", "All Data"]);
+  TABS.push(["mine", "Assigned to Me"]);
+  TABS.push(["open", "Open Calling"]);
+  if (isAdmin) TABS.push(["upload", "Upload Data"]);
+  if (canManage) TABS.push(["team", "Team / Assignment"]);
+  const [tab, setTab] = useState(canManage ? "all" : "mine");
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 10 }}><Phone size={22} color={T.gold} /> Data Calling</div>
+        <div style={{ color: T.muted, fontSize: 13, marginTop: 4 }}>Call property owners in your projects and record who wants to sell or list with Amber. Every reveal, call and WhatsApp is logged automatically. Kept separate from Leads.</div>
+      </div>
+
+      {TABS.length > 1 && (
+        <div style={{ display: "flex", gap: 6, background: T.paper, border: `1px solid ${T.hair}`, borderRadius: 10, padding: 4, marginBottom: 16, flexWrap: "wrap" }}>
+          {TABS.map(([k, lbl]) => (
+            <button key={k} onClick={() => setTab(k)} style={{ ...miniBtn(), border: "none", background: tab === k ? T.goldTint : "transparent", color: tab === k ? T.gold : T.ink }}>{lbl}</button>
           ))}
         </div>
       )}
+
+      {tab === "team" && canManage ? <DcTeam user={user} />
+        : tab === "upload" && isAdmin ? <DcUpload user={user} />
+        : tab === "all" && canManage ? <DcWorklist user={user} scope="all" />
+        : tab === "open" ? <DcWorklist user={user} scope="open" />
+        : <DcWorklist user={user} scope="mine" />}
     </div>
   );
 }
