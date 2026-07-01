@@ -36,7 +36,7 @@ const SCREEN_ACCESS = {
   admin:        ["projects","hotdeals","admin","lead","assign","performance","deals","dealdetail","devices","breakdown","myprofile","agents","agentprofile","targets","calling"],
   sales_manager:["projects","hotdeals","admin","live","open","lead","assign","pipeline","performance","matching","score","deals","dealdetail","breakdown","myprofile","targets","calling"],
   agent:        ["projects","hotdeals","agent","live","open","lead","deals","dealdetail","breakdown","myprofile","calling"],
-  marketing:    ["projects","admin","live","open","lead","settings","myprofile"],
+  marketing:    ["projects","admin","live","open","assign","lead","settings","myprofile"],
   accounts:     ["projects","admin","commission","lead","settings","myprofile"],
   data_calling: ["calling","myprofile"],
 };

@@ -2725,7 +2725,7 @@ function LeadDetail({ leadId, user, go, openLead, from, siblings }) {
   const isAdmin = user && (user.role === "master_admin" || user.role === "admin");
   const isMaster = user && user.role === "master_admin";
   const leadClosed = !!(lead && (lead.closed_locked || lead.status === "Closed Won" || lead.status === "Closed Won Pending Approval"));
-  const canReassign = isMaster || (isAdmin && !leadClosed);
+  const canReassign = isMaster || ((isAdmin || (user && user.role === "marketing")) && !leadClosed);
   const [draftRow, setDraftRow] = useState(null);
   useEffect(() => { let alive = true; (async () => {
     if (!lead || !lead.id || !me || !me.id) { setDraftRow(null); return; }
