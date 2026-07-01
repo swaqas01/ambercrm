@@ -625,6 +625,7 @@ const NAV = [
   ["pipeline", "Pipeline Board", Kanban],
   ["open", "Open Leads", Unlock],
   ["performance", "Agent Performance", BarChart3],
+  ["marketing", "Marketing", TrendingUp],
   ["security", "Suspicious Activity", ShieldAlert],
   ["devices", "Devices & Sessions", Smartphone],
   ["matching", "Property Matching", Building2],
@@ -792,6 +793,7 @@ export default function App() {
     myprofile: <AgentProfile user={user} agentId={user && user.id} self go={go} openLead={openLead} openAgent={openAgent} onAvatar={(url) => setUser((u) => (u ? { ...u, avatar_url: url } : u))} />, agentprofile: <AgentProfile user={user} agentId={agentDetailId} go={go} openLead={openLead} openAgent={openAgent} />, agents: <AgentsRoster user={user} go={go} openAgent={openAgent} />, targets: <TargetsAdmin user={user} go={go} openAgent={openAgent} />,
     assign: <LiveLeads user={user} go={go} openLead={openLead} initialAgentFilter="unassigned" heading="Lead Assignment" sub="Unassigned leads waiting to be given to an agent. Select one or many, then Assign to agent. Use the Agent filter to view the open pool, a specific agent, or all leads." />, pipeline: <Pipeline go={go} openLead={openLead} />, performance: <AgentPerformance user={user} go={go} openAgent={openAgent} />,
     security: <SecurityLog go={go} />, matching: <Matching go={go} openLead={openLead} />, score: <ScorePage />,
+    marketing: <Marketing user={user} go={go} openLead={openLead} />,
     careers: <Careers />, commission: <Commission />, settings: <SettingsPage />,
     hotdeals: <HotDeals user={user} go={go} />,
     calling: <DataCalling user={user} go={go} narrow={narrow} />,
@@ -5706,6 +5708,235 @@ function DataCalling({ user }) {
         : tab === "all" && canManage ? <DcWorklist user={user} scope="all" />
         : tab === "open" ? <DcWorklist user={user} scope="open" />
         : <DcWorklist user={user} scope="mine" />}
+    </div>
+  );
+}
+
+function Marketing({ user, go, openLead }) {
+  const isMaster = user && user.role === "master_admin";
+  const [range, setRange] = useState("this_month");
+  const [cFrom, setCFrom] = useState("");
+  const [cTo, setCTo] = useState("");
+  const [source, setSource] = useState("");
+  const [project, setProject] = useState("");
+  const [agent, setAgent] = useState("");
+  const [assignedBy, setAssignedBy] = useState("");
+  const [rep, setRep] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [drill, setDrill] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const srcLabel = (b) => ({ property_finder: "Property Finder", off_plan: "Off Plan", website: "Website", campaign: "Campaign", manual: "Manual", other: "Other" }[b] || b || "—");
+  const pad = (n) => String(n).padStart(2, "0");
+  const dubaiMidnight = (y, m, d) => `${y}-${pad(m)}-${pad(d)}T00:00:00+04:00`;
+  const bounds = () => {
+    const [Y, M] = dubaiToday().split("-").map(Number);
+    if (range === "custom") {
+      let to = null;
+      if (cTo) { const d = new Date(`${cTo}T00:00:00+04:00`); d.setDate(d.getDate() + 1); to = d.toISOString(); }
+      return { from: cFrom ? `${cFrom}T00:00:00+04:00` : null, to };
+    }
+    if (range === "this_month") return { from: dubaiMidnight(Y, M, 1), to: dubaiMidnight(M === 12 ? Y + 1 : Y, M === 12 ? 1 : M + 1, 1) };
+    if (range === "last_month") { const ly = M === 1 ? Y - 1 : Y, lm = M === 1 ? 12 : M - 1; return { from: dubaiMidnight(ly, lm, 1), to: dubaiMidnight(Y, M, 1) }; }
+    if (range === "quarter") { const qs = M - ((M - 1) % 3); const qe = qs + 3; return { from: dubaiMidnight(Y, qs, 1), to: dubaiMidnight(qe > 12 ? Y + 1 : Y, qe > 12 ? qe - 12 : qe, 1) }; }
+    if (range === "year") return { from: dubaiMidnight(Y, 1, 1), to: dubaiMidnight(Y + 1, 1, 1) };
+    return { from: null, to: null };
+  };
+
+  const load = async () => {
+    setLoading(true); setErr("");
+    const { from, to } = bounds();
+    try {
+      const { data, error } = await supabase.rpc("marketing_report", { p_from: from, p_to: to, p_source: source || null, p_campaign: project || null, p_agent: agent || null, p_assigned_by: assignedBy || null });
+      if (error || (data && data.error)) { setErr("Couldn't load the marketing report. Please try again."); setLoading(false); return; }
+      setRep(data);
+    } catch (e) { setErr("Couldn't load the marketing report. Please try again."); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [range, cFrom, cTo, source, project, agent, assignedBy]);
+
+  const openDrill = async (proj) => {
+    setDrill(proj); setDetail(null); setDetailLoading(true);
+    const { from, to } = bounds();
+    try {
+      const { data } = await supabase.rpc("marketing_leads", { p_from: from, p_to: to, p_source: source || null, p_campaign: project || null, p_agent: agent || null, p_assigned_by: assignedBy || null, p_project: proj });
+      setDetail(data || []);
+    } catch (e) { setDetail([]); }
+    setDetailLoading(false);
+  };
+
+  const csvCell = (v) => { const s = String(v == null ? "" : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const exportCsv = () => {
+    if (!rep || !isMaster) return;
+    const head = ["Agent", "Total received", "Property Finder", "Off Plan", "Campaign", "Open returned", "Contacted", "Closed"];
+    const rows = (rep.agents || []).map((a) => [a.agent_name, a.total, a.property_finder, a.off_plan, a.campaign, a.open_returned, a.contacted, a.closed]);
+    const csv = [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
+    try {
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+      const a = document.createElement("a"); a.href = url; a.download = "marketing_agents_" + dubaiToday() + ".csv"; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch (e) {}
+  };
+
+  const S = (rep && rep.summary) || {};
+  const opts = (rep && rep.options) || { agents: [], assigners: [], projects: [] };
+  const RANGES = [["this_month", "This Month"], ["last_month", "Last Month"], ["quarter", "Quarter"], ["year", "Year"], ["custom", "Custom"]];
+  const SOURCES = [["", "All sources"], ["property_finder", "Property Finder"], ["off_plan", "Off Plan"], ["website", "Website"], ["campaign", "Campaign"], ["manual", "Manual"], ["other", "Other"]];
+
+  const th = { textAlign: "left", padding: "9px 10px", fontSize: 11, color: T.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".03em", borderBottom: `1px solid ${T.hair}`, whiteSpace: "nowrap" };
+  const td = { padding: "9px 10px", fontSize: 13, color: T.ink, borderBottom: `1px solid ${T.hairSoft}`, whiteSpace: "nowrap" };
+  const Card = ({ label, value, tone, icon: Ic }) => (
+    <div style={{ ...card, padding: "14px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>{label}</div>
+        {Ic && <Ic size={15} color={tone === "gold" ? T.gold : T.faint} />}
+      </div>
+      <div style={{ fontFamily: DISPLAY, fontSize: 26, marginTop: 6, color: tone === "gold" ? T.gold : tone === "ok" ? T.ok : T.ink }}>{value == null ? "—" : Number(value).toLocaleString()}</div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+        <div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 10 }}><TrendingUp size={22} color={T.gold} /> Marketing</div>
+          <div style={{ color: T.muted, fontSize: 13, marginTop: 4, maxWidth: 720 }}>Lead generation and assignment reporting. Every lead counts for the agent it was first assigned to — even if it's later opened, reassigned, or goes quiet.</div>
+        </div>
+        {isMaster && <button onClick={exportCsv} disabled={!rep} style={{ ...miniBtn(), opacity: rep ? 1 : .5 }}><Download size={14} /> Export CSV</button>}
+      </div>
+
+      <div style={{ ...card, padding: 14, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          {RANGES.map(([k, l]) => (
+            <button key={k} onClick={() => setRange(k)} style={{ ...miniBtn(), background: range === k ? T.goldTint : T.paper, borderColor: range === k ? T.gold : T.hair, color: range === k ? T.gold : T.ink }}>{l}</button>
+          ))}
+        </div>
+        {range === "custom" && (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+            <label style={{ fontSize: 12, color: T.muted }}>From <input type="date" value={cFrom} onChange={(e) => setCFrom(e.target.value)} style={{ ...pInp, width: "auto", marginLeft: 4 }} /></label>
+            <label style={{ fontSize: 12, color: T.muted }}>To <input type="date" value={cTo} onChange={(e) => setCTo(e.target.value)} style={{ ...pInp, width: "auto", marginLeft: 4 }} /></label>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={source} onChange={(e) => setSource(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 170px" }}>
+            {SOURCES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          <select value={project} onChange={(e) => setProject(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 200px" }}>
+            <option value="">All campaigns / projects</option>
+            {(opts.projects || []).map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <select value={agent} onChange={(e) => setAgent(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 180px" }}>
+            <option value="">All agents</option>
+            {(opts.agents || []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+          <select value={assignedBy} onChange={(e) => setAssignedBy(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 180px" }}>
+            <option value="">Assigned by (anyone)</option>
+            {(opts.assigners || []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+          <button onClick={load} style={{ ...miniBtn(), marginLeft: "auto" }}><RefreshCw size={14} /> Refresh</button>
+        </div>
+      </div>
+
+      {err && <div style={{ ...card, padding: 12, marginBottom: 14, color: T.bad, fontSize: 13 }}>{err}</div>}
+      {loading && !rep && <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading report…</div>}
+
+      {rep && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12, marginBottom: 18, opacity: loading ? .6 : 1 }}>
+            <Card label="Total leads" value={S.total_leads} tone="gold" icon={TrendingUp} />
+            <Card label="Property Finder" value={S.property_finder} icon={Building2} />
+            <Card label="Off Plan" value={S.off_plan} icon={Building2} />
+            <Card label="Campaign" value={S.campaign} icon={Target} />
+            <Card label="Assigned to agents" value={S.assigned} icon={Users} />
+            <Card label="Unassigned" value={S.unassigned} icon={Users} />
+            <Card label="In Open Leads" value={S.open_now} icon={Unlock} />
+            <Card label="Closed deals" value={S.closed} tone="ok" icon={CheckCircle2} />
+          </div>
+
+          <div style={{ ...card, padding: 0, marginBottom: 18, overflow: "hidden" }}>
+            <div style={{ padding: "14px 16px 0", fontWeight: 700, color: T.ink, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><Users size={16} color={T.gold} /> Agent breakdown <span style={{ fontSize: 11.5, color: T.faint, fontWeight: 500 }}>· by original assignment</span></div>
+            <div style={{ overflowX: "auto", padding: "10px 4px 4px" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+                <thead><tr>
+                  <th style={th}>Agent</th><th style={th}>Received</th><th style={th}>Prop. Finder</th><th style={th}>Off Plan</th>
+                  <th style={th}>Campaign</th><th style={th}>Open returned</th><th style={th}>Contacted</th><th style={th}>Closed</th>
+                </tr></thead>
+                <tbody>
+                  {(rep.agents || []).length === 0 && <tr><td style={{ ...td, color: T.muted }} colSpan={8}>No assigned leads in this period.</td></tr>}
+                  {(rep.agents || []).map((a) => (
+                    <tr key={a.agent_id}>
+                      <td style={{ ...td, fontWeight: 600 }}>{a.agent_name}</td>
+                      <td style={{ ...td, fontWeight: 700, color: T.gold }}>{a.total}</td>
+                      <td style={td}>{a.property_finder}</td><td style={td}>{a.off_plan}</td>
+                      <td style={td}>{a.campaign}</td><td style={td}>{a.open_returned}</td>
+                      <td style={td}>{a.contacted}</td>
+                      <td style={{ ...td, fontWeight: 700, color: a.closed > 0 ? T.ok : T.ink }}>{a.closed}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+            <div style={{ padding: "14px 16px 0", fontWeight: 700, color: T.ink, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><Building2 size={16} color={T.gold} /> Campaign / Project breakdown <span style={{ fontSize: 11.5, color: T.faint, fontWeight: 500 }}>· tap a row for the leads</span></div>
+            <div style={{ overflowX: "auto", padding: "10px 4px 4px" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 780 }}>
+                <thead><tr>
+                  <th style={th}>Campaign / Project</th><th style={th}>Leads</th><th style={th}>Campaigns</th><th style={th}>Prop. Finder</th>
+                  <th style={th}>Off Plan</th><th style={th}>Campaign</th><th style={th}>Contacted</th><th style={th}>Uncontacted</th><th style={th}>Closed</th><th style={th}></th>
+                </tr></thead>
+                <tbody>
+                  {(rep.campaigns || []).length === 0 && <tr><td style={{ ...td, color: T.muted }} colSpan={10}>No leads in this period.</td></tr>}
+                  {(rep.campaigns || []).map((c) => (
+                    <tr key={c.project} onClick={() => openDrill(c.project)} style={{ cursor: "pointer" }}>
+                      <td style={{ ...td, fontWeight: 600 }}>{c.project}</td>
+                      <td style={{ ...td, fontWeight: 700, color: T.gold }}>{c.total}</td>
+                      <td style={td}>{c.campaigns}</td><td style={td}>{c.property_finder}</td>
+                      <td style={td}>{c.off_plan}</td><td style={td}>{c.campaign_leads}</td>
+                      <td style={td}>{c.contacted}</td><td style={td}>{c.uncontacted}</td>
+                      <td style={{ ...td, fontWeight: 700, color: c.closed > 0 ? T.ok : T.ink }}>{c.closed}</td>
+                      <td style={td}><ChevronRight size={15} color={T.faint} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {drill != null && (
+        <div onClick={() => setDrill(null)} style={{ position: "fixed", inset: 0, background: "rgba(10,8,20,.45)", zIndex: 60, display: "flex", justifyContent: "flex-end" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 100%)", background: T.bone, height: "100%", overflowY: "auto", boxShadow: "-8px 0 30px rgba(0,0,0,.25)", padding: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12 }}>
+              <div style={{ fontFamily: DISPLAY, fontSize: 18, color: T.ink }}>{drill} <span style={{ fontSize: 12.5, color: T.muted }}>· {detail ? detail.length : ""} leads</span></div>
+              <button onClick={() => setDrill(null)} style={{ ...miniBtn() }}><X size={15} /></button>
+            </div>
+            {detailLoading && <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>Loading leads…</div>}
+            {detail && detail.length === 0 && <div style={{ ...card, padding: 30, textAlign: "center", color: T.muted }}>No leads.</div>}
+            {detail && detail.map((l) => (
+              <div key={l.id} onClick={() => { openLead && openLead(l.id); }} style={{ ...card, padding: 12, marginBottom: 8, cursor: "pointer" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 700, color: T.ink }}>{l.client_name || "—"}</span>
+                  <span style={{ fontSize: 11.5, color: T.muted }}>{(l.created_at || "").slice(0, 10)}</span>
+                </div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <span>{srcLabel(l.source_bucket)}</span>
+                  <span>· {l.orig_agent_name || "Unassigned"}</span>
+                  {l.is_open && <span style={{ color: T.gold, display: "inline-flex", alignItems: "center", gap: 3 }}><Unlock size={11} /> Open</span>}
+                </div>
+                <div style={{ fontSize: 12, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ color: l.status === "Closed Won" ? T.ok : T.inkSoft }}>{l.status || "New"}</span>
+                  <span style={{ color: l.last_contacted ? T.ok : T.warn }}>{l.last_contacted ? "Contacted" : "Not contacted"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
