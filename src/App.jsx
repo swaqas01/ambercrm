@@ -3629,197 +3629,285 @@ function RevealQuotaPanel({ onClose }) {
 
 function AgentPerformance({ user, go, openAgent }) {
   const isMaster = !!(user && user.role === "master_admin");
-  const canView = !!(user && (user.role === "master_admin" || user.role === "admin"));
-  const canSeeCommission = isMaster;
+  const canView = !!(user && (user.role === "master_admin" || user.role === "admin" || user.role === "sales_manager"));
   const [period, setPeriod] = useState("today");
   const [cf, setCf] = useState(""); const [ct, setCt] = useState("");
   const [sort, setSort] = useState("calls");
   const [q, setQ] = useState("");
   const [roleF, setRoleF] = useState("all");
-  const [statusF, setStatusF] = useState("all");
-  const [state, setState] = useState({ loading: true, rows: [], err: "" });
-  const [quotaOpen, setQuotaOpen] = useState(false);
+  const [rep, setRep] = useState(null);
+  const [devs, setDevs] = useState([]);
+  const [tDefs, setTDefs] = useState(null);
+  const [tOv, setTOv] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [drawer, setDrawer] = useState(null);       // agent row object
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [dTab, setDTab] = useState("activity");
 
-  useEffect(() => {
-    let alive = true;
-    if (!canView) { setState({ loading: false, rows: [], err: "" }); return; }
-    (async () => {
-      setState((s) => ({ ...s, loading: true, err: "" }));
-      try {
-        const since = apPeriodStart(period, { from: cf, to: ct });
-        const [profR, actR, devR, defR, ovR, dealR] = await Promise.all([
-          supabase.from("profiles").select("id,full_name,role,active,last_login,avatar_url").limit(2000),
-          apFetchSince("lead_activity", "actor_id,action,created_at", "created_at", since),
-          supabase.from("user_devices").select("user_id,last_seen,revoked").limit(3000),
-          supabase.from("default_agent_targets").select("*").eq("id", 1).maybeSingle(),
-          supabase.from("agent_targets").select("*").limit(2000),
-          supabase.from("deals").select("agent_id,status,gross_commission,net_commission,company_share,final_net,decided_at,deleted").eq("status", "approved").gte("decided_at", since).limit(5000),
-        ]);
-        if (!alive) return;
-        const profs = (profR.data || []).filter((p) => AP_STAFF_ROLES.includes(p.role));
-        const acts = actR || [];
-        const devs = devR.data || [];
-        const defs = (defR && defR.data) || TARGET_DEFAULTS;
-        const ovById = {}; ((ovR && ovR.data) || []).forEach((o) => { ovById[o.agent_id] = o; });
-        const deals = ((dealR && dealR.data) || []).filter((d) => !d.deleted && apInPeriod(d.decided_at, period, { from: cf, to: ct }));
-        const isRev = (a) => a === "view_number" || a === "reveal_phone";
-        const byActor = {}; acts.forEach((a) => { (byActor[a.actor_id] = byActor[a.actor_id] || []).push(a); });
-        const devByUser = {}; devs.forEach((d) => { (devByUser[d.user_id] = devByUser[d.user_id] || []).push(d); });
-        const dealByAgent = {}; deals.forEach((d) => { (dealByAgent[d.agent_id] = dealByAgent[d.agent_id] || []).push(d); });
-        const now = Date.now();
-        const tkey = period === "today" ? "today" : period === "week" ? "week" : period === "month" ? "month" : null;
-        const rows = profs.map((p) => {
-          const ta = (byActor[p.id] || []).filter((a) => apInPeriod(a.created_at, period, { from: cf, to: ct }));
-          const calls = ta.filter((a) => a.action === "call").length;
-          const wa = ta.filter((a) => a.action === "whatsapp").length;
-          const reveals = ta.filter((a) => isRev(a.action)).length;
-          const md = dealByAgent[p.id] || [];
-          const dealsClosed = md.length;
-          const netAmber = md.reduce((s, d) => s + (Number(d.company_share != null ? d.company_share : (d.final_net != null ? d.final_net : d.net_commission)) || 0), 0);
-          const myDevs = devByUser[p.id] || [];
-          const activeNow = myDevs.some((dd) => !dd.revoked && dd.last_seen && (now - new Date(dd.last_seen)) < 30 * 60 * 1000);
-          const days = new Set(ta.map((a) => tgtDubaiDate(a.created_at)));
-          const seenToday = (byActor[p.id] || []).some((a) => tgtDubaiDate(a.created_at) === tgtTodayStr());
-          const lastTimes = [p.last_login].concat((byActor[p.id] || []).map((a) => a.created_at)).concat(myDevs.map((d) => d.last_seen)).filter(Boolean);
-          const lastActive = lastTimes.length ? lastTimes.reduce((m, t) => (new Date(t) > new Date(m) ? t : m)) : null;
-          const tg = resolveTargets(defs, ovById[p.id]);
-          const callTarget = tkey ? tg.call[tkey] : null;
-          const waTarget = tkey ? tg.whatsapp[tkey] : null;
-          const behind = callTarget != null && calls < callTarget;
-          const warn = reveals >= 5 && (calls + wa) < reveals * 0.5;
-          return { id: p.id, full_name: p.full_name, role: p.role, active: p.active, avatar_url: p.avatar_url, calls, wa, reveals, dealsClosed, netAmber, activeNow, activeDays: days.size, seenToday, lastActive, callTarget, waTarget, behind, warn };
-        });
-        setState({ loading: false, rows, err: "" });
-      } catch (e) { if (alive) setState({ loading: false, rows: [], err: (e && e.message) || "Could not load performance." }); }
-    })();
-    return () => { alive = false; };
-  }, [period, cf, ct, canView]);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const dxMid = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}T00:00:00+04:00`;
+  const shiftIso = (dstr, days) => apShiftDate(dstr, days) + "T00:00:00+04:00";
+  const apBounds = () => {
+    const t = tgtTodayStr(); const Y = Number(t.slice(0, 4)); const M = Number(t.slice(5, 7));
+    const mon = tgtMondayStr();
+    if (period === "today")     return { from: t + "T00:00:00+04:00", to: shiftIso(t, 1) };
+    if (period === "yesterday") return { from: shiftIso(t, -1), to: t + "T00:00:00+04:00" };
+    if (period === "week")      return { from: mon + "T00:00:00+04:00", to: shiftIso(mon, 7) };
+    if (period === "lastweek")  return { from: shiftIso(mon, -7), to: mon + "T00:00:00+04:00" };
+    if (period === "month")     return { from: dxMid(Y, M, 1), to: dxMid(M === 12 ? Y + 1 : Y, M === 12 ? 1 : M + 1, 1) };
+    if (period === "lastmonth") { const ly = M === 1 ? Y - 1 : Y, lm = M === 1 ? 12 : M - 1; return { from: dxMid(ly, lm, 1), to: dxMid(Y, M, 1) }; }
+    if (period === "quarter")   { const qs = M - ((M - 1) % 3); const qe = qs + 3; return { from: dxMid(Y, qs, 1), to: dxMid(qe > 12 ? Y + 1 : Y, qe > 12 ? qe - 12 : qe, 1) }; }
+    if (period === "year")      return { from: dxMid(Y, 1, 1), to: dxMid(Y + 1, 1, 1) };
+    // custom (inclusive end date)
+    let to = null; if (ct) to = shiftIso(ct, 1);
+    return { from: cf ? cf + "T00:00:00+04:00" : dxMid(Y, M, 1), to: to || shiftIso(t, 1) };
+  };
+
+  const load = async () => {
+    if (!canView) { setLoading(false); return; }
+    setLoading(true); setErr("");
+    const { from, to } = apBounds();
+    try {
+      const [repR, devR, defR, ovR] = await Promise.all([
+        supabase.rpc("agent_performance_report", { p_from: from, p_to: to }),
+        supabase.from("user_devices").select("user_id,last_seen,revoked").limit(3000),
+        supabase.from("default_agent_targets").select("*").eq("id", 1).maybeSingle(),
+        supabase.from("agent_targets").select("*").limit(2000),
+      ]);
+      if (repR.error || (repR.data && repR.data.error)) { setErr("Couldn't load performance. Please try again."); setLoading(false); return; }
+      setRep(repR.data);
+      setDevs(devR.data || []);
+      setTDefs((defR && defR.data) || TARGET_DEFAULTS);
+      const ov = {}; ((ovR && ovR.data) || []).forEach((o) => { ov[o.agent_id] = o; });
+      setTOv(ov);
+    } catch (e) { setErr("Couldn't load performance. Please try again."); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [period, cf, ct, canView]);
+
+  const openDrawer = async (r) => {
+    setDrawer(r); setDetail(null); setDTab("activity"); setDetailLoading(true);
+    const { from, to } = apBounds();
+    try {
+      const { data } = await supabase.rpc("agent_performance_detail", { p_agent: r.id, p_from: from, p_to: to });
+      setDetail(data && !data.error ? data : { activity: [], comments: [], followups: [], deals: [] });
+    } catch (e) { setDetail({ activity: [], comments: [], followups: [], deals: [] }); }
+    setDetailLoading(false);
+  };
 
   if (!canView) return <div style={{ ...card, padding: 22, maxWidth: 560, margin: "8px auto" }}>
     <div style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 800, color: T.ink }}>Access restricted</div>
-    <div style={{ fontSize: 13, color: T.muted, marginTop: 6, lineHeight: 1.5 }}>The all-agent performance view is available to Master Admin and Admin. A scoped team view for Managers is planned for a later update.</div>
+    <div style={{ fontSize: 13, color: T.muted, marginTop: 6, lineHeight: 1.5 }}>Agent Performance is available to Master Admin, Admin and Sales Manager.</div>
   </div>;
 
-  const { loading, rows, err } = state;
+  const now = Date.now();
+  const onlineSet = new Set(devs.filter((d) => !d.revoked && d.last_seen && (now - new Date(d.last_seen)) < 30 * 60 * 1000).map((d) => d.user_id));
+  const tkey = period === "today" ? "today" : (period === "week" || period === "lastweek") ? "week" : (period === "month" || period === "lastmonth") ? "month" : null;
+
+  const agents = ((rep && rep.agents) || []).map((r) => {
+    const tg = resolveTargets(tDefs, tOv[r.id]);
+    return { ...r, online: onlineSet.has(r.id), callTarget: tkey ? tg.call[tkey] : null, waTarget: tkey ? tg.whatsapp[tkey] : null };
+  });
   const ql = q.trim().toLowerCase();
-  let view = rows.filter((r) =>
-    (roleF === "all" || r.role === roleF) &&
-    (!ql || String(r.full_name || "").toLowerCase().includes(ql)) &&
-    (statusF === "all"
-      || (statusF === "active" && r.activeNow)
-      || (statusF === "present" && r.seenToday)
-      || (statusF === "offline" && !r.activeNow && !r.seenToday)
-      || (statusF === "behind" && r.behind)
-      || (statusF === "warn" && r.warn)));
-  const sortFns = {
-    calls: (a, b) => b.calls - a.calls, wa: (a, b) => b.wa - a.wa, reveals: (a, b) => b.reveals - a.reveals,
-    deals: (a, b) => b.dealsClosed - a.dealsClosed, commission: (a, b) => b.netAmber - a.netAmber,
-    behind: (a, b) => (b.behind - a.behind) || (a.calls - b.calls),
-    active: (a, b) => new Date(b.lastActive || 0) - new Date(a.lastActive || 0),
-    low: (a, b) => (a.calls + a.wa + a.reveals) - (b.calls + b.wa + b.reveals),
+  let view = agents.filter((r) => (roleF === "all" || r.role === roleF) && (!ql || String(r.full_name || "").toLowerCase().includes(ql)));
+  const S = {
+    received: (a, b) => b.leads_received - a.leads_received, assigned: (a, b) => b.leads_assigned - a.leads_assigned,
+    calls: (a, b) => b.calls - a.calls, wa: (a, b) => b.whatsapps - a.whatsapps, reveals: (a, b) => b.reveals - a.reveals,
+    comments: (a, b) => b.comments - a.comments, fu: (a, b) => b.fu_completed - a.fu_completed,
+    deals: (a, b) => b.deals_submitted - a.deals_submitted, closed: (a, b) => b.deals_closed - a.deals_closed,
+    commission: (a, b) => (b.commission || 0) - (a.commission || 0),
+    low: (a, b) => (a.calls + a.whatsapps + a.reveals) - (b.calls + b.whatsapps + b.reveals),
   };
-  view = [...view].sort((a, b) => (b.activeNow - a.activeNow) || (sortFns[sort] || sortFns.calls)(a, b));
+  view.sort(S[sort] || S.calls);
+  const team = view.reduce((s, r) => ({
+    received: s.received + r.leads_received, assigned: s.assigned + r.leads_assigned, calls: s.calls + r.calls,
+    wa: s.wa + r.whatsapps, reveals: s.reveals + r.reveals, comments: s.comments + r.comments,
+    fu: s.fu + r.fu_completed, fup: s.fup + r.fu_pending, ds: s.ds + r.deals_submitted, dc: s.dc + r.deals_closed,
+    comm: s.comm + (r.commission || 0),
+  }), { received: 0, assigned: 0, calls: 0, wa: 0, reveals: 0, comments: 0, fu: 0, fup: 0, ds: 0, dc: 0, comm: 0 });
 
-  const tot = (k) => rows.reduce((s, r) => s + r[k], 0);
-  const T_active = rows.filter((r) => r.activeNow).length;
-  const T_behind = (period === "today" || period === "week" || period === "month") ? rows.filter((r) => r.behind).length : null;
-  const plabel = period === "custom" ? ((cf && ct) ? (cf + " → " + ct) : "custom range") : AP_PERIOD_LABEL[period];
-
-  const SumCard = ({ label, value, tone, icon }) => (
-    <div style={{ ...card, padding: "13px 15px", minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: T.muted }}>{icon}{label}</div>
-      <div style={{ fontFamily: DISPLAY, fontSize: 21, fontWeight: 800, color: tone || T.ink, marginTop: 5 }}>{value}</div>
+  const PERIODS = [["today", "Today"], ["yesterday", "Yesterday"], ["week", "This Week"], ["lastweek", "Last Week"], ["month", "This Month"], ["lastmonth", "Last Month"], ["quarter", "Quarter"], ["year", "Year"]];
+  const th = { textAlign: "left", padding: "9px 10px", fontSize: 11, color: T.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".03em", borderBottom: `1px solid ${T.hair}`, whiteSpace: "nowrap" };
+  const td = { padding: "9px 10px", fontSize: 13, color: T.ink, borderBottom: `1px solid ${T.hairSoft}`, whiteSpace: "nowrap" };
+  const Card = ({ label, value, tone, icon: Ic }) => (
+    <div style={{ ...card, padding: "13px 15px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: T.muted }}>{label}</div>
+        {Ic && <Ic size={15} color={tone === "gold" ? T.gold : T.faint} />}
+      </div>
+      <div style={{ fontFamily: DISPLAY, fontSize: 24, marginTop: 5, color: tone === "gold" ? T.gold : tone === "ok" ? T.ok : T.ink }}>{typeof value === "string" ? value : Number(value || 0).toLocaleString()}</div>
     </div>
   );
-  const sel = (val, set, opts) => (
-    <select value={val} onChange={(e) => set(e.target.value)} style={{ padding: "8px 11px", borderRadius: 9, border: "1px solid " + T.hair, background: T.paper, color: T.ink, fontSize: 12.5, fontFamily: UI, cursor: "pointer" }}>
-      {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-    </select>
-  );
-  const Chip2 = ({ icon, label, value, color }) => (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, color: T.inkSoft, fontWeight: 600 }}>
-      <span style={{ color: color || T.muted, display: "inline-flex" }}>{icon}</span>{value}<span style={{ color: T.faint, fontWeight: 500, fontSize: 11 }}>{label}</span>
-    </span>
-  );
+  const fmtWhen = (ts) => { try { return new Date(ts).toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (e) { return String(ts || "").slice(0, 16); } };
+  const actLabel = { call: "Called", whatsapp: "WhatsApp", view_number: "Revealed contact", reveal_phone: "Revealed contact" };
+  const Chip = ({ children }) => <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 999, background: T.bone, border: `1px solid ${T.hair}`, color: T.inkSoft, whiteSpace: "nowrap" }}>{children}</span>;
 
   return (
-    <div style={{ maxWidth: 1180, margin: "0 auto" }}>
-      <SectionTitle right={(isMaster || (user && (user.role === "admin" || user.role === "sales_manager"))) ? <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{isMaster && <button onClick={() => setQuotaOpen(true)} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Reveal quotas</button>}<button onClick={() => go("targets")} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold }}>Manage targets</button></span> : null}>Agent Performance</SectionTitle>
-
-      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 13, alignItems: "center" }}>
-        {AP_PERIODS.map(([p, l]) => {
-          const on = period === p;
-          return <button key={p} onClick={() => setPeriod(p)} style={{ padding: "7px 15px", borderRadius: 9, border: "1px solid " + (on ? T.gold : T.hair), background: on ? T.gold : T.paper, color: on ? "#fff" : T.muted, fontSize: 12.5, fontWeight: 700, fontFamily: UI, cursor: "pointer" }}>{l}</button>;
-        })}
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px 4px 10px", borderRadius: 9, border: "1px solid " + (period === "custom" ? T.gold : T.hair), background: period === "custom" ? T.goldSoft : T.paper }}>
-          <Calendar size={14} color={period === "custom" ? T.gold : T.muted} />
-          <input type="date" value={cf} max={ct || undefined} onChange={(e) => setCf(e.target.value)} title="From date" style={{ border: "none", background: "transparent", color: T.ink, fontSize: 12, fontFamily: UI, cursor: "pointer" }} />
-          <span style={{ color: T.faint, fontSize: 12 }}>→</span>
-          <input type="date" value={ct} min={cf || undefined} onChange={(e) => setCt(e.target.value)} title="To date" style={{ border: "none", background: "transparent", color: T.ink, fontSize: 12, fontFamily: UI, cursor: "pointer" }} />
-          <button onClick={() => { if (cf && ct && cf <= ct) setPeriod("custom"); }} disabled={!(cf && ct && cf <= ct)} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: (cf && ct && cf <= ct) ? T.gold : T.hair, color: (cf && ct && cf <= ct) ? "#fff" : T.muted, fontSize: 12, fontWeight: 700, fontFamily: UI, cursor: (cf && ct && cf <= ct) ? "pointer" : "default" }}>Apply</button>
-        </span>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(138px,1fr))", gap: 11, marginBottom: 15 }}>
-        <SumCard label={"Calls " + plabel} value={tot("calls")} icon={<PhoneCall size={13} />} />
-        <SumCard label={"WhatsApp " + plabel} value={tot("wa")} tone={WA} icon={<MessageCircle size={13} />} />
-        <SumCard label={"Reveals " + plabel} value={tot("reveals")} icon={<Eye size={13} />} />
-        <SumCard label={"Deals closed " + plabel} value={tot("dealsClosed")} tone={T.gold} icon={<BarChart3 size={13} />} />
-        {canSeeCommission && <SumCard label={"Net to Amber " + plabel} value={apMoney(tot("netAmber"))} tone={T.gold} icon={<TrendingUp size={13} />} />}
-        <SumCard label="Active now" value={T_active} tone={T.ok} icon={<Users size={13} />} />
-        {T_behind != null && <SumCard label="Behind call target" value={T_behind} tone={T_behind ? T.warn : T.ink} icon={<Target size={13} />} />}
-      </div>
-
-      <div style={{ display: "flex", gap: 9, flexWrap: "wrap", marginBottom: 13, alignItems: "center" }}>
-        <div style={{ position: "relative", flex: 1, minWidth: 180 }}>
-          <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: T.faint }} />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agent…" style={{ width: "100%", padding: "9px 12px 9px 33px", borderRadius: 9, border: "1px solid " + T.hair, background: T.paper, color: T.ink, fontSize: 13, fontFamily: UI, boxSizing: "border-box" }} />
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+        <div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 23, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 10 }}><BarChart3 size={22} color={T.gold} /> Agent Performance</div>
+          <div style={{ color: T.muted, fontSize: 13, marginTop: 4, maxWidth: 720 }}>Team activity for the selected period. "Received" counts leads by their original assignment. Tap an agent for their detailed logs.</div>
         </div>
-        {sel(sort, setSort, [["calls", "Sort: Calls"], ["wa", "Sort: WhatsApp"], ["reveals", "Sort: Reveals"], ["deals", "Sort: Deals closed"], ...(canSeeCommission ? [["commission", "Sort: Commission"]] : []), ["behind", "Sort: Behind target"], ["active", "Sort: Last active"], ["low", "Sort: Lowest activity"]])}
-        {sel(roleF, setRoleF, [["all", "All roles"], ["agent", "Agent"], ["sales_manager", "Sales Manager"], ["admin", "Admin"], ["master_admin", "Master Admin"]])}
-        {sel(statusF, setStatusF, [["all", "All status"], ["active", "Active now"], ["present", "Seen today"], ["offline", "Offline"], ["behind", "Behind target"], ["warn", "High reveals, low contact"]])}
+        <div style={{ display: "flex", gap: 8 }}>
+          {(isMaster || (user && user.role === "admin")) && <button onClick={() => go && go("targets")} style={miniBtn()}><Target size={14} /> Targets</button>}
+          <button onClick={load} style={miniBtn()}><RefreshCw size={14} /> Refresh</button>
+        </div>
       </div>
 
-      {err ? <div style={{ ...card, padding: 16, color: T.bad, fontSize: 13 }}>{err}</div>
-        : loading ? <div style={{ padding: 24, color: T.muted }}>Loading agent performance…</div>
-        : view.length === 0 ? <div style={{ ...card, padding: 20, color: T.muted, fontSize: 13, textAlign: "center" }}>No agents match.</div>
-        : <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {view.map((r) => (
-            <div key={r.id} style={{ ...card, padding: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <ApAvatar url={r.avatar_url} name={r.full_name} size={44} />
-                <div style={{ minWidth: 150, flex: "1 1 180px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-                    <span style={{ fontWeight: 700, fontSize: 14, color: T.ink }}>{r.full_name || "—"}</span>
-                    {r.warn && <span title="High reveals, low calls/WhatsApp" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 9.5, fontWeight: 700, color: T.warn, background: T.warnSoft, padding: "2px 6px", borderRadius: 6 }}><AlertTriangle size={11} /> Low contact</span>}
-                  </div>
-                  <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{roleLabel(r.role)}{r.active === false ? " · inactive" : ""}</div>
-                </div>
-                <div style={{ minWidth: 116, fontSize: 11, color: T.muted }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: r.activeNow ? T.ok : (r.seenToday ? T.gold : T.faint), display: "inline-block" }} />{r.activeNow ? "Active now" : (r.seenToday ? "Seen today" : "Offline")}</div>
-                  <div style={{ marginTop: 3 }}>{apFmtAgo(r.lastActive)}{period !== "today" ? " · " + r.activeDays + "d active" : ""}</div>
-                </div>
-                <div style={{ flex: "2 1 300px", display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-                  <Chip2 icon={<PhoneCall size={13} />} value={r.calls} label="calls" />
-                  <Chip2 icon={<MessageCircle size={13} />} value={r.wa} label="wa" color={WA} />
-                  <Chip2 icon={<Eye size={13} />} value={r.reveals} label="reveals" />
-                  <Chip2 icon={<BarChart3 size={13} />} value={r.dealsClosed} label="deals" color={T.gold} />
-                  {canSeeCommission && <span style={{ fontSize: 12.5, fontWeight: 700, color: T.gold }}>{apMoney(r.netAmber)}</span>}
-                </div>
-                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
-                  <div><div style={{ fontSize: 9, color: T.faint, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 2 }}>Calls</div><ApMiniBar done={r.calls} target={r.callTarget} /></div>
-                  <div><div style={{ fontSize: 9, color: T.faint, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 2 }}>WhatsApp</div><ApMiniBar done={r.wa} target={r.waTarget} color={WA} /></div>
-                  <button onClick={() => openAgent(r.id)} style={{ ...miniBtn(), borderColor: T.gold, color: T.gold, display: "flex", alignItems: "center", gap: 4 }}>Details <ChevronRight size={13} /></button>
-                </div>
+      <div style={{ ...card, padding: 13, marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {PERIODS.map(([k, l]) => (
+            <button key={k} onClick={() => setPeriod(k)} style={{ ...miniBtn(), background: period === k ? T.goldTint : T.paper, borderColor: period === k ? T.gold : T.hair, color: period === k ? T.gold : T.ink }}>{l}</button>
+          ))}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 9, border: "1px solid " + (period === "custom" ? T.gold : T.hair), background: period === "custom" ? T.goldTint : T.paper }}>
+            <Calendar size={14} color={period === "custom" ? T.gold : T.muted} />
+            <input type="date" value={cf} onChange={(e) => setCf(e.target.value)} style={{ ...pInp, width: "auto", border: "none", padding: "4px 2px", background: "transparent" }} />
+            <span style={{ color: T.faint, fontSize: 12 }}>→</span>
+            <input type="date" value={ct} onChange={(e) => setCt(e.target.value)} style={{ ...pInp, width: "auto", border: "none", padding: "4px 2px", background: "transparent" }} />
+            <button onClick={() => { if (cf && ct && cf <= ct) setPeriod("custom"); }} disabled={!(cf && ct && cf <= ct)} style={{ ...miniBtn(), padding: "4px 10px", opacity: (cf && ct && cf <= ct) ? 1 : .5 }}>Apply</button>
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+          <input placeholder="Search agent…" value={q} onChange={(e) => setQ(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 200px" }} />
+          <select value={roleF} onChange={(e) => setRoleF(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 160px" }}>
+            <option value="all">All roles</option><option value="agent">Agents</option><option value="sales_manager">Managers</option><option value="admin">Admins</option><option value="master_admin">Master</option>
+          </select>
+          <select value={sort} onChange={(e) => setSort(e.target.value)} style={{ ...pInp, width: "auto", flex: "0 1 190px" }}>
+            <option value="calls">Sort: Calls</option><option value="wa">Sort: WhatsApp</option><option value="received">Sort: Leads received</option>
+            <option value="assigned">Sort: Leads assigned</option><option value="reveals">Sort: Reveals</option><option value="comments">Sort: Comments</option>
+            <option value="fu">Sort: Follow-ups done</option><option value="deals">Sort: Deals submitted</option><option value="closed">Sort: Deals closed</option>
+            {isMaster && <option value="commission">Sort: Commission</option>}
+            <option value="low">Sort: Least active</option>
+          </select>
+        </div>
+      </div>
+
+      {err && <div style={{ ...card, padding: 12, marginBottom: 12, color: T.bad, fontSize: 13 }}>{err}</div>}
+      {loading && !rep && <div style={{ ...card, padding: 40, textAlign: "center", color: T.muted }}>Loading performance…</div>}
+
+      {rep && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10, marginBottom: 14, opacity: loading ? .6 : 1 }}>
+            <Card label="Leads received" value={team.received} tone="gold" icon={Users} />
+            <Card label="Calls" value={team.calls} icon={PhoneCall} />
+            <Card label="WhatsApp" value={team.wa} icon={MessageCircle} />
+            <Card label="Reveals" value={team.reveals} icon={Eye} />
+            <Card label="Comments" value={team.comments} icon={ChevronRight} />
+            <Card label="Follow-ups done" value={team.fu} icon={CheckCircle2} />
+            <Card label="Deals closed" value={team.dc} tone="ok" icon={CheckCircle2} />
+            {isMaster && <Card label="Commission (AED)" value={Math.round(team.comm).toLocaleString()} tone="gold" icon={Target} />}
+          </div>
+
+          <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMaster ? 1150 : 1050 }}>
+                <thead><tr>
+                  <th style={th}>Agent</th><th style={th}>Received</th><th style={th}>Assigned</th><th style={th}>Calls</th><th style={th}>WhatsApp</th>
+                  <th style={th}>Reveals</th><th style={th}>Comments</th><th style={th}>FU done</th><th style={th}>FU pending</th>
+                  <th style={th}>Submitted</th><th style={th}>Closed</th>{isMaster && <th style={th}>Commission</th>}
+                  {tkey && <th style={th}>Call target</th>}{tkey && <th style={th}>WA target</th>}<th style={th}></th>
+                </tr></thead>
+                <tbody>
+                  {view.length === 0 && <tr><td style={{ ...td, color: T.muted }} colSpan={16}>No staff match.</td></tr>}
+                  {view.map((r) => (
+                    <tr key={r.id} onClick={() => openDrawer(r)} style={{ cursor: "pointer", opacity: r.active === false ? .55 : 1 }}>
+                      <td style={{ ...td, fontWeight: 600 }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                          <span style={{ width: 8, height: 8, borderRadius: 99, background: r.online ? T.ok : T.hair, flex: "0 0 auto" }} />
+                          {r.full_name || "—"}
+                          {r.role !== "agent" && <span style={{ fontSize: 10, color: T.faint, fontWeight: 600 }}>{r.role === "sales_manager" ? "MGR" : r.role === "admin" ? "ADMIN" : "MASTER"}</span>}
+                        </span>
+                      </td>
+                      <td style={{ ...td, fontWeight: 700, color: T.gold }}>{r.leads_received}</td>
+                      <td style={td}>{r.leads_assigned}</td>
+                      <td style={td}>{r.calls}</td><td style={td}>{r.whatsapps}</td><td style={td}>{r.reveals}</td>
+                      <td style={td}>{r.comments}</td><td style={td}>{r.fu_completed}</td><td style={{ ...td, color: r.fu_pending > 0 ? T.warn : T.ink }}>{r.fu_pending}</td>
+                      <td style={td}>{r.deals_submitted}</td>
+                      <td style={{ ...td, fontWeight: 700, color: r.deals_closed > 0 ? T.ok : T.ink }}>{r.deals_closed}</td>
+                      {isMaster && <td style={{ ...td, fontWeight: 600 }}>{r.commission != null ? Math.round(r.commission).toLocaleString() : "—"}</td>}
+                      {tkey && <td style={td}><ApMiniBar done={r.calls} target={r.callTarget} /></td>}
+                      {tkey && <td style={td}><ApMiniBar done={r.whatsapps} target={r.waTarget} color={T.ok} /></td>}
+                      <td style={td}><ChevronRight size={15} color={T.faint} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {drawer && (
+        <div onClick={() => setDrawer(null)} style={{ position: "fixed", inset: 0, background: "rgba(10,8,20,.45)", zIndex: 60, display: "flex", justifyContent: "flex-end" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: "min(600px, 100%)", background: T.bone, height: "100%", overflowY: "auto", boxShadow: "-8px 0 30px rgba(0,0,0,.25)", padding: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              <div style={{ fontFamily: DISPLAY, fontSize: 19, color: T.ink }}>{drawer.full_name}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {openAgent && <button onClick={() => { setDrawer(null); openAgent(drawer.id); }} style={miniBtn()}>Full profile</button>}
+                <button onClick={() => setDrawer(null)} style={miniBtn()}><X size={15} /></button>
               </div>
             </div>
-          ))}
-        </div>}
-
-      <div style={{ fontSize: 10.5, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>
-        All counts are real action logs in Dubai time. Calls = call actions, WhatsApp = WhatsApp actions, Reveals = contact-number reveals — counted separately. Deals closed and Net to Amber come only from <b>approved</b> deals in the Deals module (hot resale / listings are never counted). Call / WhatsApp target bars apply to Today / Week / Month.{canSeeCommission ? "" : " Commission is hidden for your role."}
-      </div>
-      {quotaOpen && <RevealQuotaPanel onClose={() => setQuotaOpen(false)} />}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+              <Chip>{drawer.leads_received} received</Chip><Chip>{drawer.calls} calls</Chip><Chip>{drawer.whatsapps} WhatsApp</Chip>
+              <Chip>{drawer.reveals} reveals</Chip><Chip>{drawer.comments} comments</Chip>
+              <Chip>{drawer.fu_completed} FU done · {drawer.fu_pending} pending</Chip>
+              <Chip>{drawer.deals_submitted} submitted · {drawer.deals_closed} closed</Chip>
+              {isMaster && drawer.commission != null && <Chip>AED {Math.round(drawer.commission).toLocaleString()}</Chip>}
+            </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+              {[["activity", "Activity"], ["comments", "Comments"], ["followups", "Follow-ups"], ["deals", "Deals"]].map(([k, l]) => (
+                <button key={k} onClick={() => setDTab(k)} style={{ ...miniBtn(), background: dTab === k ? T.goldTint : T.paper, borderColor: dTab === k ? T.gold : T.hair, color: dTab === k ? T.gold : T.ink }}>{l}</button>
+              ))}
+            </div>
+            {detailLoading && <div style={{ ...card, padding: 28, textAlign: "center", color: T.muted }}>Loading logs…</div>}
+            {detail && dTab === "activity" && ((detail.activity || []).length === 0 ? <div style={{ ...card, padding: 22, textAlign: "center", color: T.muted, fontSize: 13 }}>No contact activity in this period.</div> :
+              (detail.activity || []).map((a, i) => (
+                <div key={i} style={{ ...card, padding: "10px 12px", marginBottom: 7, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12.5, color: T.ink, display: "inline-flex", alignItems: "center", gap: 7 }}>
+                    {a.action === "call" ? <PhoneCall size={13} color={T.muted} /> : a.action === "whatsapp" ? <MessageCircle size={13} color={T.ok} /> : <Eye size={13} color={T.muted} />}
+                    <b>{actLabel[a.action] || a.action}</b> · {a.lead_name || "—"}
+                  </span>
+                  <span style={{ fontSize: 11.5, color: T.muted }}>{fmtWhen(a.created_at)}</span>
+                </div>
+              )))}
+            {detail && dTab === "comments" && ((detail.comments || []).length === 0 ? <div style={{ ...card, padding: 22, textAlign: "center", color: T.muted, fontSize: 13 }}>No comments in this period.</div> :
+              (detail.comments || []).map((c, i) => (
+                <div key={i} style={{ ...card, padding: "10px 12px", marginBottom: 7 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>{c.lead_name || "—"}</span>
+                    <span style={{ fontSize: 11.5, color: T.muted }}>{fmtWhen(c.created_at)}</span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 4, lineHeight: 1.45 }}>{c.body}</div>
+                </div>
+              )))}
+            {detail && dTab === "followups" && ((detail.followups || []).length === 0 ? <div style={{ ...card, padding: 22, textAlign: "center", color: T.muted, fontSize: 13 }}>No follow-ups in this period.</div> :
+              (detail.followups || []).map((f, i) => (
+                <div key={i} style={{ ...card, padding: "10px 12px", marginBottom: 7, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12.5, color: T.ink }}><b>{f.type}</b> · {f.lead_name || "—"} · <span style={{ color: f.status === "completed" ? T.ok : f.status === "scheduled" ? T.warn : T.muted }}>{f.status}</span></span>
+                  <span style={{ fontSize: 11.5, color: T.muted }}>{fmtWhen(f.completed_at || f.due_at)}</span>
+                </div>
+              )))}
+            {detail && dTab === "deals" && ((detail.deals || []).length === 0 ? <div style={{ ...card, padding: 22, textAlign: "center", color: T.muted, fontSize: 13 }}>No deals in this period.</div> :
+              (detail.deals || []).map((d, i) => (
+                <div key={i} style={{ ...card, padding: "10px 12px", marginBottom: 7 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>#{d.deal_no} · {d.client_name || "—"}</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: d.status === "approved" ? T.ok : d.status === "rejected" ? T.bad : T.warn }}>{d.status}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: T.muted, marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {d.project && <span>{d.project}</span>}
+                    {d.property_value != null && <span>AED {Number(d.property_value).toLocaleString()}</span>}
+                    {isMaster && d.commission != null && <span style={{ color: T.gold }}>Comm. {Math.round(d.commission).toLocaleString()}</span>}
+                    <span>{fmtWhen(d.decided_at || d.created_at)}</span>
+                  </div>
+                </div>
+              )))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
