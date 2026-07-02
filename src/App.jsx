@@ -5930,7 +5930,7 @@ function Marketing({ user, go, openLead }) {
                 </div>
                 <div style={{ fontSize: 12, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <span style={{ color: l.status === "Closed Won" ? T.ok : T.inkSoft }}>{l.status || "New"}</span>
-                  <span style={{ color: l.last_contacted ? T.ok : T.warn }}>{l.last_contacted ? "Contacted" : "Not contacted"}</span>
+                  <span style={{ color: l.contacted ? T.ok : T.warn }}>{l.contacted ? "Contacted" : "Not contacted"}</span>
                 </div>
               </div>
             ))}
